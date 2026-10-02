@@ -1,6 +1,6 @@
 # TeachMeCoding
 
-本地单用户教学应用，正在迁移原型界面，真实教学业务尚未接入；原型保留在 `.worktrees/prototype`，不作为正式启动入口。运行环境检查页保留在 `/diagnostics`，不把服务健康检查视为教学 Agent 接通。
+本地单用户教学应用，原型界面已迁移至 Vite，真实教学业务尚未接入；原型保留在 `.worktrees/prototype`，不作为正式启动入口。运行环境检查页保留在 `/diagnostics`，不把服务健康检查视为教学 Agent 接通。
 
 Vite 使用原型的 Tailwind 配色与基础组件。Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsource 包随构建分发，中文优先使用原型已有的系统字体；Lucide 图标编入应用，站点图标随静态资源提供。不需要 Next.js，也不请求在线字体或 Analytics。
 
@@ -27,6 +27,16 @@ pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 AP
 `Ctrl+C` 停止服务。生产 API 端口可通过 `PORT` 设置。编译产物可从任意工作目录用 `node /绝对路径/apps/server/dist/index.js` 启动，静态资源不依赖当前目录。
 
 未来的代码执行直接使用本机权限，不是沙箱。当前没有文件、Agent 或终端业务接口，也不提供远程部署模式。
+
+## 界面回归
+
+`pnpm test` 包含迁移的会话归属、历史选择、跨视图回复和多层目录测试；`pnpm check` 同时检查浏览器测试及截图脚本的类型。`pnpm test:browser` 在开发代理和生产单服务两种模式验证相同交互与截图，保留原有访问保护检查。测试使用一次性内存夹具，不需要模型密钥或已有学习数据。
+
+视觉场景固定为 1440×1000、浅色系统主题、减少动画、确定日期；全屏 IDE 自身仍为深色。12 个状态覆盖首页、空间列表、需求确认、路线与 Agent、普通/全屏 IDE、课件抽屉、测评作答、通过/需加强及课件/回复失败。两种服务模式共用 `tests/browser/__screenshots__/darwin` 中的基线；当前仅在 macOS arm64、本机 Google Chrome 验证，浏览器或系统字体变化需要重新检查，不能直接认定为产品回归。
+
+原型仍在本机运行时，可执行 `pnpm exec tsx tests/capture-prototype.ts`（默认 3000 端口，可用 `PROTOTYPE_URL` 指定本机地址）。脚本与 Vite 测试共用 `tests/visual-scenes.ts` 操作序列，只隐藏 Next 开发浮层和原型控制按钮；不修改参考源码，不掩盖业务内容。原型截图保存到 `.amp/in/artifacts/reference/`，浏览器失败截图和差异图保存到 `.amp/in/artifacts/browser/`。首次在新 checkout 运行前，用 `git rev-parse --git-path info/exclude` 找到本地排除文件，保留已有规则并加入 `/.amp/in/`，避免提交评审临时文件。
+
+有意调整视觉后，先运行 `pnpm test:browser tests/browser/visual.spec.ts --project=production --update-snapshots`，**实际打开基线并与原型/旧截图对照**，再运行不带更新参数的 `pnpm test:browser`。不能用自动更新截图来掩盖失败。迁移允许的差异为本地字体替换和独立 24px 夹具页脚；课件抽屉维持原型的左侧深色样式。截图不证明真实教学或执行已接通。
 
 ## 原生依赖检查
 

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test.use({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
+test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 
 test('explicit preview creates a space only after a goal and confirms edited requirements', async ({ page }, info) => {
   const businessRequests: string[] = [];
@@ -111,4 +111,26 @@ test('scripted reply failure retains the question and retries in the original se
   await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0, { timeout: 12000 });
   await expect(page.getByRole('complementary', { name: 'Agent', exact: true }).locator('ol').getByText('这条路线大概要多久？', { exact: true })).toHaveCount(1);
+});
+
+test('an in-flight route reply finishes in its original session after switching spaces', async ({ page }) => {
+  await page.goto('/preview?scene=route');
+  const composer = page.getByLabel('向 Agent 提问', { exact: true });
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  await composer.fill('我想先做项目');
+  await composer.press('Enter');
+  await expect(agent.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Rust 入门', exact: true }).click();
+  await page.getByRole('menuitem', { name: /PyTorch 基础/ }).click();
+  await composer.fill('另一个空间尚未发送的草稿');
+  // Allow the 800ms delay and streamed reply to finish while its panel is unmounted.
+  await page.waitForTimeout(3000);
+  await expect(agent.getByRole('button', { name: '确认调整路线' })).toHaveCount(0);
+  await expect(agent.getByText('我想先做项目', { exact: true })).toHaveCount(0);
+  await expect(composer).toHaveValue('另一个空间尚未发送的草稿');
+  await page.getByRole('button', { name: 'PyTorch 基础', exact: true }).click();
+  await page.getByRole('menuitem', { name: /Rust 入门/ }).click();
+  await expect(agent.getByRole('button', { name: '确认调整路线' })).toBeVisible();
+  await expect(agent.locator('ol').getByText('我想先做项目', { exact: true })).toHaveCount(1);
+  await expect(composer).toHaveValue('');
 });

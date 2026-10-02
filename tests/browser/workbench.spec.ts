@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test.use({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
+test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 
 test('nested tree keeps same-name files, closed content, rename validation and inline creation', async ({ page }) => {
   await page.goto('/preview?scene=unit');
@@ -52,6 +52,9 @@ test('normal and fullscreen IDE preserve editor, terminal, quote and layout; Ret
   await expect(agent).toContainText('layout kept');
   await page.getByLabel('向 Agent 提问', { exact: true }).fill('保留工作台草稿');
   await command.fill('ls examples');
+  const beforeResize = (await ide.boundingBox())!.height;
+  await page.getByRole('separator', { name: '调整 IDE 高度' }).press('ArrowUp');
+  await expect.poll(async () => (await ide.boundingBox())!.height).toBeGreaterThan(beforeResize + 5);
   const height = (await ide.boundingBox())!.height;
   await page.screenshot({ path: `.amp/in/artifacts/ide-normal-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
