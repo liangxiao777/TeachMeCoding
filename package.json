@@ -12,7 +12,7 @@
     "test:browser": "playwright test",
     "test:native": "pnpm --filter @teach-me-coding/server exec tsx --test --test-timeout=15000 src/compatibility/native.test.ts",
     "test:provider": "pnpm --filter @teach-me-coding/server exec tsx src/compatibility/provider-smoke.ts",
-    "start": "node apps/server/dist/index.js"
+    "start": "NODE_ENV=production node apps/server/dist/index.js"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

@@ -5,6 +5,16 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
-    proxy: { '/api': 'http://127.0.0.1:4310' },
+    cors: false,
+    headers: {
+      'X-Frame-Options': 'DENY',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Referrer-Policy': 'no-referrer',
+    },
+    proxy: { '/api': {
+      target: `http://127.0.0.1:${process.env.PORT ?? '4310'}`,
+      changeOrigin: false,
+      ws: true,
+    } },
   },
 });
