@@ -287,3 +287,5 @@
 .fixture-preview .h-dvh { height: calc(100dvh - 24px); }
 .fixture-preview .min-h-dvh { min-height: calc(100dvh - 24px); }
 .fixture-preview .learning-entry { min-height: calc(100dvh - 81px); }
+
+.persistent-app .learning-entry { min-height: calc(100dvh - 81px); }

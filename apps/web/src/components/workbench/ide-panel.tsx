@@ -3,6 +3,7 @@
 import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
+import { CodeEditor, type EditorPosition } from '@/components/code-editor'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { entryPath } from '@/fixtures/project-files'
 import { isComposing } from '@/components/shared'
@@ -16,86 +17,7 @@ import { useApp, useSpace } from '@/fixtures/store'
 import { cn } from '@/lib/utils'
 import type { TermLine } from '@/fixtures/types'
 
-type EditorPosition = { start: number; end: number; top: number; left: number }
-
-export function CodeEditor({
-  value,
-  onChange,
-  onSelectText,
-  label,
-  className,
-  position,
-}: {
-  value: string
-  onChange: (v: string) => void
-  onSelectText?: (text: string) => void
-  label: string
-  className?: string
-  position?: EditorPosition
-}) {
-  const gutter = useRef<HTMLDivElement>(null)
-  const input = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
-    const el = input.current
-    if (!el || !position) return
-    el.setSelectionRange(position.start, position.end)
-    el.scrollTop = position.top
-    el.scrollLeft = position.left
-    if (gutter.current) gutter.current.scrollTop = position.top
-  }, [position])
-  const lines = value.split('\n').length
-  return (
-    <div
-      className={cn(
-        'flex min-h-0 overflow-hidden bg-ide font-mono text-[13px] leading-6 text-ide-foreground',
-        className,
-      )}
-    >
-      <div
-        ref={gutter}
-        aria-hidden
-        className="shrink-0 select-none overflow-hidden py-3 pr-3 pl-4 text-right opacity-40"
-      >
-        {Array.from({ length: lines }, (_, i) => (
-          <div key={i}>{i + 1}</div>
-        ))}
-      </div>
-      <textarea
-        ref={input}
-        aria-label={label}
-        spellCheck={false}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onScroll={(e) => {
-          if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop
-          if (position) {
-            position.top = e.currentTarget.scrollTop
-            position.left = e.currentTarget.scrollLeft
-          }
-        }}
-        onSelect={(e) => {
-          const t = e.currentTarget
-          if (position) {
-            position.start = t.selectionStart
-            position.end = t.selectionEnd
-          }
-          onSelectText?.(t.value.slice(t.selectionStart, t.selectionEnd))
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Tab') {
-            e.preventDefault()
-            const t = e.currentTarget
-            const { selectionStart: s, selectionEnd: end } = t
-            const next = `${t.value.slice(0, s)}    ${t.value.slice(end)}`
-            onChange(next)
-            requestAnimationFrame(() => t.setSelectionRange(s + 4, s + 4))
-          }
-        }}
-        className="min-w-0 flex-1 resize-none bg-transparent py-3 pr-4 whitespace-pre outline-none selection:bg-accent selection:text-accent-foreground"
-      />
-    </div>
-  )
-}
+export { CodeEditor } from '@/components/code-editor'
 
 export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text: string) => void }) {
   const groups: [TermLine, ...TermLine[]][] = []

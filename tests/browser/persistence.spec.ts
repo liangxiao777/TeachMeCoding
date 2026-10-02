@@ -30,6 +30,7 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await expect(page.getByText('草稿已保存', { exact: true })).toBeVisible();
   await shot(page, info, 'requirements');
   await page.reload();
+  await page.getByRole('button', { name: '修改需求', exact: true }).click();
   await expect(visible(page, '已有基础')).toHaveValue('Python 基础，尚未学习 Rust');
   await expect(visible(page, '会话草稿')).toHaveValue('独立保存的需求问题');
   let messageDropped = false;
@@ -156,6 +157,7 @@ test('disk editing preserves local changes on failure, compares external content
   await page.getByRole('button', { name: '关闭 src/main.rs' }).click();
   await page.getByRole('button', { name: 'main.rs', exact: true }).click();
   await expect(visible(page, '代码编辑器')).toHaveValue('local editing survives');
+  await page.getByRole('button', { name: '重命名文件', exact: true }).click();
   await visible(page, '重命名路径').fill('src/renamed.rs');
   await page.getByRole('button', { name: '重命名', exact: true }).click();
   await expect(page.getByRole('button', { name: '关闭 src/main.rs' })).toHaveCount(0);
@@ -180,5 +182,6 @@ test('unavailable business API displays a retryable failure, never demo spaces',
   await shot(page, info, 'load-error');
   await page.unroute('**/api/spaces');
   await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
   await expect(page.getByRole('heading', { name: '存储验收 Rust' })).toBeVisible();
 });
