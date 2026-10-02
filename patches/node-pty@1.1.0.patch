@@ -1,0 +1,18 @@
+diff --git a/scripts/prebuild.js b/scripts/prebuild.js
+index 17f1d980e62e017d77058627a7a15c4c29f9470c..ea39e3da039cd4bf9100f164491bf957888fe2b9 100644
+--- a/scripts/prebuild.js
++++ b/scripts/prebuild.js
+@@ -17,9 +17,10 @@ const path = require('path');
+ const PREBUILDS_ROOT = path.join(__dirname, '..', 'prebuilds');
+ const PREBUILD_DIR = path.join(__dirname, '..', 'prebuilds', `${process.platform}-${process.arch}`);
+ 
+-// Do not use prebuilds when npm_config_build_from_source is set
+-if (process.env.npm_config_build_from_source === 'true') {
+-  console.log('\x1b[33m> Removing prebuilds and rebuilding because npm_config_build_from_source is set\x1b[0m');
++// v1.1.0 macOS prebuilds ship a non-executable spawn-helper (upstream #850).
++// pnpm 11 strips npm_config_* from lifecycle scripts; force the source path here.
++if (process.platform === 'darwin' || process.env.npm_config_build_from_source === 'true') {
++  console.log('\x1b[33m> Removing prebuilds and rebuilding from source\x1b[0m');
+   fs.rmSync(PREBUILDS_ROOT, { recursive: true, force: true });
+   process.exit(1);
+ }

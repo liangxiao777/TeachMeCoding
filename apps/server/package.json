@@ -11,6 +11,11 @@
   "dependencies": {
     "@hono/node-server": "2.1.3",
     "@teach-me-coding/contracts": "workspace:*",
-    "hono": "4.13.12"
+    "better-sqlite3": "13.0.3",
+    "hono": "4.13.12",
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0"
   }
 }
