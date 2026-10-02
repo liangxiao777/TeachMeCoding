@@ -25,6 +25,7 @@ export function Diagnostics() {
       <CardContent className="space-y-5 leading-relaxed">
         <p role="status" className="font-medium">{status}</p>
         <p>工程启动检查页。教学服务尚未接入。</p>
+        <p><a className="underline underline-offset-4" href="/preview">打开界面演示</a>（开发夹具；刷新重置；不调用模型、不保存文件、不执行命令）</p>
         <p className="border-t pt-5 text-muted-foreground">未来的学习代码将在本机执行，拥有当前用户权限，不具备沙箱隔离。</p>
       </CardContent>
     </Card>

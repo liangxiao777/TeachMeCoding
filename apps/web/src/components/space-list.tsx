@@ -1,0 +1,242 @@
+'use client'
+
+import { ArrowRight, LayoutGrid, Plus, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Brand, isComposing } from '@/components/shared'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
+import { allUnits, findUnit, relativeTime } from '@/fixtures/demo-data'
+import { useApp } from '@/fixtures/store'
+import { cn } from '@/lib/utils'
+import type { Space } from '@/fixtures/types'
+
+const EXAMPLES = ['我想学习 Rust，最后能写一个命令行工具', '我想用 PyTorch 训练一个图像分类模型', '我想学会用 Go 写后端服务']
+
+function StartInput({ autoFocus }: { autoFocus?: boolean }) {
+  const { createSpace } = useApp()
+  const [text, setText] = useState('')
+  const start = (value: string) => {
+    if (!value.trim()) return
+    createSpace(value)
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <form
+        className="rounded-xl bg-background"
+        onSubmit={(e) => {
+          e.preventDefault()
+          start(text)
+        }}
+      >
+        <InputGroup className="h-14 rounded-xl bg-card shadow-sm">
+          <InputGroupAddon>
+            <Sparkles className="text-primary" />
+          </InputGroupAddon>
+          <label htmlFor="goal-input" className="sr-only">
+            你想学什么
+          </label>
+          <InputGroupInput
+            id="goal-input"
+            autoFocus={autoFocus}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && isComposing(e)) e.preventDefault()
+            }}
+            placeholder="说说你想学什么，比如：我想学习 Rust，最后能写一个命令行工具"
+            className="text-base"
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton type="submit" variant="default" size="sm" disabled={!text.trim()}>
+              开始
+              <ArrowRight data-icon="inline-end" />
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
+      </form>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <span className="text-xs text-muted-foreground">试试：</span>
+        {EXAMPLES.map((ex) => (
+          <Button key={ex} variant="outline" size="sm" className="rounded-full" onClick={() => start(ex)}>
+            {ex}
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function OrbitalParticles() {
+  return (
+    <div className="orbital-field" aria-hidden="true">
+      <svg viewBox="0 0 1200 900" preserveAspectRatio="none" focusable="false">
+        <g transform="translate(600 450) scale(1.5 1)">
+          {[0, 1].map((layer) => (
+            <g key={layer} className="orbital-field-orbit">
+              {Array.from({ length: 96 }, (_, i) => {
+                // Fixed coordinates keep server and client renders identical.
+                const seed = i + layer * 96
+                const angle = seed * 2.399963
+                const radius = 280 + 58 * Math.sin(seed * 7.13) + 22 * Math.cos(seed * 3.71)
+                return (
+                  <circle
+                    key={i}
+                    cx={(Math.cos(angle) * radius).toFixed(3)}
+                    cy={(Math.sin(angle) * radius).toFixed(3)}
+                    r={i % 19 === 0 ? 2.1 : i % 5 === 0 ? 1.4 : 0.9}
+                    opacity={0.2 + (i % 7) * 0.05}
+                  />
+                )
+              })}
+            </g>
+          ))}
+        </g>
+      </svg>
+    </div>
+  )
+}
+
+function Home() {
+  return (
+    <div className="learning-entry relative isolate flex min-h-[calc(100dvh-57px)] flex-col justify-center py-12">
+      <OrbitalParticles />
+      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-12">
+        <div className="flex flex-col items-center gap-5 text-center">
+          <h1 className="text-balance text-3xl font-semibold leading-tight tracking-tight sm:text-5xl">
+            今天你想学习什么?
+          </h1>
+          <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">
+            路线、课件、会话、练习代码与测评记录都在同一个空间里。每个学习目标独立推进，随时回来接着学。
+          </p>
+        </div>
+        <StartInput autoFocus />
+      </div>
+    </div>
+  )
+}
+
+function SpaceCard({ space }: { space: Space }) {
+  const { openSpace } = useApp()
+  const units = allUnits(space)
+  const done = units.filter((u) => u.status === 'passed' || u.status === 'skipped').length
+  const unit = findUnit(space, space.currentUnitId)
+  const inOnboarding = space.view === 'onboarding' || space.view === 'planning'
+  const position = inOnboarding
+    ? '正在确认学习需求'
+    : space.completed
+      ? '已完成全部单元'
+      : space.view === 'assessment' || space.draft
+        ? `「${unit?.title}」测评进行中`
+        : unit
+          ? `正在学习「${unit.title}」`
+          : '尚未开始'
+
+  return (
+    <Card className="transition-shadow hover:shadow-md">
+      <CardHeader>
+        <CardTitle className="text-lg tracking-tight">{space.name}</CardTitle>
+        <CardDescription className="line-clamp-2 leading-relaxed">
+          {space.requirement?.goal ?? space.onboarding.messages[0]?.text ?? '尚未确定学习目标'}
+        </CardDescription>
+        <CardAction>
+          <Badge variant="secondary" className="font-mono">
+            {space.topic || '—'}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2.5">
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-medium">{position}</span>
+          {units.length > 0 && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {done}/{units.length}
+            </span>
+          )}
+        </div>
+        {units.length > 0 && (
+          <div className="flex gap-1" aria-hidden>
+            {units.map((u) => (
+              <span
+                key={u.id}
+                className={cn(
+                  'h-1.5 flex-1 rounded-full bg-muted',
+                  (u.status === 'passed' || u.status === 'skipped') && 'bg-primary',
+                  u.id === space.currentUnitId && u.status !== 'passed' && 'bg-primary/40',
+                )}
+              />
+            ))}
+          </div>
+        )}
+      </CardContent>
+      <CardFooter className="mt-auto justify-between border-t bg-muted/40 py-3">
+        <span className="text-xs text-muted-foreground">
+          {space.sessions.length} 个会话 · {relativeTime(space.lastActive)}
+        </span>
+        <Button size="sm" onClick={() => openSpace(space.id)}>
+          继续学习
+          <ArrowRight data-icon="inline-end" />
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}
+
+export function SpaceList() {
+  const { state, goHome, goSpaces } = useApp()
+  const spaces = state.spaces
+  const onHome = state.globalView === 'home'
+  return (
+    <div className="min-h-dvh">
+      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
+          <Brand onClick={goHome} />
+          {onHome ? (
+            <Button variant="outline" onClick={goSpaces}>
+              <LayoutGrid data-icon="inline-start" />
+              我的学习空间
+            </Button>
+          ) : (
+            <Button onClick={goHome}>
+              <Plus data-icon="inline-start" />
+              创建学习空间
+            </Button>
+          )}
+        </div>
+      </header>
+      <main className="mx-auto max-w-6xl px-6">
+        {onHome ? (
+          <Home />
+        ) : (
+          <div className="flex flex-col gap-8 py-12">
+            <div className="flex flex-col gap-1.5">
+              <h1 className="text-3xl font-semibold tracking-tight">我的学习空间</h1>
+              <p className="text-muted-foreground">
+                {spaces.length ? '选择一个空间，从上次离开的地方继续。' : '还没有学习空间，先创建一个，开始你的学习之旅。'}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-5 xl:grid-cols-3">
+              {spaces.map((s) => (
+                <SpaceCard key={s.id} space={s} />
+              ))}
+              <button
+                type="button"
+                onClick={goHome}
+                className="group flex min-h-52 flex-col items-center justify-center gap-3 rounded-xl border border-dashed text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-foreground"
+              >
+                <span className="flex size-10 items-center justify-center rounded-full bg-muted transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                  <Plus className="size-5" aria-hidden />
+                </span>
+                <span className="flex flex-col items-center gap-0.5">
+                  <span className="text-sm font-medium">创建新的学习空间</span>
+                  <span className="text-xs">告诉 Agent 你想学什么</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}

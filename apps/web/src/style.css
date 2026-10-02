@@ -282,3 +282,8 @@
   background: currentColor;
   animation: caret-blink 1s steps(1) infinite;
 }
+
+/* Reserve space for the explicit fixture notice rather than covering controls. */
+.fixture-preview .h-dvh { height: calc(100dvh - 24px); }
+.fixture-preview .min-h-dvh { min-height: calc(100dvh - 24px); }
+.fixture-preview .learning-entry { min-height: calc(100dvh - 81px); }

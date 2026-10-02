@@ -1,0 +1,249 @@
+'use client'
+
+import { ArrowRight, ArrowUp, Lightbulb, Sparkles, Trophy } from 'lucide-react'
+import { motion, useReducedMotion } from 'motion/react'
+import { useEffect } from 'react'
+import { StatusIcon, StatusPill, isComposing } from '@/components/shared'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group'
+import { Progress } from '@/components/ui/progress'
+import { allUnits, findUnit } from '@/fixtures/demo-data'
+import { useApp, useSpace } from '@/fixtures/store'
+import { cn } from '@/lib/utils'
+import type { Unit } from '@/fixtures/types'
+
+function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string; isCurrent: boolean; isLast: boolean }) {
+  const { enterUnit } = useApp()
+  const finished = unit.status === 'passed' || unit.status === 'skipped'
+  const verb = finished ? '复习' : unit.status === 'not_started' ? '进入' : '继续'
+  return (
+    <li className="relative flex gap-4">
+      <div className="flex flex-col items-center">
+        <StatusIcon status={unit.status} />
+        {!isLast && (
+          <span aria-hidden className={cn('my-1 w-px flex-1', finished ? 'bg-primary/50' : 'bg-border')} />
+        )}
+      </div>
+      <Card
+        className={cn(
+          'mb-4 flex-1 transition-shadow',
+          isCurrent ? 'shadow-md ring-2 ring-primary/60' : 'hover:shadow-sm',
+          unit.status === 'skipped' && 'opacity-70',
+        )}
+      >
+        <CardHeader>
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-xs font-normal text-muted-foreground">{index}</span>
+            {unit.title}
+            <StatusPill status={unit.status} />
+            {isCurrent && <Badge variant="outline" className="border-primary/40 text-primary">当前单元</Badge>}
+          </CardTitle>
+          <CardDescription className="leading-relaxed">{unit.summary}</CardDescription>
+          <CardAction>
+            <Button variant={isCurrent ? 'default' : 'outline'} size="sm" onClick={() => enterUnit(unit.id)}>
+              {verb}
+              <ArrowRight data-icon="inline-end" />
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <ul className="flex flex-wrap gap-1.5" aria-label="单元目标">
+            {unit.goals.map((g) => (
+              <li key={g}>
+                <Badge variant="secondary" className="font-normal">
+                  {g}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+          {unit.status === 'needs_work' && unit.lastAdvice?.[0] && (
+            <Alert className="border-accent-foreground/20 bg-accent/60 text-accent-foreground">
+              <Lightbulb />
+              <AlertDescription className="text-accent-foreground">上次测评建议：{unit.lastAdvice[0]}</AlertDescription>
+            </Alert>
+          )}
+          {unit.contentState !== 'ready' && unit.status !== 'skipped' && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Sparkles className="size-3" aria-hidden />
+              进入后为你生成课件
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </li>
+  )
+}
+
+export function RouteView() {
+  const space = useSpace()
+  const { session, enterUnit, sendMessage, setRouteSuggestion } = useApp()
+  const suggestion = session?.routeSuggestion ?? ''
+  const reducedMotion = useReducedMotion()
+
+  useEffect(() => {
+    if (space.agentOpen) document.getElementById('agent-input')?.focus({ preventScroll: true })
+  }, [space.agentOpen])
+
+  const busy = !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const submitSuggestion = () => {
+    if (sendMessage(suggestion)) setRouteSuggestion('')
+  }
+  const units = allUnits(space)
+  const done = units.filter((u) => u.status === 'passed' || u.status === 'skipped').length
+  const current = findUnit(space, space.currentUnitId)
+  const req = space.requirement
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex max-w-4xl flex-col gap-10 px-8 py-10">
+        <section className="flex flex-col gap-6">
+          <div className="flex flex-col gap-3">
+            <Badge variant="outline" className="w-fit font-mono">
+              学习路线
+            </Badge>
+            <h1 className="text-balance text-4xl font-semibold tracking-tight">{space.name}</h1>
+            {req && <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">{req.goal}</p>}
+          </div>
+
+          {space.completed ? (
+            <Alert className="border-primary/30 bg-primary/10">
+              <Trophy />
+              <AlertTitle>你已完成这条学习路线</AlertTitle>
+              <AlertDescription>随时可以回到任一单元复习，或和 Agent 讨论下一步学什么。</AlertDescription>
+            </Alert>
+          ) : (
+            current && (
+              <Card className="bg-primary text-primary-foreground ring-0">
+                <CardHeader>
+                  <CardDescription className="text-primary-foreground/75">推荐从这里继续</CardDescription>
+                  <CardTitle className="text-xl">{current.title}</CardTitle>
+                  <CardAction>
+                    <Button size="lg" variant="secondary" onClick={() => enterUnit(current.id)}>
+                      {current.status === 'not_started' ? '开始学习' : '继续学习'}
+                      <ArrowRight data-icon="inline-end" />
+                    </Button>
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <p className="text-sm leading-relaxed text-primary-foreground/85">{current.summary}</p>
+                  <div className="flex items-center gap-3">
+                    <Progress
+                      value={(done / Math.max(units.length, 1)) * 100}
+                      aria-label="路线进度"
+                      className="flex-1 [&_[data-slot=progress-indicator]]:bg-primary-foreground [&_[data-slot=progress-track]]:bg-primary-foreground/25"
+                    />
+                    <span className="font-mono text-xs text-primary-foreground/85">
+                      {done}/{units.length} 单元
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          )}
+
+          {req && (
+            <dl className="grid grid-cols-3 overflow-hidden rounded-xl border bg-card text-sm">
+              {[
+                ['已有基础', req.background],
+                ['期望达成', req.outcome],
+                ['时间安排', req.schedule],
+              ].map(([k, v], i) => (
+                <div key={k} className={cn('flex flex-col gap-1.5 p-4', i > 0 && 'border-l')}>
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{k}</dt>
+                  <dd className="leading-relaxed">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+
+          {space.routeNote && (
+            <Alert>
+              <Sparkles />
+              <AlertTitle>为什么这样安排</AlertTitle>
+              <AlertDescription className="leading-relaxed">{space.routeNote}</AlertDescription>
+            </Alert>
+          )}
+        </section>
+
+        {space.stages.map((stage, si) => (
+          <section key={stage.id} aria-labelledby={`stage-${stage.id}`} className="flex flex-col gap-5">
+            <h2 id={`stage-${stage.id}`} className="flex items-center gap-3 text-lg font-semibold tracking-tight">
+              <span className="flex h-6 items-center rounded-md bg-foreground px-2 font-mono text-xs text-background">
+                阶段 {si + 1}
+              </span>
+              {stage.title}
+            </h2>
+            <ol className="flex flex-col">
+              {stage.units.map((u, ui) => (
+                <UnitRow
+                  key={u.id}
+                  unit={u}
+                  index={`${si + 1}.${ui + 1}`}
+                  isCurrent={u.id === space.currentUnitId && !space.completed}
+                  isLast={ui === stage.units.length - 1}
+                />
+              ))}
+            </ol>
+          </section>
+        ))}
+
+        <section aria-labelledby="route-feedback-title" className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 id="route-feedback-title" className="text-base font-medium">觉得路线不合适？</h2>
+            <p className="text-sm leading-relaxed text-muted-foreground">直接告诉 Agent 你的想法，它会给出调整建议，你确认后路线才会更新。</p>
+          </div>
+          <div>
+            <motion.div
+              initial={false}
+              animate={{ gridTemplateRows: space.agentOpen ? '0fr' : '1fr' }}
+              transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeInOut' }}
+              className={cn('grid', space.agentOpen && 'invisible')}
+              inert={space.agentOpen}
+              aria-hidden={space.agentOpen}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <form className="p-1" onSubmit={(e) => { e.preventDefault(); submitSuggestion() }}>
+                  <InputGroup className="rounded-xl bg-background has-disabled:bg-background has-disabled:opacity-100">
+                    <InputGroupTextarea
+                      aria-label="路线调整想法"
+                      placeholder="说说你想怎么调整，例如：基础语法我已经会了，想先做项目…"
+                      rows={2}
+                      value={suggestion}
+                      onChange={(e) => setRouteSuggestion(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
+                          e.preventDefault()
+                          submitSuggestion()
+                        }
+                      }}
+                    />
+                    <InputGroupAddon align="block-end">
+                      <span className="text-xs font-normal">{busy ? 'Agent 正在回复…' : 'Enter 发送 · Shift + Enter 换行'}</span>
+                      <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto rounded-full" disabled={busy || !suggestion.trim()} aria-label="发送路线调整想法">
+                        <ArrowUp />
+                      </InputGroupButton>
+                    </InputGroupAddon>
+                  </InputGroup>
+                </form>
+              </div>
+            </motion.div>
+            {space.agentOpen && (
+              <Button
+                variant="link"
+                className="h-8 px-0"
+                aria-controls="agent-input"
+                onClick={() => document.getElementById('agent-input')?.focus({ preventScroll: true })}
+              >
+                在 Agent 中继续
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  )
+}
