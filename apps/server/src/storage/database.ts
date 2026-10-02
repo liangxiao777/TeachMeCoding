@@ -53,9 +53,9 @@ export function openDatabase(path: string) {
   const db = new Database(path);
   try {
     db.pragma('foreign_keys = ON');
-    db.pragma('journal_mode = WAL');
     db.pragma('busy_timeout = 5000');
     migrate(db);
+    db.pragma('journal_mode = WAL');
     return db;
   } catch (error) { db.close(); throw error; }
 }

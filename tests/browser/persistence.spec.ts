@@ -56,6 +56,28 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await expect(page.getByRole('article').filter({ hasText: '独立保存的需求问题' })).toHaveCount(1);
 });
 
+test('a delayed requirement response preserves sessions created while saving', async ({ page }, info) => {
+  await page.goto(`/?space=${seed(info).otherId}`);
+  await visible(page, '已有基础').fill('保存期间继续创建会话');
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/api/spaces/*/requirement', async (route) => {
+    const response = await route.fetch(); await held; await route.fulfill({ response });
+  });
+  try {
+    await page.getByRole('button', { name: '确认需求', exact: true }).click();
+    await expect(page.getByRole('button', { name: '确认需求', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: '新会话', exact: true }).click();
+    const history = page.getByRole('combobox', { name: '历史会话' });
+    await expect(history.locator('option')).toHaveCount(2);
+    const session = await history.inputValue();
+    release();
+    await expect(page.getByText('需求已确认并保存', { exact: true })).toBeVisible();
+    await expect(history.locator('option')).toHaveCount(2);
+    await expect(history).toHaveValue(session);
+  } finally { release(); }
+});
+
 test('unit sessions, references, assessment drafts, historical records and confirmed proposals stay scoped', async ({ page }, info) => {
   const data = seed(info);
   await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${data.unitIds[0]}`);

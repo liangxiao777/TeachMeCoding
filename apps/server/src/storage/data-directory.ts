@@ -6,7 +6,7 @@ import { openDatabase } from './database.js';
 
 export function dataDirectory(environment: NodeJS.ProcessEnv = process.env) {
   const root = environment.TMC_DATA_DIR ?? join(homedir(), '.teach-me-coding');
-  if (!isAbsolute(root)) throw new Error('TMC_DATA_DIR must be an absolute path outside the source checkout.');
+  if (!isAbsolute(root)) throw new Error('TMC_DATA_DIR must be an absolute path. Keep learning data outside the source checkout.');
   return root;
 }
 
@@ -24,6 +24,12 @@ export function openDataDirectory(directory: string) {
   catch { lock.close(); throw new Error('Data directory is already in use. Stop the other instance or choose another TMC_DATA_DIR.'); }
   try {
     const db = openDatabase(join(root, 'app.db'));
+    try {
+      db.transaction(() => {
+        db.prepare("UPDATE runs SET state='interrupted' WHERE state IN ('pending','running')").run();
+        db.prepare("UPDATE tasks SET state='interrupted' WHERE state IN ('pending','running')").run();
+      })();
+    } catch (error) { db.close(); throw error; }
     let closed = false;
     return { root, db, close() {
       if (closed) return;
