@@ -6,11 +6,12 @@ import type { HealthResponse } from '@teach-me-coding/contracts';
 import { localAccessError, type LocalAccess } from './local-access.js';
 import { workspaceApi } from './workspaces.js';
 import type { Learning } from '../modules/learning.js';
+import type { Projects } from '../modules/projects.js';
 
 // Source and compiled modules have the same depth relative to apps/web.
 export const webRoot = fileURLToPath(new URL('../../../web/dist/', import.meta.url));
 
-export function createApp(access: LocalAccess, learning?: Learning) {
+export function createApp(access: LocalAccess, learning?: Learning, projects?: Projects) {
   const app = new Hono();
   app.use('*', async (c, next) => {
     c.header('X-Content-Type-Options', 'nosniff');
@@ -35,7 +36,7 @@ export function createApp(access: LocalAccess, learning?: Learning) {
     return c.json({ token: access.token });
   });
   app.post('/api/access/check', (c) => c.json({ ok: true }));
-  if (learning) app.route('/api', workspaceApi(learning));
+  if (learning) app.route('/api', workspaceApi(learning, projects));
   app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
   app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
   app.use('*', serveStatic({ root: webRoot }));

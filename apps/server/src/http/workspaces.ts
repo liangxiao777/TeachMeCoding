@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { BusinessError, type Learning } from '../modules/learning.js';
+import type { Projects } from '../modules/projects.js';
 
-export function workspaceApi(learning: Learning) {
+export function workspaceApi(learning: Learning, projects?: Projects) {
   const api = new Hono();
   api.use('*', bodyLimit({ maxSize: 1_100_000, onError: (c) => c.json({ error: '请求内容过大。' }, 413) }));
   api.onError((error, c) => {
@@ -41,5 +42,20 @@ export function workspaceApi(learning: Learning) {
   });
   api.post('/spaces/:space/proposals/:proposal/apply', (c) => c.json(learning.once(
     c.req.header('Idempotency-Key') ?? '', c.req.path, null, () => learning.applyProposal(c.req.param('space'), c.req.param('proposal')))));
+  if (projects) {
+    api.use('/spaces/:space/project/*', async (c, next) => { learning.space(c.req.param('space')); await next(); });
+    api.get('/spaces/:space/project/tree', (c) => c.json(projects.tree(c.req.param('space'))));
+    api.get('/spaces/:space/project/file', (c) => c.json(projects.read(c.req.param('space'), c.req.query('path') ?? '')));
+    api.post('/spaces/:space/project/:action', async (c) => {
+      const input: unknown = await c.req.json();
+      const space = c.req.param('space');
+      switch (c.req.param('action')) {
+        case 'create': return c.json(projects.create(space, input));
+        case 'save': return c.json(projects.save(space, input));
+        case 'rename': return c.json(projects.rename(space, input));
+        default: return c.json({ error: 'Not found' }, 404);
+      }
+    });
+  }
   return api;
 }
