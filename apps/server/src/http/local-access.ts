@@ -2,8 +2,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 
-export function createLocalAccess({ port, development = false }: { port: number; development?: boolean }) {
-  const ports = development ? [port, 5173] : [port];
+export function createLocalAccess({ port, development = false, webPort = 5173 }: { port: number; development?: boolean; webPort?: number }) {
+  const ports = development ? [port, webPort] : [port];
   const hosts = new Set(ports.flatMap((value) => [`127.0.0.1:${value}`, `localhost:${value}`]));
   return {
     token: randomBytes(32).toString('hex'),

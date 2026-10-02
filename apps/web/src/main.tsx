@@ -4,7 +4,10 @@ import { Diagnostics } from './app/diagnostics';
 import './style.css';
 
 const Preview = lazy(() => import('./fixtures/preview'));
+const PersistentApp = lazy(() => import('./app/workspace'));
 
 createRoot(document.getElementById('root')!).render(<StrictMode>
-  {location.pathname === '/preview' ? <Suspense fallback={<p role="status">正在加载界面演示…</p>}><Preview /></Suspense> : <Diagnostics />}
+  <Suspense fallback={<p role="status">正在加载…</p>}>
+    {location.pathname === '/preview' ? <Preview /> : location.pathname === '/diagnostics' ? <Diagnostics /> : <PersistentApp />}
+  </Suspense>
 </StrictMode>);

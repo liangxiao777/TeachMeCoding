@@ -7,7 +7,7 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     host: '127.0.0.1',
-    port: 5173,
+    port: Number(process.env.TMC_WEB_PORT ?? 5173),
     strictPort: true,
     cors: false,
     headers: {

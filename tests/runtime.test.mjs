@@ -26,7 +26,7 @@ test('production startup, static routing, HTTP and upgrade boundaries from an un
   const cwd = await mkdtemp(join(tmpdir(), 'teach-me-coding-start-'));
   const syntheticSecret = 'server-only-credential-sentinel';
   const child = spawn(process.execPath, [fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url))], {
-    cwd, env: { PATH: process.env.PATH, PORT: '14310', OPENROUTER_API_KEY: syntheticSecret }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd, env: { PATH: process.env.PATH, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');
   let logs = '';
