@@ -1,22 +1,23 @@
 'use client'
 
-import { ArrowRight, ArrowUp, Lightbulb, Sparkles, Trophy } from 'lucide-react'
+import { ArrowRight, ArrowUp, Lightbulb, Route, Sparkles, Trophy } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { SessionSaveControls } from '@/components/agent/agent-panel'
 import { StatusIcon, StatusPill, isComposing } from '@/components/shared'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group'
 import { Progress } from '@/components/ui/progress'
-import { allUnits, findUnit } from '@/fixtures/demo-data'
-import { useApp, useSpace } from '@/fixtures/store'
+import { allUnits, findUnit } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
-import type { Unit } from '@/fixtures/types'
+import type { Unit } from '@/app/types'
 
 function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string; isCurrent: boolean; isLast: boolean }) {
-  const { enterUnit } = useApp()
+  const { enterUnit, capabilities } = useApp()
   const finished = unit.status === 'passed' || unit.status === 'skipped'
   const verb = finished ? '复习' : unit.status === 'not_started' ? '进入' : '继续'
   return (
@@ -68,7 +69,7 @@ function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string
           {unit.contentState !== 'ready' && unit.status !== 'skipped' && (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Sparkles className="size-3" aria-hidden />
-              进入后为你生成课件
+              {capabilities.agent ? '进入后为你生成课件' : '尚无课件 · Agent 暂不可用'}
             </p>
           )}
         </CardContent>
@@ -79,17 +80,40 @@ function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string
 
 export function RouteView() {
   const space = useSpace()
-  const { session, enterUnit, sendMessage, setRouteSuggestion } = useApp()
+  const { session, enterUnit, sendMessage, setRouteSuggestion, setView, capabilities, persistence } = useApp()
   const suggestion = session?.routeSuggestion ?? ''
+  const latest = useRef<{ sessionId: string | undefined; suggestion: string } | null>(null)
+  latest.current = { sessionId: session?.id, suggestion }
+  const sendingRef = useRef(false)
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
   const reducedMotion = useReducedMotion()
 
   useEffect(() => {
     if (space.agentOpen) document.getElementById('agent-input')?.focus({ preventScroll: true })
   }, [space.agentOpen])
 
-  const busy = !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
-  const submitSuggestion = () => {
-    if (sendMessage(suggestion)) setRouteSuggestion('')
+  useEffect(() => () => { latest.current = null }, [])
+  useEffect(() => setSendError(''), [session?.id, session?.messages.length])
+
+  const busy = sending || !!persistence && (persistence.busy || !persistence.ready) || capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const submitSuggestion = async () => {
+    if (!suggestion.trim() || busy || sendingRef.current) return
+    const submittedSessionId = session?.id
+    sendingRef.current = true
+    setSending(true)
+    setSendError('')
+    try {
+      const sent = await sendMessage(suggestion)
+      if (sent && latest.current?.sessionId === submittedSessionId && latest.current?.suggestion === suggestion) {
+        setRouteSuggestion('')
+      }
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : '路线调整想法未保存，请重试。')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
   }
   const units = allUnits(space)
   const done = units.filter((u) => u.status === 'passed' || u.status === 'skipped').length
@@ -108,11 +132,21 @@ export function RouteView() {
             {req && <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">{req.goal}</p>}
           </div>
 
-          {space.completed ? (
+          {persistence && units.length === 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>尚无学习路线</CardTitle>
+                <CardDescription>{capabilities.agent ? '尚未保存学习路线。确认需求并应用路线提案后，学习单元会显示在这里。' : 'Agent 暂不可用，不会自动生成路线。已有路线提案需手动确认；目前没有学习单元或进度。'}</CardDescription>
+                <CardAction>
+                  <Button variant="outline" onClick={() => setView('onboarding')}>查看学习需求</Button>
+                </CardAction>
+              </CardHeader>
+            </Card>
+          ) : space.completed ? (
             <Alert className="border-primary/30 bg-primary/10">
               <Trophy />
               <AlertTitle>你已完成这条学习路线</AlertTitle>
-              <AlertDescription>随时可以回到任一单元复习，或和 Agent 讨论下一步学什么。</AlertDescription>
+              <AlertDescription>{capabilities.agent ? '随时可以回到任一单元复习，或和 Agent 讨论下一步学什么。' : '随时可以回到任一单元复习，或记录下一步想学习的问题。Agent 暂不可用。'}</AlertDescription>
             </Alert>
           ) : (
             current && (
@@ -168,6 +202,30 @@ export function RouteView() {
           )}
         </section>
 
+        {persistence?.proposals.filter((proposal) => proposal.state === 'pending').map((proposal) => (
+          <Card key={proposal.id} size="sm" className="ring-primary/30" data-testid="route-proposal" data-proposal-id={proposal.id}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Route className="size-4 text-primary" aria-hidden />
+                待确认的路线调整
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">{proposal.content.note || '确认后才会更新学习路线。'}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="flex flex-col gap-2 text-sm">
+                {proposal.content.stages.map((stage) => (
+                  <li key={stage.id}>{stage.title}：{stage.units.map((unit) => unit.title).join('、')}</li>
+                ))}
+              </ul>
+            </CardContent>
+            <CardFooter>
+              <Button size="sm" disabled={persistence.busy || !persistence.ready} onClick={() => persistence.applyProposal(proposal.id)}>
+                确认调整路线
+              </Button>
+            </CardFooter>
+          </Card>
+        ))}
+
         {space.stages.map((stage, si) => (
           <section key={stage.id} aria-labelledby={`stage-${stage.id}`} className="flex flex-col gap-5">
             <h2 id={`stage-${stage.id}`} className="flex items-center gap-3 text-lg font-semibold tracking-tight">
@@ -193,7 +251,7 @@ export function RouteView() {
         <section aria-labelledby="route-feedback-title" className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
             <h2 id="route-feedback-title" className="text-base font-medium">觉得路线不合适？</h2>
-            <p className="text-sm leading-relaxed text-muted-foreground">直接告诉 Agent 你的想法，它会给出调整建议，你确认后路线才会更新。</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">{capabilities.agent ? '直接告诉 Agent 你的想法，它会给出调整建议，你确认后路线才会更新。' : 'Agent 暂不可用。可以保存路线调整想法，但不会生成建议或自动更新路线。'}</p>
           </div>
           <div>
             <motion.div
@@ -205,7 +263,7 @@ export function RouteView() {
               aria-hidden={space.agentOpen}
             >
               <div className="min-h-0 overflow-hidden">
-                <form className="p-1" onSubmit={(e) => { e.preventDefault(); submitSuggestion() }}>
+                <form className="p-1" onSubmit={(e) => { e.preventDefault(); void submitSuggestion() }}>
                   <InputGroup className="rounded-xl bg-background has-disabled:bg-background has-disabled:opacity-100">
                     <InputGroupTextarea
                       aria-label="路线调整想法"
@@ -216,18 +274,20 @@ export function RouteView() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                           e.preventDefault()
-                          submitSuggestion()
+                          void submitSuggestion()
                         }
                       }}
                     />
                     <InputGroupAddon align="block-end">
-                      <span className="text-xs font-normal">{busy ? 'Agent 正在回复…' : 'Enter 发送 · Shift + Enter 换行'}</span>
-                      <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto rounded-full" disabled={busy || !suggestion.trim()} aria-label="发送路线调整想法">
+                      <span className="text-xs font-normal">{busy ? persistence ? '正在读取或保存…' : 'Agent 正在回复…' : capabilities.agent ? 'Enter 发送 · Shift + Enter 换行' : 'Enter 保存想法 · Shift + Enter 换行'}</span>
+                      <SessionSaveControls disabled={sending} />
+                      <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto rounded-full" disabled={busy || !suggestion.trim()} aria-label={capabilities.agent ? '发送路线调整想法' : '保存路线调整想法'}>
                         <ArrowUp />
                       </InputGroupButton>
                     </InputGroupAddon>
                   </InputGroup>
                 </form>
+                {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}
               </div>
             </motion.div>
             {space.agentOpen && (
@@ -237,7 +297,7 @@ export function RouteView() {
                 aria-controls="agent-input"
                 onClick={() => document.getElementById('agent-input')?.focus({ preventScroll: true })}
               >
-                在 Agent 中继续
+                {capabilities.agent ? '在 Agent 中继续' : '在会话中继续记录'}
                 <ArrowRight data-icon="inline-end" />
               </Button>
             )}

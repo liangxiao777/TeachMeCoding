@@ -13,19 +13,19 @@ import {
   Target,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Generating, InlineText, StatusPill } from '@/components/shared'
+import { Generating, InlineText, RichText, StatusPill } from '@/components/shared'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia } from '@/components/ui/item'
-import { findUnit } from '@/fixtures/demo-data'
-import { getLesson, type LessonBlock } from '@/fixtures/lessons'
-import { useApp, useSpace } from '@/fixtures/store'
+import { findUnit } from '@/app/selectors'
+import type { LessonBlock } from '@/app/types'
+import { useApp, useSpace } from '@/app/context'
 
 const scrollMemory = new Map<string, number>()
 
 function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> }) {
-  const { bringToIde } = useApp()
+  const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
   return (
     <figure className="flex flex-col overflow-hidden rounded-xl bg-ide text-ide-foreground shadow-sm ring-1 ring-foreground/10">
@@ -52,7 +52,7 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
             {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
             {copied ? '已复制' : '复制'}
           </Button>
-          <Button size="xs" onClick={() => bringToIde(block.code, block.file)}>
+          <Button size="xs" disabled={persistence && (!persistence.ready || persistence.busy)} onClick={() => bringToIde(block.code, block.file)}>
             <SquareTerminal data-icon="inline-start" />
             带入 IDE
           </Button>
@@ -108,6 +108,8 @@ function MoveDiagram() {
 
 function Block({ block }: { block: LessonBlock }) {
   switch (block.type) {
+    case 'markdown':
+      return <RichText text={block.text} renderCode={(code, language) => <CodeBlock block={{ type: 'code', code, language, file: language === 'rust' ? 'example.rs' : language === 'python' ? 'example.py' : 'example.txt' }} />} />
     case 'h2':
       return (
         <h2 id={block.id} className="scroll-mt-6 pt-4 text-xl font-semibold tracking-tight">
@@ -166,7 +168,7 @@ function Block({ block }: { block: LessonBlock }) {
 
 export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; onAsk?: () => void }) {
   const space = useSpace()
-  const { setQuote, retryGeneration, setView, viewRecord } = useApp()
+  const { setQuote, retryGeneration, setView, viewRecord, lesson: getLesson, capabilities, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [pop, setPop] = useState<{ x: number; y: number; text: string } | null>(null)
@@ -188,8 +190,18 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
     setPop({ x: rect.left + rect.width / 2, y: rect.top, text })
   }, [])
 
-  if (!unit) return null
-  const lesson = ready ? getLesson(unit, space.kind === 'pytorch' ? 'python' : 'rust') : null
+  if (!unit) return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle>单元暂不可用</EmptyTitle>
+        <EmptyDescription>请返回学习路线选择可用单元。</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
+      </EmptyContent>
+    </Empty>
+  )
+  const lesson = ready ? getLesson(unit) : null
   const location = (() => {
     for (const [si, st] of space.stages.entries()) {
       const ui = st.units.findIndex((u) => u.id === unit.id)
@@ -262,7 +274,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           </Alert>
         )}
 
-        {unit.contentState === 'generating' && (
+        {unit.contentState === 'generating' && capabilities.agent && (
           <Generating
             className="py-6"
             title="正在为你生成课件"
@@ -279,11 +291,13 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               </EmptyMedia>
               <EmptyTitle>课件生成失败</EmptyTitle>
               <EmptyDescription>
-                生成过程中出现了问题，你的路线、会话和代码都没有受影响。可以重新生成，或先向 Agent 提问。
+                {capabilities.agent
+                  ? '生成过程中出现了问题，你的路线、会话和代码都没有受影响。可以重新生成，或先向 Agent 提问。'
+                  : '课件生成失败，当前生成服务暂不可用。你的路线、会话和代码都没有受影响。'}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent className="flex-row justify-center">
-              <Button onClick={() => retryGeneration(unit.id)}>
+              <Button disabled={!capabilities.agent || !!persistence?.busy} onClick={() => retryGeneration(unit.id)}>
                 <RotateCcw data-icon="inline-start" />
                 重新生成
               </Button>
@@ -294,14 +308,28 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           </Empty>
         )}
 
+        {!lesson && unit.contentState !== 'failed' && (unit.contentState !== 'generating' || !capabilities.agent) && (
+          <Empty className="border">
+            <EmptyHeader>
+              <EmptyTitle>课件暂不可用</EmptyTitle>
+              <EmptyDescription>当前单元尚无可读取的课件内容。你的学习路线、会话和代码不会受影响。</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
+            </EmptyContent>
+          </Empty>
+        )}
+
         {lesson && (
           <>
-            <p className="border-l-2 border-primary pl-4 text-lg leading-relaxed text-muted-foreground">{lesson.intro}</p>
+            {lesson.intro && <p className="border-l-2 border-primary pl-4 text-lg leading-relaxed text-muted-foreground">{lesson.intro}</p>}
             {lesson.blocks.map((b, i) => (
               <Block key={i} block={b} />
             ))}
             <footer className="mt-6 flex flex-col gap-2 border-t pt-6 text-sm text-muted-foreground">
-              <p>读完并动手试过之后，可以点击右上角「开始单元测评」检验掌握情况。</p>
+              <p>{capabilities.assessment
+                ? '读完并动手试过之后，可以点击右上角「开始单元测评」检验掌握情况。'
+                : '测评运行与评估暂不可用，仍可保存答案草稿。'}</p>
             </footer>
           </>
         )}

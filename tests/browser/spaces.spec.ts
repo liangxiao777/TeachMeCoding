@@ -72,7 +72,7 @@ test('messages, selected sessions, drafts and lesson quotes stay in their space 
   await expect(composer).toHaveValue('');
   await expect(agent.getByRole('button', { name: '移除引用' })).toHaveCount(0);
   await composer.fill('所有权草稿 B');
-  await agent.getByRole('button', { name: '新会话', exact: true }).click();
+  await agent.getByRole('button', { name: '切换会话', exact: true }).click();
   await page.getByRole('menuitem', { name: /理解所有权转移/ }).click();
   await expect(composer).toHaveValue('所有权草稿 A');
   await expect(agent.getByRole('button', { name: '移除引用' })).toBeVisible();

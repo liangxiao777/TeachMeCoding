@@ -18,8 +18,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
-import { findUnit, nextUnit, relativeTime } from '@/fixtures/demo-data'
-import { useApp, useSpace } from '@/fixtures/store'
+import { findUnit, nextUnit, relativeTime } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 
 function Section({
@@ -81,7 +81,19 @@ export function ResultView() {
   const space = useSpace()
   const { goNextUnit, backToStudy, startAssessment, setQuote, setView } = useApp()
   const record = space.records.find((r) => r.id === space.viewingRecordId)
-  if (!record) return null
+  if (!record) return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
+        <Card>
+          <CardHeader>
+            <CardTitle>测评记录暂不可用</CardTitle>
+            <CardDescription>当前没有可读取的测评结果。</CardDescription>
+          </CardHeader>
+        </Card>
+        <Button size="lg" variant="ghost" onClick={() => setView('route')}>查看学习路线</Button>
+      </div>
+    </div>
+  )
   const passed = record.result === 'pass'
   const unit = findUnit(space, record.unitId)
   const next = nextUnit(space, record.unitId)

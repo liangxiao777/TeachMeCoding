@@ -18,7 +18,7 @@ import {
   SquareTerminal,
   X,
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BrandMark, RichText, isComposing } from '@/components/shared'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -35,11 +35,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { findUnit, relativeTime } from '@/fixtures/demo-data'
-import { sessionUnitId } from '@/fixtures/sessions'
-import { useApp, useSpace } from '@/fixtures/store'
+import { findUnit, relativeTime, scopedSessions, sessionUnitId } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
-import type { Message, Quote, QuoteSource } from '@/fixtures/types'
+import type { Message, Quote, QuoteSource } from '@/app/types'
 
 const SOURCE_ICON: Record<QuoteSource, typeof FileText> = {
   lesson: FileText,
@@ -80,14 +79,14 @@ const ACTION_COPY = {
 }
 
 function AgentMessage({ msg }: { msg: Message }) {
-  const { retryReply, applyRouteAction, bringToIde } = useApp()
+  const { retryReply, applyRouteAction, bringToIde, capabilities, persistence } = useApp()
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
 
   if (msg.status === 'thinking')
     return (
       <div role="status" className="text-sm text-muted-foreground">
-        <span className="shimmer">Thinking...</span>
+        <span className={capabilities.agent ? 'shimmer' : undefined}>{capabilities.agent ? 'Thinking...' : 'Agent 暂不可用'}</span>
       </div>
     )
 
@@ -96,7 +95,7 @@ function AgentMessage({ msg }: { msg: Message }) {
       {msg.text && (
         <RichText
           text={msg.text}
-          streaming={msg.status === 'streaming'}
+          streaming={capabilities.agent && msg.status === 'streaming'}
           renderCode={(code) => (
             <figure className="flex flex-col overflow-hidden rounded-lg bg-ide text-ide-foreground ring-1 ring-foreground/10">
               <pre className="overflow-x-auto p-3 font-mono text-xs leading-relaxed">{code}</pre>
@@ -116,7 +115,7 @@ function AgentMessage({ msg }: { msg: Message }) {
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Square className="size-3" aria-hidden />
           已停止生成
-          <Button variant="link" size="xs" className="h-auto p-0" onClick={() => retryReply(msg.id)}>
+          <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent} onClick={() => retryReply(msg.id)}>
             重新生成
           </Button>
         </div>
@@ -126,14 +125,14 @@ function AgentMessage({ msg }: { msg: Message }) {
           <AlertCircle />
           <AlertTitle>回复失败，你的问题已保留</AlertTitle>
           <AlertAction>
-            <Button size="xs" variant="outline" onClick={() => retryReply(msg.id)}>
+            <Button size="xs" variant="outline" disabled={!capabilities.agent} onClick={() => retryReply(msg.id)}>
               <RotateCcw data-icon="inline-start" />
               重试
             </Button>
           </AlertAction>
         </Alert>
       )}
-      {msg.action && msg.status === 'done' && (
+      {!persistence && msg.action && msg.status === 'done' && (
         <Card size="sm" className="ring-primary/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
@@ -160,13 +159,14 @@ function AgentMessage({ msg }: { msg: Message }) {
   )
 }
 
-function SessionMenu() {
+export function SessionMenu() {
   const space = useSpace()
-  const { session: active, switchSession, newSession } = useApp()
-  const sessions = space.sessions.filter((s) => s.unitId === sessionUnitId(space))
+  const { session: active, switchSession, newSession, persistence } = useApp()
+  const sessions = scopedSessions(space)
+  const busy = !!persistence && !persistence.ready
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="max-w-full min-w-0" />}>
+      <DropdownMenuTrigger aria-label="切换会话" render={<Button variant="ghost" size="sm" className="max-w-full min-w-0" />}>
         <History data-icon="inline-start" className="text-muted-foreground" />
         <span className="truncate">{active?.title ?? '新会话'}</span>
         <ChevronDown data-icon="inline-end" className="text-muted-foreground" />
@@ -176,19 +176,19 @@ function SessionMenu() {
           <DropdownMenuLabel>历史会话</DropdownMenuLabel>
           {sessions.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">还没有会话</p>}
           {sessions.map((s) => (
-            <DropdownMenuItem key={s.id} onClick={() => switchSession(s.id)} className="items-start gap-2 py-2">
+            <DropdownMenuItem key={s.id} disabled={busy} onClick={() => switchSession(s.id)} className="items-start gap-2 py-2">
               <Check className={cn('mt-0.5 size-4', s.id === active?.id ? 'opacity-100' : 'opacity-0')} aria-hidden />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="truncate font-medium">{s.title}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {relativeTime(s.updatedAt)}
+                  {s.updatedAt ? relativeTime(s.updatedAt) : '暂无消息'}
                 </span>
               </span>
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={newSession}>
+        <DropdownMenuItem disabled={busy} onClick={newSession}>
           <Plus />
           新建会话
         </DropdownMenuItem>
@@ -197,24 +197,61 @@ function SessionMenu() {
   )
 }
 
+export function SessionSaveControls({ disabled = false }: { disabled?: boolean }) {
+  const { persistence } = useApp()
+  if (!persistence) return null
+  return (
+    <>
+      <span aria-label="会话草稿状态" className="text-xs text-muted-foreground">
+        {persistence.sessionDirty ? '会话草稿未保存' : '会话草稿已保存'}
+      </span>
+      <InputGroupButton type="button" size="sm" variant="outline" disabled={disabled || persistence.busy || !persistence.ready || !persistence.sessionDirty} onClick={persistence.saveSession}>
+        保存会话
+      </InputGroupButton>
+    </>
+  )
+}
+
 function Composer() {
-  const { session, setComposerText, setQuote, sendMessage, stopReply } = useApp()
+  const { session, setComposerText, setQuote, sendMessage, stopReply, capabilities, persistence } = useApp()
   const ref = useRef<HTMLTextAreaElement>(null)
+  const sendingRef = useRef(false)
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
   const text = session?.composerText ?? ''
   const quote = session?.composerQuote
-  const busy = !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const replying = capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const busy = replying || sending || !!persistence && (persistence.busy || !persistence.ready)
   const canSend = !busy && (text.trim() || quote)
 
   useEffect(() => {
     if (quote || text) ref.current?.focus({ preventScroll: true })
   }, [quote, text])
 
+  useEffect(() => setSendError(''), [session?.id, session?.messages.length])
+
+  const send = async () => {
+    if (!canSend || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    setSendError('')
+    try {
+      // The provider owns clearing only the submitted draft after a successful save.
+      await sendMessage()
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : '问题未保存，请重试。')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
   return (
     <div className="p-3">
       <form
         onSubmit={(e) => {
           e.preventDefault()
-          if (canSend) sendMessage()
+          void send()
         }}
       >
         <InputGroup className="rounded-xl bg-background shadow-sm">
@@ -233,18 +270,20 @@ function Composer() {
             ref={ref}
             rows={3}
             value={text}
+            disabled={!!persistence && !session}
             onChange={(e) => setComposerText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                 e.preventDefault()
-                if (canSend) sendMessage()
+                void send()
               }
             }}
             placeholder={quote ? '针对引用的内容，你想问什么？' : '说说你的想法…'}
             className="min-h-16 leading-relaxed"
           />
           <InputGroupAddon align="block-end">
-            {busy ? (
+            <SessionSaveControls disabled={sending} />
+            {replying ? (
               <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
                 <Square data-icon="inline-start" />
                 停止
@@ -256,7 +295,7 @@ function Composer() {
                 variant="default"
                 className="ml-auto rounded-full"
                 disabled={!canSend}
-                aria-label="发送"
+                aria-label={capabilities.agent ? '发送' : '保存问题'}
               >
                 <ArrowUp />
               </InputGroupButton>
@@ -264,13 +303,14 @@ function Composer() {
           </InputGroupAddon>
         </InputGroup>
       </form>
+      {sendError && <p role="alert" className="mt-2 text-xs text-destructive">{sendError}</p>}
     </div>
   )
 }
 
 function EmptyChat() {
   const space = useSpace()
-  const { setComposerText } = useApp()
+  const { setComposerText, capabilities } = useApp()
   const unit = findUnit(space, sessionUnitId(space))
   const prompts =
     space.view === 'route'
@@ -286,7 +326,9 @@ function EmptyChat() {
         </EmptyMedia>
         <EmptyTitle>有什么想问的？</EmptyTitle>
         <EmptyDescription className="text-left">
-          {space.view === 'route'
+          {!capabilities.agent
+            ? 'Agent 暂不可用。你可以记录问题并手动保存会话，不会生成回复或调整路线。'
+            : space.view === 'route'
             ? '告诉我你想怎样调整学习安排，我会结合你的目标和基础给出建议，确认后再更新路线。'
             : '围绕这节课继续讨论。在课件、代码或终端里选中内容，也可以直接引用过来提问。'}
         </EmptyDescription>
@@ -305,7 +347,7 @@ function EmptyChat() {
 
 export function AgentPanel() {
   const space = useSpace()
-  const { session, newSession, toggleAgent } = useApp()
+  const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
   const endRef = useRef<HTMLDivElement>(null)
   const last = session?.messages[session.messages.length - 1]
 
@@ -319,7 +361,7 @@ export function AgentPanel() {
         <div className="min-w-0 flex-1">
           <SessionMenu />
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={newSession} aria-label="新建会话">
+        <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label="新建会话">
           <Plus />
         </Button>
         <Button variant="ghost" size="icon-sm" onClick={() => toggleAgent(false)} aria-label="收起 Agent">
@@ -327,12 +369,21 @@ export function AgentPanel() {
         </Button>
       </div>
 
+      {!capabilities.agent && (
+        <div className="border-b p-3">
+          <Alert>
+            <Info />
+            <AlertDescription className="text-xs">Agent 暂不可用 · 仅保存问题，不会生成回复。</AlertDescription>
+          </Alert>
+        </div>
+      )}
+
       {space.view === 'assessment' && (
         <div className="border-b p-3">
           <Alert className="border-accent-foreground/20 bg-accent/60">
             <Info className="text-accent-foreground" />
             <AlertDescription className="text-xs text-accent-foreground">
-              测评进行中：可以问题意不清的地方，Agent 会引导你思考，但不会直接给出答案。
+              {capabilities.agent ? '测评进行中：可以问题意不清的地方，Agent 会引导你思考，但不会直接给出答案。' : '测评进行中：可以记录问题，Agent 暂不可用，不会生成引导或答案。'}
             </AlertDescription>
           </Alert>
         </div>

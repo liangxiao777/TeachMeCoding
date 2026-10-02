@@ -5,9 +5,8 @@ import { ProjectTree } from '@/components/workbench/project-tree'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { findUnit, relativeTime } from '@/fixtures/demo-data'
-import { getLesson } from '@/fixtures/lessons'
-import { useApp, useSpace } from '@/fixtures/store'
+import { findUnit, relativeTime } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 
 function RailEmpty({ children }: { children: React.ReactNode }) {
@@ -23,10 +22,9 @@ const railItem =
 
 export function LeftRail() {
   const space = useSpace()
-  const { viewRecord } = useApp()
+  const { viewRecord, lesson: getLesson, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
-  const lesson =
-    unit && unit.contentState === 'ready' ? getLesson(unit, space.kind === 'pytorch' ? 'python' : 'rust') : null
+  const lesson = unit && unit.contentState === 'ready' ? getLesson(unit) : null
   const headings = lesson?.blocks.flatMap((b) => (b.type === 'h2' ? [b] : [])) ?? []
   const records = [...space.records].reverse()
 
@@ -55,7 +53,7 @@ export function LeftRail() {
                 ))}
               </ul>
             ) : (
-              <RailEmpty>课件生成后显示目录</RailEmpty>
+              <RailEmpty>{persistence ? '暂无可用课件目录' : '课件生成后显示目录'}</RailEmpty>
             )}
           </details>
 

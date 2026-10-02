@@ -1,0 +1,364 @@
+import { useEffect, useRef, useState } from 'react'
+import type { AssessmentDraft as SavedAssessmentDraft, ProjectEntry, ProjectFile, RequirementState, SessionDetail, SpaceSummary, UnitDetail, Workspace } from '@teach-me-coding/contracts'
+import { api } from '@/lib/api'
+import type { AppModel } from './context'
+import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
+import { useUnsavedWarning } from './request-state'
+import type { AssessmentDraft, Requirement, Session, Space, SpaceView } from './types'
+
+interface StoredSpace {
+  ui: Space
+  saved: Workspace
+  sessions: Record<string, SessionDetail>
+  units: Record<string, UnitDetail>
+  drafts: Record<string, AssessmentDraft>
+  tree: ProjectEntry[]
+  files: Record<string, ProjectFile>
+  disk: ProjectFile | null
+  requirementDraft: Requirement | null
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const composer = (s: Session) => ({ text: s.composerText, quote: s.composerQuote, routeSuggestion: s.routeSuggestion })
+const savedComposer = (s: SessionDetail) => ({ text: s.draft.text, quote: s.draft.quote, routeSuggestion: s.draft.routeSuggestion })
+const answers = (d: { q1: string; q2: string }) => ({ q1: d.q1, q2: d.q2 })
+type SessionEdit = Partial<Pick<Session, 'composerText' | 'composerQuote' | 'routeSuggestion'>>
+const sessionKey = (space: Space) => sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
+const uiSession = (s: SessionDetail): Session => ({ ...s, updatedAt: s.messages.at(-1)?.createdAt ?? 0,
+  messages: s.messages.map((m) => ({ ...m, quote: m.quote ?? undefined })),
+  composerText: s.draft.text, composerQuote: s.draft.quote, routeSuggestion: s.draft.routeSuggestion })
+
+function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
+  const entries = tree.map((e) => ({ id: e.path, name: e.path.split('/').at(-1)!, parentId: e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : null, kind: e.kind }))
+  return {
+    directories: entries.filter((e) => e.kind === 'directory'),
+    files: entries.filter((e) => e.kind === 'file').map((e) => old.find((file) => file.id === e.id) ?? { ...e, content: '', language: fileLanguage(e.name) }),
+  }
+}
+
+async function loadSpace(saved: Workspace): Promise<StoredSpace> {
+  const metadata = saved.route.content?.stages.flatMap((stage) => stage.units) ?? []
+  const [sessions, units, tree] = await Promise.all([
+    Promise.all(saved.sessions.map((s) => api<SessionDetail>(`/spaces/${saved.id}/sessions/${s.id}`))),
+    Promise.all(metadata.map((unit) => api<UnitDetail>(`/spaces/${saved.id}/units/${unit.id}`))),
+    api<ProjectEntry[]>(`/spaces/${saved.id}/project/tree`),
+  ])
+  const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
+  const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
+  const drafts = Object.fromEntries(units.map((unit) => [unit.id, { ...answers(unit.draft), unitId: unit.id, state: 'ready' as const, q2Output: null, q2Running: false, attempt: Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]))
+  const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => ({ ...unit, status: details[unit.id]!.status, contentState: details[unit.id]!.lesson ? 'ready' as const : 'none' as const, lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns })) })) ?? []
+  const selectedSessions: Record<string, string> = {}
+  for (const session of sessions) {
+    const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
+    selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
+  }
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null,
+    ui: {
+      id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
+      onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
+      routeNote: saved.route.content?.note ?? '', stages,
+      currentUnitId: units.find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')?.id ?? units[0]?.id ?? null,
+      view: saved.route.content ? 'route' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
+      ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
+      terminal: [], terminalDirectoryId: null, running: false, env: 'disconnected', envLabel: '终端尚未接入',
+      ideOpen: false, ideFullscreen: false, explorerOpen: true, agentOpen: true, draft: null, records, viewingRecordId: null,
+      completed: units.length > 0 && units.every((unit) => unit.status === 'passed' || unit.status === 'skipped'),
+      lastActive: Math.max(saved.createdAt, ...sessions.flatMap((s) => s.messages.map((m) => m.createdAt)), ...records.map((r) => r.createdAt)),
+    },
+  }
+}
+
+/** Persistent operations for the existing component model. No rendering or demo runtime. */
+export function usePersistentModel(): AppModel {
+  const cache = useRef<Record<string, StoredSpace>>({})
+  const [spaces, setSpaces] = useState<Space[]>([])
+  const [currentId, setCurrentId] = useState<string | null>(null)
+  const [globalView, setGlobalView] = useState<'home' | 'spaces'>('home')
+  const [ready, setReady] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const errorRef = useRef('')
+  const retry = useRef<() => void>(() => {})
+  const inFlight = useRef(new Map<string, Promise<unknown>>())
+  const pendingEdits = useRef(new Map<string, SessionEdit>())
+  const booted = useRef(false)
+  const publish = () => setSpaces(Object.values(cache.current).map((entry) => entry.ui))
+  const change = (id: string, update: (s: StoredSpace) => StoredSpace) => {
+    cache.current = { ...cache.current, [id]: update(cache.current[id]!) }
+    publish()
+  }
+  const changeUi = (id: string, update: (s: Space) => Space) => change(id, (s) => ({ ...s, ui: update(s.ui) }))
+  const run = <T,>(key: string, action: () => Promise<T>): Promise<T | undefined> => {
+    const existing = inFlight.current.get(key)
+    if (existing) return existing as Promise<T | undefined>
+    retry.current = () => { void run(key, action) }
+    setBusy(true); setError(''); errorRef.current = ''
+    const promise = Promise.resolve().then(action).catch((cause: unknown) => {
+      errorRef.current = cause instanceof Error ? cause.message : '请求失败，请重试。'
+      setError(errorRef.current)
+      retry.current = () => { void run(key, action) }
+      return undefined
+    }).finally(() => { inFlight.current.delete(key); setBusy(inFlight.current.size > 0) })
+    inFlight.current.set(key, promise)
+    return promise
+  }
+  const selected = currentId ? cache.current[currentId] : undefined
+  const current = selected?.ui ?? null
+  const session = current ? activeSession(current) : undefined
+
+  useEffect(() => {
+    if (booted.current) return
+    booted.current = true
+    void run('load', async () => {
+      const summaries = await api<SpaceSummary[]>('/spaces')
+      const entries = await Promise.all(summaries.map(async (s) => loadSpace(await api<Workspace>(`/spaces/${s.id}`))))
+      cache.current = Object.fromEntries(entries.map((s) => [s.ui.id, s]))
+      const params = new URLSearchParams(location.search)
+      const id = params.get('space')
+      if (id) {
+        const entry = cache.current[id]
+        if (!entry) throw new Error('学习空间不存在，请返回首页。')
+        const tab = params.get('tab')
+        const view = tab === 'requirement' ? 'onboarding' : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
+        const unitId = params.get('unit') ?? entry.ui.currentUnitId
+        entry.ui = { ...entry.ui, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: params.get('record') }
+        setCurrentId(id)
+      }
+      publish(); setReady(true)
+    })
+  }, [])
+  useEffect(() => {
+    if (!ready) return
+    const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
+    if (current?.currentUnitId) params.set('unit', current.currentUnitId)
+    if (current?.viewingRecordId) params.set('record', current.viewingRecordId)
+    history.replaceState(null, '', params.size ? `/?${params}` : '/')
+  }, [ready, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
+
+  const dirty = pendingEdits.current.size > 0 || Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || !!s.requirementDraft && !same(s.requirementDraft, s.saved.requirement.value)
+    || s.ui.sessions.some((session) => !same(composer(session), savedComposer(s.sessions[session.id]!)))
+    || Object.values(s.drafts).some((draft) => !same(answers(draft), answers(s.units[draft.unitId]!.draft)))
+    || s.ui.files.some((file) => !!s.files[file.id] && file.content !== s.files[file.id]!.content))
+  useUnsavedWarning(dirty)
+  const navigate = (view: SpaceView, unitId = current?.currentUnitId ?? null) => {
+    if (!current) return
+    changeUi(current.id, (s) => ({ ...s, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? cache.current[s.id]!.drafts[unitId] ?? null : s.draft, ideFullscreen: false }))
+  }
+  const editSession = (patch: SessionEdit) => {
+    if (!current) return
+    const space = current.id, key = sessionKey(current)
+    if (session) {
+      changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((x) => x.id === session.id ? { ...x, ...patch } : x) }))
+      return
+    }
+    // A newly applied route may not have a unit session yet. Retain a quote on retry.
+    const pendingKey = `${space}:${key}`
+    pendingEdits.current.set(pendingKey, { ...pendingEdits.current.get(pendingKey), ...patch })
+    void run(`new-session:${space}:${key}`, async () => {
+      const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
+      change(space, (s) => ({ ...s, sessions: { ...s.sessions, [saved.id]: saved }, ui: { ...s.ui, sessions: [...s.ui.sessions, { ...uiSession(saved), ...pendingEdits.current.get(pendingKey) }], activeSessionIds: { ...s.ui.activeSessionIds, [key]: saved.id } } }))
+      pendingEdits.current.delete(pendingKey)
+      sessionStorage.setItem(`session:${space}:${key}`, saved.id)
+    })
+  }
+  const saveSession = (send: boolean, text?: string): Promise<boolean> => {
+    if (!current || !session) return Promise.resolve(false)
+    const space = current.id, id = session.id, snapshot = composer(session)
+    const stored = cache.current[space]!.sessions[id]!
+    const input = send ? { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision } : { ...snapshot, revision: stored.draft.revision }
+    if (send && !input.text.trim() && !input.quote) return Promise.resolve(false)
+    return run(`session:${id}`, async () => {
+      const saved = await api<SessionDetail>(`/spaces/${space}/sessions/${id}/${send ? 'messages' : 'draft'}`, input)
+      change(space, (s) => ({ ...s, sessions: { ...s.sessions, [id]: saved }, ui: { ...s.ui,
+        sessions: s.ui.sessions.map((x) => {
+          if (x.id !== id) return x
+          // A late response must not erase an edit made while the request/retry was in flight.
+          const next = uiSession(saved)
+          return { ...next,
+            composerText: text !== undefined || x.composerText !== snapshot.text ? x.composerText : next.composerText,
+            composerQuote: text !== undefined || !same(x.composerQuote, snapshot.quote) ? x.composerQuote : next.composerQuote,
+            routeSuggestion: x.routeSuggestion === snapshot.routeSuggestion && !send ? next.routeSuggestion : x.routeSuggestion,
+          }
+        }),
+      } }))
+      return true
+    }).then(Boolean)
+  }
+  const saveRequirement = (value: Requirement, confirmed: boolean) => {
+    if (!current || !selected) return Promise.resolve(false)
+    const id = current.id, revision = selected.saved.requirement.revision
+    return run(`requirement:${id}`, async () => {
+      const saved = await api<RequirementState>(`/spaces/${id}/requirement`, { revision, value, confirmed })
+      change(id, (s) => ({ ...s, requirementDraft: same(s.requirementDraft, value) ? null : s.requirementDraft, saved: { ...s.saved, requirement: saved }, ui: { ...s.ui, requirement: saved.value } }))
+      return true
+    }).then(Boolean)
+  }
+  const refreshFiles = async (id: string) => {
+    const tree = await api<ProjectEntry[]>(`/spaces/${id}/project/tree`)
+    change(id, (s) => ({ ...s, tree, ui: { ...s.ui, ...projectEntries(tree, s.ui.files) } }))
+  }
+  const readFile = async (space: string, path: string) => {
+    const file = await api<ProjectFile>(`/spaces/${space}/project/file?path=${encodeURIComponent(path)}`)
+    change(space, (s) => ({ ...s, files: { ...s.files, [path]: file }, ui: { ...s.ui, files: s.ui.files.map((f) => f.id === path ? { ...f, content: file.content } : f) } }))
+  }
+  const openFile = (path: string) => {
+    if (!current) return
+    const id = current.id
+    void run(`file:${id}:${path}`, async () => {
+      if (!cache.current[id]!.files[path]) await readFile(id, path)
+      change(id, (s) => ({ ...s, disk: null, ui: { ...s.ui, ideOpen: true, activeFileId: path, selectedEntryId: path,
+        openFileIds: [...new Set([...s.ui.openFileIds, path])],
+        expandedDirectoryIds: [...new Set([...s.ui.expandedDirectoryIds, ...path.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))])],
+      } }))
+    })
+  }
+  const createEntry = async (name: string, kind: 'file' | 'directory', parent: string | null, content?: string) => {
+    if (!current) return '没有打开的学习空间'
+    const id = current.id, path = parent ? `${parent}/${name}` : name
+    let created = false
+    const result = await run(`create:${id}:${path}`, async () => {
+      if (!created) { await api(`/spaces/${id}/project/create`, { path, kind }); created = true }
+      await refreshFiles(id)
+      if (kind === 'file') { await readFile(id, path); changeUi(id, (s) => ({ ...s, activeFileId: path, selectedEntryId: path, openFileIds: [...s.openFileIds, path], ideOpen: true })) }
+      else changeUi(id, (s) => ({ ...s, selectedEntryId: path }))
+      if (content !== undefined) changeUi(id, (s) => ({ ...s, files: s.files.map((file) => file.id === path ? { ...file, content } : file), view: 'unit' }))
+      if (parent) changeUi(id, (s) => ({ ...s, expandedDirectoryIds: [...new Set([...s.expandedDirectoryIds, parent])] }))
+      return true
+    })
+    return result ? null : errorRef.current
+  }
+  const unavailable = () => { setError('该能力尚未接入，不会执行模拟操作。') }
+  const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
+  const activeFile = current?.files.find((file) => file.id === current.activeFileId)
+  const uiCurrent = current && { ...current, onboarding: { ...current.onboarding, messages: current.view === 'onboarding' ? session?.messages ?? [] : current.onboarding.messages } }
+
+  return {
+    state: { spaces, currentSpaceId: currentId, globalView }, current: uiCurrent, session,
+    capabilities: { agent: false, terminal: false, assessment: false },
+    lesson: (unit) => {
+      const lesson = selected?.units[unit.id]?.lesson
+      return lesson ? { intro: '', blocks: [{ type: 'markdown', text: lesson.content }] } : null
+    },
+    assessment: (unit) => {
+      const spec = selected?.units[unit.id]?.assessment
+      return spec ? { abilities: unit.goals, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
+    },
+    goHome: () => { setCurrentId(null); setGlobalView('home') },
+    goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
+    openSpace: (id) => { if (cache.current[id]) setCurrentId(id) },
+    createSpace: (goal) => { if (!ready || !goal.trim()) return; let saved: Workspace | undefined
+      void run('create-space', async () => {
+      saved ??= await api<Workspace>('/spaces', { name: goal.trim().slice(0, 80), goal: goal.trim() })
+      const entry = await loadSpace(saved)
+      cache.current = { [saved.id]: entry, ...cache.current }; publish(); setCurrentId(saved.id)
+    }) },
+    onboardSend: (text) => { void saveSession(true, text) },
+    updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
+    renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
+    confirmRequirement: () => { if (current?.requirement) void saveRequirement(current.requirement, true) },
+    setView: navigate,
+    enterUnit: (id) => navigate('unit', id),
+    retryGeneration: unavailable,
+    setComposerText: (text) => editSession({ composerText: text }),
+    setRouteSuggestion: (text) => editSession({ routeSuggestion: text }),
+    setQuote: (quote) => { editSession({ composerQuote: quote }); if (quote && current) changeUi(current.id, (s) => ({ ...s, agentOpen: true })) },
+    sendMessage: (text) => {
+      if (current && text !== undefined && sessionScope(current) === 'route') changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
+      return saveSession(true, text)
+    },
+    stopReply: unavailable, retryReply: unavailable, applyRouteAction: unavailable,
+    newSession: () => { if (!current) return; const space = current.id, key = sessionKey(current)
+      void run(`new-session:${space}:${key}`, async () => {
+        const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
+        change(space, (s) => ({ ...s, saved: { ...s.saved, sessions: [...s.saved.sessions, saved] }, sessions: { ...s.sessions, [saved.id]: saved }, ui: { ...s.ui, sessions: [...s.ui.sessions, uiSession(saved)], activeSessionIds: { ...s.ui.activeSessionIds, [key]: saved.id } } }))
+        sessionStorage.setItem(`session:${space}:${key}`, saved.id)
+      })
+    },
+    switchSession: (id) => { if (!current) return; const key = sessionKey(current)
+      changeUi(current.id, (s) => ({ ...s, activeSessionIds: { ...s.activeSessionIds, [key]: id } })); sessionStorage.setItem(`session:${current.id}:${key}`, id)
+    },
+    toggleAgent: (open) => { if (current) changeUi(current.id, (s) => ({ ...s, agentOpen: open ?? !s.agentOpen })) },
+    toggleIde: (open) => { if (current) changeUi(current.id, (s) => ({ ...s, ideOpen: open ?? !s.ideOpen, ideFullscreen: false })) },
+    setIdeFullscreen: (full) => { if (current) changeUi(current.id, (s) => ({ ...s, ideFullscreen: full, ideOpen: true })) },
+    toggleExplorer: () => { if (current) changeUi(current.id, (s) => ({ ...s, explorerOpen: !s.explorerOpen })) },
+    selectEntry: (id) => { if (current) changeUi(current.id, (s) => ({ ...s, selectedEntryId: id })) },
+    toggleDirectory: (id, open) => { if (current) changeUi(current.id, (s) => ({ ...s, expandedDirectoryIds: (open ?? !s.expandedDirectoryIds.includes(id)) ? [...new Set([...s.expandedDirectoryIds, id])] : s.expandedDirectoryIds.filter((x) => x !== id) })) },
+    collapseDirectories: () => { if (current) changeUi(current.id, (s) => ({ ...s, expandedDirectoryIds: [], selectedEntryId: null })) },
+    createEntry,
+    renameEntry: async (path, name) => {
+      if (!current || !selected) return '没有打开的学习空间'
+      const space = current.id, affected = (p: string) => p === path || p.startsWith(`${path}/`)
+      if (current.files.some((f) => affected(f.id) && selected.files[f.id] && f.content !== selected.files[f.id]!.content)) return '重命名前请先保存该文件或目录中的编辑内容。'
+      const destination = path.includes('/') ? `${path.slice(0, path.lastIndexOf('/'))}/${name}` : name
+      const entry = selected.tree.find((e) => e.path === path)!
+      const result = await run(`rename:${space}:${path}`, async () => {
+        await api(`/spaces/${space}/project/rename`, { path, destination, version: entry.version })
+        change(space, (s) => ({ ...s, disk: null, files: Object.fromEntries(Object.entries(s.files).filter(([p]) => !affected(p))), ui: { ...s.ui,
+          files: s.ui.files.filter((f) => !affected(f.id)), openFileIds: s.ui.openFileIds.filter((p) => !affected(p)), activeFileId: s.ui.activeFileId && affected(s.ui.activeFileId) ? null : s.ui.activeFileId, selectedEntryId: destination,
+        } }))
+        await refreshFiles(space); return true
+      })
+      return result ? null : errorRef.current
+    },
+    openFile,
+    closeFile: (id) => { if (current) changeUi(current.id, (s) => { const openFileIds = s.openFileIds.filter((x) => x !== id); return { ...s, openFileIds, activeFileId: s.activeFileId === id ? openFileIds[0] ?? null : s.activeFileId } }) },
+    createFile: (name) => { void createEntry(name, 'file', null) },
+    updateFile: (id, content) => { if (current) changeUi(current.id, (s) => ({ ...s, files: s.files.map((f) => f.id === id ? { ...f, content } : f) })) },
+    bringToIde: (code, suggested = 'example.txt') => {
+      if (!current || !selected) return
+      const base = suggested.split('/').at(-1) || 'example.txt'
+      let name = base, index = 1
+      while (selected.tree.some((entry) => entry.path === name)) {
+        const dot = base.lastIndexOf('.')
+        name = dot > 0 ? `${base.slice(0, dot)}-${index++}${base.slice(dot)}` : `${base}-${index++}`
+      }
+      void createEntry(name, 'file', null, code)
+    },
+    connectEnv: unavailable, terminalCommand: unavailable,
+    startAssessment: () => { if (recordUnit) navigate('assessment', recordUnit) },
+    updateDraft: (patch) => { if (!current?.draft) return; const unit = current.draft.unitId
+      change(current.id, (s) => { const draft = { ...s.drafts[unit]!, ...patch }; return { ...s, drafts: { ...s.drafts, [unit]: draft }, ui: { ...s.ui, draft } } })
+    },
+    runDraft: unavailable, submitAssessment: unavailable,
+    leaveAssessment: () => navigate('unit'),
+    viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!; changeUi(current.id, (s) => ({ ...s, viewingRecordId: id, currentUnitId: record.unitId, view: 'result', ideFullscreen: false })) },
+    goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) navigate('unit', next.id) } },
+    backToStudy: () => navigate('unit', recordUnit),
+    persistence: {
+      ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      requirementDraft: selected?.requirementDraft ?? null,
+      setRequirementDraft: (value) => { if (current) change(current.id, (s) => ({ ...s, requirementDraft: value })) },
+      saveName: () => { if (!current || !selected || current.name === selected.saved.name) return; const id = current.id, name = current.name, previousName = selected.saved.name
+        void run(`name:${id}`, async () => { const saved = await api<SpaceSummary>(`/spaces/${id}/name`, { name, previousName }); change(id, (s) => ({ ...s, saved: { ...s.saved, name: saved.name }, ui: { ...s.ui, name: s.ui.name === name ? saved.name : s.ui.name } })) })
+      },
+      sessionDirty: !!session && !same(composer(session), savedComposer(selected!.sessions[session.id]!)),
+      assessmentDirty: !!current?.draft && !same(answers(current.draft), answers(selected!.units[current.draft.unitId]!.draft)),
+      fileDirty: !!activeFile && !!selected?.files[activeFile.id] && activeFile.content !== selected.files[activeFile.id]!.content,
+      saveSession: () => { void saveSession(false) },
+      saveAssessment: () => { if (!current?.draft || !selected) return; const id = current.id, draft = current.draft, revision = selected.units[draft.unitId]!.draft.revision
+        void run(`assessment:${id}:${draft.unitId}`, async () => {
+          const saved = await api<SavedAssessmentDraft>(`/spaces/${id}/units/${draft.unitId}/draft`, { revision, ...answers(draft) })
+          change(id, (s) => ({ ...s, units: { ...s.units, [draft.unitId]: { ...s.units[draft.unitId]!, draft: saved } } }))
+        })
+      },
+      saveFile: () => { if (!current || !selected || !activeFile) return; const id = current.id, path = activeFile.id, content = activeFile.content, version = selected.files[path]!.version
+        void run(`file:${id}:${path}`, async () => { const saved = await api<ProjectFile>(`/spaces/${id}/project/save`, { path, content, version }); change(id, (s) => ({ ...s, disk: null, files: { ...s.files, [path]: saved } })); await refreshFiles(id) })
+      },
+      compareFile: () => { if (!current || !activeFile) return; const id = current.id, path = activeFile.id
+        void run(`file:${id}:${path}`, async () => { const disk = await api<ProjectFile>(`/spaces/${id}/project/file?path=${encodeURIComponent(path)}`); change(id, (s) => ({ ...s, disk })) })
+      },
+      refreshFiles: () => { if (current) void run(`tree:${current.id}`, () => refreshFiles(current.id)) },
+      disk: selected?.disk ?? null,
+      resolveFile: (keepLocal) => { if (!current || !selected?.disk) return; const disk = selected.disk
+        change(current.id, (s) => ({ ...s, disk: null, files: { ...s.files, [disk.path]: disk }, ui: { ...s.ui, files: s.ui.files.map((file) => file.id === disk.path && !keepLocal ? { ...file, content: disk.content } : file) } }))
+      },
+      proposals: selected?.saved.proposals ?? [],
+      applyProposal: (id) => { if (!current) return; const space = current.id
+        void run(`proposal:${id}`, async () => {
+          const saved = await api<Workspace>(`/spaces/${space}/proposals/${id}/apply`, {})
+          const loaded = await loadSpace(saved)
+          change(space, (s) => ({ ...s, units: { ...loaded.units, ...s.units }, drafts: { ...loaded.drafts, ...s.drafts }, saved: { ...s.saved, route: saved.route, proposals: saved.proposals }, ui: { ...s.ui, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote } }))
+        })
+      },
+    },
+  }
+}

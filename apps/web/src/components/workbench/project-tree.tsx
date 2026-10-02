@@ -11,50 +11,73 @@ import {
   FolderPlus,
   MoreHorizontal,
   Pencil,
+  RefreshCw,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { isComposing } from '@/components/shared'
-import { entryPath, projectChildren } from '@/fixtures/project-files'
-import { useApp, useSpace } from '@/fixtures/store'
+import { entryPath, projectChildren } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 
 type Edit = { parentId: string | null; kind: 'file' | 'directory'; id?: string }
 
 export function ProjectTree() {
   const space = useSpace()
-  const { openFile, selectEntry, toggleDirectory, collapseDirectories, createEntry, renameEntry } = useApp()
+  const { openFile, selectEntry, toggleDirectory, collapseDirectories, createEntry, renameEntry, persistence } = useApp()
   const [edit, setEdit] = useState<Edit | null>(null)
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const tree = useRef<HTMLDivElement>(null)
   const selected = [...space.directories, ...space.files].find((e) => e.id === space.selectedEntryId)
   const parentId = space.directories.some((d) => d.id === selected?.id) ? selected!.id : (selected?.parentId ?? null)
 
   function start(kind: Edit['kind'], parent: string | null, id?: string) {
+    if (submittingRef.current) return
     setEdit({ kind, parentId: parent, id })
     setName(id ? [...space.files, ...space.directories].find((e) => e.id === id)!.name : '')
     setError(null)
     if (parent) toggleDirectory(parent, true)
   }
 
+  async function submit() {
+    if (!edit || submittingRef.current) return
+    if (persistence && (!persistence.ready || persistence.busy)) {
+      setError('正在处理其他请求，请稍后重试。')
+      return
+    }
+    submittingRef.current = true
+    setSubmitting(true)
+    try {
+      const failure = await (edit.id ? renameEntry(edit.id, name) : createEntry(name, edit.kind, edit.parentId))
+      setError(failure)
+      if (!failure) setEdit(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '保存名称失败，请重试。')
+    } finally {
+      submittingRef.current = false
+      setSubmitting(false)
+    }
+  }
+
   const editor = (depth: number) => (
     <form
       style={{ paddingLeft: 12 + depth * 16 }}
       className="py-1 pr-2"
+      aria-busy={submitting || undefined}
       onSubmit={(e) => {
         e.preventDefault()
-        if (!edit) return
-        const failure = edit.id ? renameEntry(edit.id, name) : createEntry(name, edit.kind, edit.parentId)
-        setError(failure)
-        if (!failure) setEdit(null)
+        void submit()
       }}
     >
       <input
         autoFocus
         aria-label={edit?.id ? '重命名' : edit?.kind === 'directory' ? '文件夹名称' : '文件名称'}
         value={name}
+        readOnly={submitting}
         onChange={(e) => {
           setName(e.target.value)
           setError(null)
@@ -70,7 +93,7 @@ export function ProjectTree() {
           }
           if (e.key === 'Escape') {
             e.preventDefault()
-            setEdit(null)
+            if (!submittingRef.current) setEdit(null)
           }
         }}
         placeholder={edit?.kind === 'directory' ? 'folder' : space.kind === 'pytorch' ? 'example.py' : 'example.rs'}
@@ -253,10 +276,23 @@ export function ProjectTree() {
         >
           <FolderPlus />
         </Button>
+        {persistence && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="刷新目录"
+            title="刷新目录"
+            disabled={!persistence.ready || persistence.busy || submitting}
+            onClick={persistence.refreshFiles}
+          >
+            <RefreshCw />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon-xs"
           aria-label="折叠所有目录"
+          disabled={submitting}
           onClick={() => {
             setEdit(null)
             collapseDirectories()

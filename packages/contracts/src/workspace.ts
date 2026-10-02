@@ -6,6 +6,7 @@ const title = z.string().trim().min(1).max(200);
 export const quoteSchema = z.object({ source: z.enum(['lesson', 'code', 'terminal', 'advice']), label: title, text }).strict();
 export const requirementSchema = z.object({ goal: title, background: text, outcome: text, schedule: text }).strict();
 export const createSpaceSchema = z.object({ name: title, goal: title }).strict();
+export const renameSpaceSchema = z.object({ name: title, previousName: z.string().min(1).max(200) }).strict();
 export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean() }).strict();
 export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title }).strict()
   .refine((v) => (v.scope === 'unit') === (v.unitId !== null), 'Unit sessions require a unit; other scopes forbid it');

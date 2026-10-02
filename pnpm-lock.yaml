@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
+  '@base-ui/utils@0.2.9': 164e8779e66dacf129aea7512a52346ce84be00ae587699085328d3a677e799d
   node-pty@1.1.0: c83919050a38e776c92e3d5820e76e73e62822d877ce08f64a631a6dd3ad3e0a
 
 importers:
@@ -2935,7 +2936,7 @@ snapshots:
   '@base-ui/react@1.5.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@babel/runtime': 7.29.7
-      '@base-ui/utils': 0.2.9(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@base-ui/utils': 0.2.9(patch_hash=164e8779e66dacf129aea7512a52346ce84be00ae587699085328d3a677e799d)(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@floating-ui/react-dom': 2.1.9(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@floating-ui/utils': 0.2.12
       react: 19.3.0
@@ -2944,7 +2945,7 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.3.0
 
-  '@base-ui/utils@0.2.9(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@base-ui/utils@0.2.9(patch_hash=164e8779e66dacf129aea7512a52346ce84be00ae587699085328d3a677e799d)(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@floating-ui/utils': 0.2.12

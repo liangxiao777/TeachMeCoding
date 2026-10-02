@@ -9,8 +9,9 @@ import { RouteView } from '@/components/route-view'
 import { SpaceList } from '@/components/space-list'
 import { TopBar } from '@/components/top-bar'
 import { Workbench } from '@/components/workbench/workbench'
+import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { useApp } from '@/fixtures/store'
+import { useApp } from '@/app/context'
 
 function SpaceBody() {
   const { current } = useApp()
@@ -42,14 +43,30 @@ function SpaceBody() {
 }
 
 export function AppShell() {
-  const { current } = useApp()
+  const { current, persistence } = useApp()
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delay={300}>
-        <div className="fixture-preview">
+        <div className="app-layout">
           {current ? <SpaceBody key={current.id} /> : <SpaceList />}
+          {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
+            <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
+              {persistence.error ? (
+                <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
+                  <span className="flex-1">{persistence.error}</span>
+                  <Button variant="outline" size="sm" disabled={persistence.busy} onClick={persistence.retry}>重试</Button>
+                </div>
+              ) : (
+                <p role="status" className="text-xs text-muted-foreground">正在读取或保存…</p>
+              )}
+            </div>
+          )}
           <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
-            <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
+            {persistence ? (
+              <span data-testid="workspace-notice">真实工作区 · 手动保存 · Agent 与终端暂不可用</span>
+            ) : (
+              <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
+            )}
           </footer>
         </div>
       </TooltipProvider>

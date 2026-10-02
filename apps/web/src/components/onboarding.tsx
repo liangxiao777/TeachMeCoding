@@ -2,6 +2,7 @@
 
 import { ArrowLeft, ArrowUp, Check, ClipboardList, Pencil } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { SessionMenu, SessionSaveControls } from '@/components/agent/agent-panel'
 import { BrandMark, Generating, isComposing } from '@/components/shared'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -14,8 +15,8 @@ import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { useApp, useSpace } from '@/fixtures/store'
-import type { Requirement } from '@/fixtures/types'
+import { useApp, useSpace } from '@/app/context'
+import type { Requirement } from '@/app/types'
 
 const SUGGESTIONS = [
   ['我想学习 Rust，最后能写一个命令行工具', '我想用 PyTorch 训练一个图像分类模型'],
@@ -33,18 +34,45 @@ const FIELDS: { key: keyof Requirement; label: string }[] = [
 
 function RequirementCard() {
   const space = useSpace()
-  const { updateRequirement, confirmRequirement } = useApp()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<Requirement | null>(null)
+  const { updateRequirement, confirmRequirement, setView, capabilities, persistence } = useApp()
+  const [previewEditing, setEditing] = useState(false)
+  const [previewDraft, setPreviewDraft] = useState<Requirement | null>(null)
+  const draft = persistence ? persistence.requirementDraft : previewDraft
+  const setDraft = persistence ? persistence.setRequirementDraft : setPreviewDraft
+  const editing = persistence ? draft !== null : previewEditing
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const savingRef = useRef(false)
   const req = space.requirement
+  const busy = saving || !!persistence && (persistence.busy || !persistence.ready)
 
-  if (!space.onboarding.summaryReady || !req) {
+  const save = async () => {
+    if (!draft || busy || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setSaveError('')
+    try {
+      const saved = await updateRequirement(draft)
+      if (saved === false) {
+        setSaveError('需求未保存，请重试。')
+        return
+      }
+      setEditing(false)
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '需求未保存，请重试。')
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+
+  if ((!space.onboarding.summaryReady && !persistence) || !req) {
     return (
       <Card className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
         <CardHeader>
           <CardTitle>学习需求摘要</CardTitle>
           <CardDescription className="leading-relaxed">
-            Agent 了解你的目标、基础和期望后，会在这里整理出一份需求摘要。你确认之后才会生成学习路线。
+            {capabilities.agent ? 'Agent 了解你的目标、基础和期望后，会在这里整理出一份需求摘要。你确认之后才会生成学习路线。' : 'Agent 暂不可用。学习需求需手动填写并确认，不会自动生成学习路线。'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -69,29 +97,29 @@ function RequirementCard() {
           <ClipboardList className="size-4 text-primary" aria-hidden />
           学习需求摘要
         </CardTitle>
-        <CardDescription>确认后 Agent 会据此规划路线</CardDescription>
+        <CardDescription>{capabilities.agent ? '确认后 Agent 会据此规划路线' : '手动保存并确认学习需求；Agent 暂不可用，不会自动规划路线'}</CardDescription>
         <CardAction>
         {editing ? (
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditing(false); setDraft(null); setSaveError('') }}>
               取消
             </Button>
             <Button
               size="sm"
-              onClick={() => {
-                if (draft) updateRequirement(draft)
-                setEditing(false)
-              }}
+              disabled={busy}
+              onClick={() => void save()}
             >
-              保存
+              {saving ? '保存中…' : '保存'}
             </Button>
           </div>
         ) : (
           <Button
             variant="ghost"
             size="sm"
+            disabled={busy}
             onClick={() => {
               setDraft(req)
+              setSaveError('')
               setEditing(true)
             }}
           >
@@ -102,6 +130,7 @@ function RequirementCard() {
         </CardAction>
       </CardHeader>
       <CardContent>
+        {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
         {editing ? (
           <FieldGroup className="gap-4">
             {FIELDS.map((f) => (
@@ -129,11 +158,14 @@ function RequirementCard() {
         )}
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t">
-        <Button size="lg" disabled={editing} onClick={confirmRequirement}>
+        <Button size="lg" disabled={editing || busy || persistence?.requirementConfirmed} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
-          确认，开始规划路线
+          {persistence?.requirementConfirmed ? '已确认学习需求' : capabilities.agent ? '确认，开始规划路线' : '确认学习需求'}
         </Button>
-        <p className="text-center text-xs text-muted-foreground">不准确？直接修改，或在左侧继续告诉 Agent</p>
+        {persistence?.requirementConfirmed && (
+          <Button variant="outline" size="lg" disabled={editing || busy} onClick={() => setView('route')}>查看学习路线</Button>
+        )}
+        <p className="text-center text-xs text-muted-foreground">{capabilities.agent ? '不准确？直接修改，或在左侧继续告诉 Agent' : '不准确？直接修改。左侧仅保存问题，不会自动整理需求或生成路线。'}</p>
       </CardFooter>
     </Card>
   )
@@ -141,30 +173,55 @@ function RequirementCard() {
 
 function Chat() {
   const space = useSpace()
-  const { onboardSend } = useApp()
-  const [text, setText] = useState('')
+  const { onboardSend, sendMessage, session, setComposerText, capabilities, persistence } = useApp()
+  const [previewText, setPreviewText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
+  const sendingRef = useRef(false)
+  const text = persistence ? session?.composerText ?? '' : previewText
+  const setText = persistence ? setComposerText : setPreviewText
   const endRef = useRef<HTMLDivElement>(null)
-  const { messages, agentTyping, step } = space.onboarding
+  const { messages, step } = space.onboarding
+  const agentTyping = capabilities.agent && space.onboarding.agentTyping
+  const busy = agentTyping || sending || !!persistence && (persistence.busy || !persistence.ready)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages.length, agentTyping])
+  }, [session?.id, messages.length, agentTyping])
 
-  const send = (value: string) => {
-    if (!value.trim() || agentTyping) return
-    onboardSend(value)
-    setText('')
+  useEffect(() => setSendError(''), [session?.id, messages.length])
+
+  const send = async (value: string, fromComposer = false) => {
+    if (!value.trim() || busy || sendingRef.current) return
+    if (!persistence) {
+      onboardSend(value)
+      setPreviewText('')
+      return
+    }
+    sendingRef.current = true
+    setSending(true)
+    setSendError('')
+    try {
+      // Keep the provider draft intact through failed, retried, or delayed requests.
+      await sendMessage(fromComposer ? undefined : value)
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : '问题未保存，请重试。')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
   }
   const suggestions = SUGGESTIONS[Math.min(step, SUGGESTIONS.length - 1)]!
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {persistence && <div className="flex h-12 shrink-0 items-center border-b"><SessionMenu /></div>}
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col gap-6 py-8">
           <div className="flex gap-3">
             <BrandMark className="shrink-0" />
             <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
-              你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。
+              {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
             </p>
           </div>
           {messages.map((m) =>
@@ -201,7 +258,7 @@ function Chat() {
         {!agentTyping && (
           <div className="flex flex-wrap gap-2">
             {suggestions.map((s) => (
-              <Button key={s} variant="outline" size="sm" className="rounded-full font-normal" onClick={() => send(s)}>
+              <Button key={s} variant="outline" size="sm" className="rounded-full font-normal" disabled={busy} onClick={() => void send(s)}>
                 {s}
               </Button>
             ))}
@@ -210,7 +267,7 @@ function Chat() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            send(text)
+            void send(text, true)
           }}
         >
           <InputGroup className="rounded-xl bg-card shadow-sm">
@@ -226,7 +283,7 @@ function Chat() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                   e.preventDefault()
-                  send(text)
+                  void send(text, true)
                 }
               }}
               placeholder={step === 0 ? '比如：我想学习 Rust，最后能写一个命令行工具' : '回复 Agent…'}
@@ -234,21 +291,23 @@ function Chat() {
             />
             <InputGroupAddon align="block-end">
               <span className="text-xs text-muted-foreground">
-                <Kbd>Enter</Kbd> 发送 · <Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
+                <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
+              <SessionSaveControls disabled={sending} />
               <InputGroupButton
                 type="submit"
                 variant="default"
                 size="icon-sm"
                 className="ml-auto rounded-full"
-                disabled={!text.trim() || agentTyping}
-                aria-label="发送"
+                disabled={!text.trim() || busy}
+                aria-label={capabilities.agent ? '发送' : '保存问题'}
               >
                 <ArrowUp />
               </InputGroupButton>
             </InputGroupAddon>
           </InputGroup>
         </form>
+        {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}
       </div>
     </div>
   )
@@ -256,9 +315,9 @@ function Chat() {
 
 export function Onboarding() {
   const space = useSpace()
-  const { goSpaces, renameSpace } = useApp()
+  const { goSpaces, renameSpace, capabilities, persistence } = useApp()
 
-  if (space.view === 'planning') {
+  if (space.view === 'planning' && capabilities.agent) {
     return (
       <div className="flex min-h-dvh items-center justify-center px-6">
         <Card className="w-full max-w-md shadow-lg">
@@ -290,6 +349,7 @@ export function Onboarding() {
             id="space-name"
             value={space.name}
             onChange={(e) => renameSpace(e.target.value)}
+            onBlur={persistence?.saveName}
             className="w-64 border-transparent bg-transparent font-semibold shadow-none hover:border-input dark:bg-transparent"
           />
           <Badge variant="outline" className="ml-auto gap-1.5">

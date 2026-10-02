@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, createSessionSchema, createSpaceSchema,
-  idSchema, lessonSchema, messageInputSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
+  idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
   type AssessmentRecord, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 
@@ -64,6 +64,13 @@ export class Learning {
       }
       return this.space(id);
     })();
+  }
+  renameSpace(space: string, input: unknown): SpaceSummary {
+    const current = this.space(space);
+    const v = renameSpaceSchema.parse(input);
+    const result = this.db.prepare('UPDATE spaces SET name=? WHERE id=? AND name=?').run(v.name, space, v.previousName);
+    if (!result.changes) throw conflict();
+    return { id: space, name: v.name, createdAt: current.createdAt };
   }
   saveRequirement(space: string, input: unknown) {
     this.space(space);

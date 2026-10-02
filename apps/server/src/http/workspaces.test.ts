@@ -37,6 +37,93 @@ test('all business reads and mutations use local protection, validation and idem
   } finally { db.close(); }
 });
 
+test('space names validate consistently with creation and reject stale edits without changing other data', async () => {
+  const db = openDatabase(':memory:'); const l = new Learning(db);
+  const access = createLocalAccess({ port: 14333 }); const app = createApp(access, l);
+  const headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token, 'Content-Type': 'application/json' };
+  const post = (path: string, body: unknown, extra = {}) => app.request(`/api${path}`, {
+    method: 'POST', headers: { ...headers, 'Idempotency-Key': randomUUID(), ...extra }, body: JSON.stringify(body),
+  });
+  try {
+    const space = l.create({ name: 'Original', goal: 'Learn' });
+    const other = l.create({ name: 'Other', goal: 'Independent' });
+    const path = `/spaces/${space.id}/name`;
+    const input = { name: 'Renamed', previousName: space.name };
+    for (const name of ['', ' \t\n ', 'x'.repeat(201), null, 42]) {
+      assert.equal((await post('/spaces', { name, goal: 'Learn' })).status, 400);
+      assert.equal((await post(path, { ...input, name })).status, 400);
+    }
+    for (const invalid of [{ name: 'Renamed' }, { previousName: space.name }, { ...input, previousName: null }, { ...input, piState: {} }]) {
+      assert.equal((await post(path, invalid)).status, 400);
+    }
+    assert.equal((await post(path, input, { 'X-TMC-Token': '' })).status, 401);
+    assert.equal((await post(path, input, { 'Idempotency-Key': '' })).status, 400);
+    assert.equal((await post('/spaces/not-a-uuid/name', input)).status, 400);
+    assert.equal((await post(`/spaces/${randomUUID()}/name`, input)).status, 404);
+    assert.equal((await post(path, { ...input, previousName: ` ${space.name} ` })).status, 409);
+    assert.deepEqual(l.space(space.id), space);
+
+    const name = '学'.repeat(200);
+    const created = await post('/spaces', { name: ` ${name} `, goal: 'Learn' });
+    assert.equal(created.status, 200);
+    assert.equal((await created.json()).name, name);
+    const renamed = await post(path, { ...input, name: ` \t${name}\n ` });
+    assert.equal(renamed.status, 200);
+    assert.deepEqual(await renamed.json(), { id: space.id, name, createdAt: space.createdAt });
+    assert.equal((await post(path, input)).status, 409);
+    assert.deepEqual(l.space(space.id), { ...space, name });
+    assert.deepEqual(l.space(other.id), other);
+
+    // Existing maximum-length names remain editable.
+    const previousName = 'x'.repeat(200);
+    db.prepare('UPDATE spaces SET name=? WHERE id=?').run(previousName, space.id);
+    assert.equal((await post(path, { name: 'Shorter', previousName })).status, 200);
+    assert.equal(l.space(space.id).name, 'Shorter');
+  } finally { db.close(); }
+});
+
+test('space rename and idempotent responses persist after reopening without replaying older edits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-name-api-'));
+  const databasePath = join(root, 'app.db');
+  let db = openDatabase(databasePath);
+  let l = new Learning(db);
+  const access = createLocalAccess({ port: 14333 }); let app = createApp(access, l);
+  const headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token, 'Content-Type': 'application/json' };
+  const post = (path: string, body: unknown, key: string) => app.request(`/api${path}`, {
+    method: 'POST', headers: { ...headers, 'Idempotency-Key': key }, body: JSON.stringify(body),
+  });
+  try {
+    const space = l.create({ name: 'Before', goal: 'Learn' });
+    const path = `/spaces/${space.id}/name`;
+    const input = { name: 'After', previousName: space.name }, key = randomUUID();
+    const summary = { id: space.id, name: input.name, createdAt: space.createdAt };
+    for (let n = 0; n < 2; n++) {
+      const response = await post(path, input, key);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), summary);
+    }
+    assert.equal((await post(path, { ...input, name: 'Different' }, key)).status, 409);
+    assert.equal((await post(path, input, randomUUID())).status, 409);
+    const latestInput = { name: 'Latest', previousName: input.name }, latestKey = randomUUID();
+    assert.equal((await post(path, latestInput, latestKey)).status, 200);
+    const latest = { ...summary, name: latestInput.name };
+    const expected = { ...space, name: latest.name };
+    assert.deepEqual(l.space(space.id), expected);
+
+    db.close();
+    db = openDatabase(databasePath); l = new Learning(db); app = createApp(access, l);
+    for (const [body, requestKey, responseBody] of [[input, key, summary], [latestInput, latestKey, latest]] as const) {
+      const response = await post(path, body, requestKey);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), responseBody);
+    }
+    assert.equal((await post(path, input, randomUUID())).status, 409);
+    assert.deepEqual(await (await app.request('/api/spaces', { headers })).json(), [latest]);
+    assert.deepEqual(await (await app.request(`/api/spaces/${space.id}`, { headers })).json(), expected);
+    assert.equal(db.prepare('SELECT * FROM requests').all().length, 2);
+  } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('project HTTP operations enforce protection and do not store source in SQLite', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-project-api-'));
   const db = openDatabase(':memory:'); const l = new Learning(db);

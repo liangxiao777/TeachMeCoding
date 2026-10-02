@@ -7,7 +7,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
-import type { UnitStatus } from '@/fixtures/types'
+import type { UnitStatus } from '@/app/types'
 
 export function BrandMark({ className }: { className?: string }) {
   return (

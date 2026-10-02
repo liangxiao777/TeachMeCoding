@@ -1,11 +1,11 @@
 'use client'
 
-import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
+import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, RefreshCw, Save, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { CodeEditor, type EditorPosition } from '@/components/code-editor'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
-import { entryPath } from '@/fixtures/project-files'
+import { entryPath } from '@/app/selectors'
 import { isComposing } from '@/components/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,9 +13,9 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Separator } from '@/components/ui/separator'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { useApp, useSpace } from '@/fixtures/store'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
-import type { TermLine } from '@/fixtures/types'
+import type { TermLine } from '@/app/types'
 
 export { CodeEditor } from '@/components/code-editor'
 
@@ -73,7 +73,13 @@ export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text:
 
 function EnvChip() {
   const space = useSpace()
-  const { connectEnv } = useApp()
+  const { connectEnv, capabilities } = useApp()
+  if (!capabilities.terminal)
+    return (
+      <Badge variant="outline" role="status" className="gap-1.5 font-normal text-muted-foreground">
+        终端尚未接入
+      </Badge>
+    )
   if (space.env === 'connected')
     return (
       <Badge variant="outline" title={space.envLabel} className="gap-1.5 font-normal text-muted-foreground">
@@ -108,6 +114,8 @@ export function IdePanel() {
     createFile,
     setIdeFullscreen,
     connectEnv,
+    capabilities,
+    persistence,
   } = useApp()
   const [selected, setSelected] = useState('')
   const [terminalSelection, setTerminalSelection] = useState('')
@@ -119,13 +127,14 @@ export function IdePanel() {
   const termEnd = useRef<HTMLDivElement>(null)
   const activeTab = useRef<HTMLButtonElement>(null)
   const file = space.files.find((f) => f.id === space.activeFileId)
+  const disk = file && persistence?.disk?.path === entryPath(space, file.id) ? persistence.disk : null
   const positions = useRef(new Map<string, EditorPosition>())
   if (file && !positions.current.has(file.id)) positions.current.set(file.id, { start: 0, end: 0, top: 0, left: 0 })
   const terminal = usePanelRef()
   const terminalSizes = useRef({ normal: 42, full: 28 })
   useEffect(() => {
-    if (space.ideOpen && space.env === 'disconnected') connectEnv()
-  }, [space.ideOpen, space.env, connectEnv])
+    if (capabilities.terminal && space.ideOpen && space.env === 'disconnected') connectEnv()
+  }, [capabilities.terminal, space.ideOpen, space.env, connectEnv])
   useLayoutEffect(() => {
     terminal.current?.resize(`${space.ideFullscreen ? terminalSizes.current.full : terminalSizes.current.normal}%`)
   }, [space.ideFullscreen, terminal])
@@ -158,7 +167,10 @@ export function IdePanel() {
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-2">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="打开的文件">
           {space.openFileIds
-            .map((id) => space.files.find((f) => f.id === id)!)
+            .flatMap((id) => {
+              const open = space.files.find((f) => f.id === id)
+              return open ? [open] : []
+            })
             .map((f) => {
               const active = f.id === space.activeFileId
               return (
@@ -198,6 +210,35 @@ export function IdePanel() {
             })}
         </div>
         {!space.ideFullscreen && <EnvChip />}
+        {persistence && (
+          <>
+            {file && (
+              <span role="status" className="shrink-0 text-[10px] text-muted-foreground">
+                {persistence.fileDirty ? '未保存' : '已保存'}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="保存文件"
+              title="保存文件"
+              disabled={!persistence.ready || persistence.busy || !file || !persistence.fileDirty}
+              onClick={persistence.saveFile}
+            >
+              <Save />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="读取磁盘版本"
+              title="读取磁盘版本"
+              disabled={!persistence.ready || persistence.busy || !file}
+              onClick={persistence.compareFile}
+            >
+              <RefreshCw />
+            </Button>
+          </>
+        )}
         <Separator orientation="vertical" className="h-5" />
         {file && (
           <Button
@@ -246,7 +287,7 @@ export function IdePanel() {
           if (meta.isUserInteraction) terminalSizes.current[space.ideFullscreen ? 'full' : 'normal'] = layout.terminal!
         }}
       >
-        <ResizablePanel id="editor" minSize="30%" className="flex min-h-0 flex-col">
+        <ResizablePanel id="editor" minSize="30%" className={cn('flex min-h-0 flex-col', disk && 'flex-row')}>
           {file ? (
             <CodeEditor
               key={file.id}
@@ -270,6 +311,7 @@ export function IdePanel() {
                 <Button
                   variant="secondary"
                   size="sm"
+                  disabled={persistence && (!persistence.ready || persistence.busy)}
                   onClick={() => createFile(space.kind === 'pytorch' ? 'scratch.py' : 'scratch.rs')}
                 >
                   <Plus data-icon="inline-start" />
@@ -277,6 +319,30 @@ export function IdePanel() {
                 </Button>
               </EmptyContent>
             </Empty>
+          )}
+          {disk && persistence && (
+            <section aria-label="磁盘版本比较" className="flex w-1/2 min-w-0 flex-col gap-3 overflow-auto border-l p-3">
+              <h3 className="text-xs font-medium text-muted-foreground">磁盘版本（左侧为本地编辑）</h3>
+              <pre className="flex-1 whitespace-pre-wrap break-words font-mono text-xs">{disk.content}</pre>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-auto whitespace-normal py-2"
+                disabled={!persistence.ready || persistence.busy}
+                onClick={() => persistence.resolveFile(true)}
+              >
+                保留编辑，基于此版本继续
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-auto whitespace-normal py-2"
+                disabled={!persistence.ready || persistence.busy}
+                onClick={() => persistence.resolveFile(false)}
+              >
+                放弃编辑，采用磁盘内容
+              </Button>
+            </section>
           )}
         </ResizablePanel>
         <ResizableHandle aria-label="调整终端大小" />
@@ -292,7 +358,7 @@ export function IdePanel() {
             <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <TerminalSquare className="size-3.5" aria-hidden />
               终端
-              <span className="font-normal opacity-60">· 原型模拟</span>
+              <span className="font-normal opacity-60">{!capabilities.terminal ? '· 尚未接入' : persistence ? '' : '· 原型模拟'}</span>
             </span>
             <div className="flex items-center gap-1">
               <Button
@@ -319,6 +385,7 @@ export function IdePanel() {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                disabled={!capabilities.terminal}
                 onClick={() => {
                   terminalCommand('clear')
                   setTerminalSelection('')
@@ -340,12 +407,15 @@ export function IdePanel() {
             <div role="log" aria-label="终端输出">
               <TermOutput lines={space.terminal} />
             </div>
+            {!capabilities.terminal && (
+              <p role="status" className="mb-3 text-muted-foreground">终端与代码运行尚未接入，不会连接模拟环境或执行命令。</p>
+            )}
             {!space.running && (
               <form
                 onSubmit={(e) => {
                   e.preventDefault()
                   const command = cmd.trim()
-                  if (!command) return
+                  if (!capabilities.terminal || !command) return
                   if (history.current.at(-1) !== command) history.current.push(command)
                   historyIndex.current = history.current.length
                   draft.current = ''
@@ -363,6 +433,7 @@ export function IdePanel() {
                 <input
                   ref={termInput}
                   aria-label="终端命令"
+                  disabled={!capabilities.terminal}
                   autoComplete="off"
                   autoCapitalize="off"
                   spellCheck={false}
@@ -373,6 +444,7 @@ export function IdePanel() {
                     draft.current = e.target.value
                   }}
                   onKeyDown={(e) => {
+                    if (!capabilities.terminal) return
                     if (isComposing(e)) {
                       if (e.key === 'Enter') e.preventDefault()
                       return

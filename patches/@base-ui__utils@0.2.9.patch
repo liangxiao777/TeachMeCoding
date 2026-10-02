@@ -1,0 +1,94 @@
+diff --git a/esm/store/useStore.d.ts b/esm/store/useStore.d.ts
+index 031d3f09af40279b83981d9a3d05cd4a8a7e07f2..d9e6f1e678732c692a4baa62ff4343525adbd71f 100644
+--- a/esm/store/useStore.d.ts
++++ b/esm/store/useStore.d.ts
+@@ -14,7 +14,6 @@ export type StoreInstance = Instance & {
+     a2: unknown;
+     a3: unknown;
+     value: unknown;
+-    didChange: boolean;
+   }[];
+   didChangeStore: boolean;
+   subscribe: (onStoreChange: any) => () => void;
+diff --git a/esm/store/useStore.js b/esm/store/useStore.js
+index c17f8727b1513c367e2469dddad1d7d9441d07f4..359c34482861c0dff9431fd62c94dec7180c888a 100644
+--- a/esm/store/useStore.js
++++ b/esm/store/useStore.js
+@@ -28,10 +28,9 @@ register({
+         for (let i = 0; i < instance.syncHooks.length; i += 1) {
+           const hook = instance.syncHooks[i];
+           const value = hook.selector(hook.store.state, hook.a1, hook.a2, hook.a3);
+-          if (hook.didChange || !Object.is(hook.value, value)) {
++          if (!Object.is(hook.value, value)) {
+             didChange = true;
+             hook.value = value;
+-            hook.didChange = false;
+           }
+         }
+         if (didChange) {
+@@ -82,8 +81,7 @@ function useStoreFast(store, selector, a1, a2, a3) {
+       a1,
+       a2,
+       a3,
+-      value: selector(store.getSnapshot(), a1, a2, a3),
+-      didChange: false
++      value: selector(store.getSnapshot(), a1, a2, a3)
+     };
+     instance.syncHooks.push(hook);
+   } else {
+@@ -97,7 +95,7 @@ function useStoreFast(store, selector, a1, a2, a3) {
+       hook.a1 = a1;
+       hook.a2 = a2;
+       hook.a3 = a3;
+-      hook.didChange = true;
++      hook.value = selector(store.getSnapshot(), a1, a2, a3);
+     }
+   }
+   return hook.value;
+diff --git a/store/useStore.d.ts b/store/useStore.d.ts
+index 031d3f09af40279b83981d9a3d05cd4a8a7e07f2..d9e6f1e678732c692a4baa62ff4343525adbd71f 100644
+--- a/store/useStore.d.ts
++++ b/store/useStore.d.ts
+@@ -14,7 +14,6 @@ export type StoreInstance = Instance & {
+     a2: unknown;
+     a3: unknown;
+     value: unknown;
+-    didChange: boolean;
+   }[];
+   didChangeStore: boolean;
+   subscribe: (onStoreChange: any) => () => void;
+diff --git a/store/useStore.js b/store/useStore.js
+index af7302e8e7ec1cd7b904a6a7ea022aa2accdc77b..ace924d831182358062472a76e51ff7b7dc70071 100644
+--- a/store/useStore.js
++++ b/store/useStore.js
+@@ -36,10 +36,9 @@ function useStoreR19(store, selector, a1, a2, a3) {
+         for (let i = 0; i < instance.syncHooks.length; i += 1) {
+           const hook = instance.syncHooks[i];
+           const value = hook.selector(hook.store.state, hook.a1, hook.a2, hook.a3);
+-          if (hook.didChange || !Object.is(hook.value, value)) {
++          if (!Object.is(hook.value, value)) {
+             didChange = true;
+             hook.value = value;
+-            hook.didChange = false;
+           }
+         }
+         if (didChange) {
+@@ -90,8 +89,7 @@ function useStoreFast(store, selector, a1, a2, a3) {
+       a1,
+       a2,
+       a3,
+-      value: selector(store.getSnapshot(), a1, a2, a3),
+-      didChange: false
++      value: selector(store.getSnapshot(), a1, a2, a3)
+     };
+     instance.syncHooks.push(hook);
+   } else {
+@@ -105,7 +103,7 @@ function useStoreFast(store, selector, a1, a2, a3) {
+       hook.a1 = a1;
+       hook.a2 = a2;
+       hook.a3 = a3;
+-      hook.didChange = true;
++      hook.value = selector(store.getSnapshot(), a1, a2, a3);
+     }
+   }
+   return hook.value;

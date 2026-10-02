@@ -6,14 +6,16 @@ import { IdePanel } from '@/components/workbench/ide-panel'
 import { LeftRail } from '@/components/workbench/left-rail'
 import { LessonReader } from '@/components/workbench/lesson-reader'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
-import { useSpace } from '@/fixtures/store'
+import { useSpace } from '@/app/context'
+
+const layouts = new Map<string, { height: number; width: number }>()
 
 export function Workbench() {
   const space = useSpace()
   const ide = usePanelRef()
   const explorer = usePanelRef()
-  const normalHeight = useRef(40)
-  const explorerWidth = useRef(240)
+  const normalHeight = useRef(layouts.get(space.id)?.height ?? 40)
+  const explorerWidth = useRef(layouts.get(space.id)?.width ?? 240)
   useLayoutEffect(() => {
     // Apply the remembered size after the panels have registered their new constraints.
     const frame = requestAnimationFrame(() =>
@@ -32,8 +34,10 @@ export function Workbench() {
       <ResizablePanelGroup
         orientation="horizontal"
         onLayoutChanged={(_, meta) => {
-          if (meta.isUserInteraction && space.explorerOpen)
+          if (meta.isUserInteraction && space.explorerOpen) {
             explorerWidth.current = explorer.current?.getSize().inPixels ?? 240
+            layouts.set(space.id, { height: normalHeight.current, width: explorerWidth.current })
+          }
         }}
       >
         <ResizablePanel
@@ -56,7 +60,10 @@ export function Workbench() {
           <ResizablePanelGroup
             orientation="vertical"
             onLayoutChanged={(layout, meta) => {
-              if (meta.isUserInteraction && !space.ideFullscreen && space.ideOpen) normalHeight.current = layout.ide!
+              if (meta.isUserInteraction && !space.ideFullscreen && space.ideOpen) {
+                normalHeight.current = layout.ide!
+                layouts.set(space.id, { height: normalHeight.current, width: explorerWidth.current })
+              }
             }}
           >
             <ResizablePanel

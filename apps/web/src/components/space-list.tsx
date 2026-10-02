@@ -8,18 +8,19 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
-import { allUnits, findUnit, relativeTime } from '@/fixtures/demo-data'
-import { useApp } from '@/fixtures/store'
+import { allUnits, findUnit, relativeTime } from '@/app/selectors'
+import { useApp } from '@/app/context'
 import { cn } from '@/lib/utils'
-import type { Space } from '@/fixtures/types'
+import type { Space } from '@/app/types'
 
 const EXAMPLES = ['我想学习 Rust，最后能写一个命令行工具', '我想用 PyTorch 训练一个图像分类模型', '我想学会用 Go 写后端服务']
 
 function StartInput({ autoFocus }: { autoFocus?: boolean }) {
-  const { createSpace } = useApp()
+  const { createSpace, persistence } = useApp()
   const [text, setText] = useState('')
+  const busy = !!persistence && (persistence.busy || !persistence.ready)
   const start = (value: string) => {
-    if (!value.trim()) return
+    if (!value.trim() || busy) return
     createSpace(value)
   }
   return (
@@ -50,7 +51,7 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
             className="text-base"
           />
           <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" variant="default" size="sm" disabled={!text.trim()}>
+            <InputGroupButton type="submit" variant="default" size="sm" disabled={!text.trim() || busy}>
               开始
               <ArrowRight data-icon="inline-end" />
             </InputGroupButton>
@@ -60,7 +61,7 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
       <div className="flex flex-wrap items-center justify-center gap-2">
         <span className="text-xs text-muted-foreground">试试：</span>
         {EXAMPLES.map((ex) => (
-          <Button key={ex} variant="outline" size="sm" className="rounded-full" onClick={() => start(ex)}>
+          <Button key={ex} variant="outline" size="sm" className="rounded-full" disabled={busy} onClick={() => start(ex)}>
             {ex}
           </Button>
         ))}

@@ -13,4 +13,5 @@ allowBuilds:
   protobufjs: false
 
 patchedDependencies:
+  '@base-ui/utils@0.2.9': patches/@base-ui__utils@0.2.9.patch
   node-pty@1.1.0: patches/node-pty@1.1.0.patch

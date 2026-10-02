@@ -23,10 +23,11 @@ export function workspaceApi(learning: Learning, projects?: Projects) {
   api.post('/spaces/:space/:action', async (c) => {
     const space = c.req.param('space');
     const action = c.req.param('action');
-    if (!['requirement', 'sessions'].includes(action)) return c.json({ error: 'Not found' }, 404);
+    if (!['name', 'requirement', 'sessions'].includes(action)) return c.json({ error: 'Not found' }, 404);
     const input: unknown = await c.req.json();
     return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () =>
-      action === 'requirement' ? learning.saveRequirement(space, input) : learning.createSession(space, input)));
+      action === 'name' ? learning.renameSpace(space, input) :
+        action === 'requirement' ? learning.saveRequirement(space, input) : learning.createSession(space, input)));
   });
   api.post('/spaces/:space/sessions/:session/:action', async (c) => {
     const { space, session, action } = c.req.param();

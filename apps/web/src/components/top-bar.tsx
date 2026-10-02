@@ -38,12 +38,12 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { findUnit } from '@/fixtures/demo-data'
-import { useApp, useSpace } from '@/fixtures/store'
+import { findUnit } from '@/app/selectors'
+import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 
 function SpaceSwitcher() {
-  const { state, openSpace, goHome, goSpaces } = useApp()
+  const { state, openSpace, goHome, goSpaces, persistence } = useApp()
   const space = useSpace()
   return (
     <DropdownMenu>
@@ -62,7 +62,7 @@ function SpaceSwitcher() {
                 <span className="flex flex-col">
                   <span className="font-medium">{s.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {u ? `正在学习「${u.title}」` : '确认学习需求中'}
+                    {u ? `正在学习「${u.title}」` : !persistence || s.view === 'onboarding' || s.view === 'planning' ? '确认学习需求中' : '尚无学习单元'}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -87,11 +87,12 @@ function SpaceSwitcher() {
 
 export function TopBar() {
   const space = useSpace()
-  const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer } = useApp()
+  const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
   const [lessonOpen, setLessonOpen] = useState(false)
   const unit = findUnit(space, space.currentUnitId)
   const onRoute = space.view === 'route'
   const hasDraft = space.draft && space.draft.unitId === unit?.id
+  const canAssess = capabilities.assessment || !!(unit && assessment(unit))
 
   useEffect(() => {
     if (!space.ideFullscreen) {
@@ -239,11 +240,11 @@ export function TopBar() {
                 <Code2 />
                 IDE
               </TooltipTrigger>
-              <TooltipContent>显示或收起 IDE 与终端</TooltipContent>
+              <TooltipContent>{capabilities.terminal ? '显示或收起 IDE 与终端' : '显示或收起 IDE · 终端暂不可用'}</TooltipContent>
             </Tooltip>
-            <Button onClick={startAssessment} className="ml-1.5">
+            <Button onClick={startAssessment} disabled={!canAssess || persistence?.busy} className="ml-1.5">
               <ClipboardCheck data-icon="inline-start" />
-              {hasDraft ? '继续测评' : '开始单元测评'}
+              {!canAssess ? '测评暂不可用' : hasDraft ? '继续测评' : '开始单元测评'}
             </Button>
           </>
         )}
@@ -262,7 +263,7 @@ export function TopBar() {
             <MessageSquare />
             Agent
           </TooltipTrigger>
-          <TooltipContent>显示或收起 Agent 面板</TooltipContent>
+          <TooltipContent>{capabilities.agent ? '显示或收起 Agent 面板' : '显示或收起会话面板 · Agent 暂不可用，仅保存问题'}</TooltipContent>
         </Tooltip>
       </div>
     </header>

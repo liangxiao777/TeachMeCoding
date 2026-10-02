@@ -1,8 +1,10 @@
 'use client'
 
-import { createContext, useContext, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { AppModelProvider } from '@/app/context'
 import { ONBOARDING_QUESTIONS, composeReply, titleFrom } from './agent-script'
 import { evaluate, getAssessment } from './assessment'
+import { getLesson } from './lessons'
 import { runCommandFor, runFile } from './code-runner'
 import { activeSession, ensureSession, selectSession, sessionUnitId } from './sessions'
 import { addProjectEntry, closeProjectFile, entryPath, openProjectFile, projectChildren, renameProjectEntry, resolveProjectPath } from './project-files'
@@ -640,22 +642,12 @@ function useStoreImpl(initialState: () => AppState) {
   return { state, current, session, ...actions }
 }
 
-type Store = ReturnType<typeof useStoreImpl>
-const StoreContext = createContext<Store | null>(null)
-
 export function AppProvider({ children, initialState }: { children: ReactNode; initialState: () => AppState }) {
   const store = useStoreImpl(initialState)
-  return <StoreContext.Provider value={store}>{children}</StoreContext.Provider>
-}
-
-export function useApp() {
-  const ctx = useContext(StoreContext)
-  if (!ctx) throw new Error('useApp must be used within AppProvider')
-  return ctx
-}
-
-export function useSpace() {
-  const { current } = useApp()
-  if (!current) throw new Error('No current space')
-  return current
+  return <AppModelProvider value={{
+    ...store,
+    capabilities: { agent: true, terminal: true, assessment: true },
+    lesson: (unit) => getLesson(unit, store.current?.kind === 'pytorch' ? 'python' : 'rust'),
+    assessment: (unit) => getAssessment(unit, store.current?.kind === 'pytorch' ? 'python' : 'rust'),
+  }}>{children}</AppModelProvider>
 }
