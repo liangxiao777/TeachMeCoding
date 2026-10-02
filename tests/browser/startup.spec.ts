@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 
 test('renders connected startup page', async ({ page }, testInfo) => {
-  await page.goto('/');
+  await page.goto('/diagnostics');
   await expect(page.getByRole('heading', { name: 'TeachMeCoding' })).toBeVisible();
   await expect(page.getByRole('status')).toHaveText('本地服务已连接');
   await page.screenshot({ path: `.amp/in/artifacts/startup-${testInfo.project.name}.png` });
@@ -10,9 +10,32 @@ test('renders connected startup page', async ({ page }, testInfo) => {
 
 test('renders API failure without claiming a connection', async ({ page }, testInfo) => {
   await page.route('**/api/health', (route) => route.fulfill({ status: 503, body: '{}' }));
-  await page.goto('/');
+  await page.goto('/diagnostics');
   await expect(page.getByRole('status')).toContainText('本地服务不可用');
   await page.screenshot({ path: `.amp/in/artifacts/startup-error-${testInfo.project.name}.png` });
+});
+
+test('ships fonts, icons and theme styles without online resources', async ({ page }) => {
+  const external: string[] = [];
+  page.on('request', (request) => {
+    if (!['127.0.0.1', 'localhost'].includes(new URL(request.url()).hostname)) external.push(request.url());
+  });
+  await page.goto('/diagnostics');
+  const fonts = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return Promise.all([
+      document.fonts.load('400 16px "Geist Variable"', 'TeachMeCoding'),
+      document.fonts.load('400 16px "Geist Mono Variable"', 'fn main()'),
+      document.fonts.load('400 16px "Noto Sans SC Variable"', '学习路线'),
+    ]).then((families) => families.map((family) => family.length));
+  });
+  expect(fonts.every((count) => count > 0)).toBe(true);
+  await expect(page.locator('svg.lucide')).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('background-color', 'oklch(1 0 0)');
+  for (const icon of ['/icon.svg', '/icon-light-32x32.png', '/icon-dark-32x32.png', '/apple-icon.png']) {
+    expect((await page.request.get(icon)).ok()).toBe(true);
+  }
+  expect(external).toEqual([]);
 });
 
 test('same-origin browser can bootstrap a token and pass the protected check', async ({ page }) => {

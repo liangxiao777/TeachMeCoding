@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": { "@/*": ["./src/*"] },
     "noEmit": true
   },
   "include": ["src", "vite.config.ts"]

@@ -1,6 +1,8 @@
 # TeachMeCoding
 
-本地单用户教学应用，当前只有运行环境检查页。教学界面和业务尚未接入；原型保留在 `.worktrees/prototype`，不作为正式启动入口。
+本地单用户教学应用，正在迁移原型界面，真实教学业务尚未接入；原型保留在 `.worktrees/prototype`，不作为正式启动入口。运行环境检查页保留在 `/diagnostics`，不把服务健康检查视为教学 Agent 接通。
+
+Vite 使用原型的 Tailwind 配色与基础组件。Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsource 包随构建分发，中文优先使用原型已有的系统字体；Lucide 图标编入应用，站点图标随静态资源提供。不需要 Next.js，也不请求在线字体或 Analytics。
 
 ## 本地运行
 
