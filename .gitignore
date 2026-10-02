@@ -1,3 +1,14 @@
 # Local prototype workspace and source archive
 /.worktrees/
 /teach-me-coding.zip
+
+# Local credentials; keep the public configuration template
+/.env
+/.env.*
+!/.env.example
+
+# Workspace build outputs
+node_modules/
+dist/
+test-results/
+playwright-report/

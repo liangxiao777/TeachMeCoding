@@ -1,0 +1,22 @@
+{
+  "name": "teach-me-coding",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.0",
+  "engines": { "node": ">=24.15.0 <25", "pnpm": "11.1.0" },
+  "scripts": {
+    "dev": "pnpm --filter @teach-me-coding/contracts build && concurrently --kill-others --names server,web 'pnpm --filter @teach-me-coding/server dev' 'pnpm --filter @teach-me-coding/web dev'",
+    "build": "pnpm -r build",
+    "check": "pnpm --filter @teach-me-coding/contracts build && pnpm -r check",
+    "test": "pnpm --filter @teach-me-coding/contracts build && pnpm -r test && node --test tests/*.test.mjs",
+    "test:browser": "playwright test",
+    "start": "node apps/server/dist/index.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/node": "24.19.1",
+    "concurrently": "10.0.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
