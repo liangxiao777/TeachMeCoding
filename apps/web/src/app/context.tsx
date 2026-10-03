@@ -72,6 +72,8 @@ export interface AppModel {
     saveName: Action
     assessmentDirty: boolean
     fileDirty: boolean
+    unsavedFiles: string[]
+    saveFiles: Action
     saveAssessment: Action
     saveFile: Action
     compareFile: Action

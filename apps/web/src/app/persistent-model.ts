@@ -24,6 +24,7 @@ interface StoredSpace {
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
 const answers = (d: { q1: string; q2: string }) => ({ q1: d.q1, q2: d.q2 })
+const unsavedFiles = (s: StoredSpace) => s.ui.files.filter((f) => s.files[f.id] && f.content !== s.files[f.id]!.content)
 type SessionEdit = Partial<Pick<Session, 'composerText' | 'composerQuote' | 'routeSuggestion'>>
 const sessionKey = (space: Space) => sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
 const uiSession = (s: SessionDetail): Session => ({ ...s, updatedAt: s.messages.at(-1)?.createdAt ?? 0,
@@ -138,7 +139,7 @@ export function usePersistentModel(): AppModel {
   if (current && capabilities.terminal && !terminals.current.has(current.id)) {
     const id = current.id
     terminals.current.set(id, new LocalTerminal(id, (connected) => changeUi(id, (s) => ({ ...s,
-      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' }))))
+      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' })), () => unsavedFiles(cache.current[id]!).length === 0))
   }
   const localTerminal = current ? terminals.current.get(current.id) : undefined
 
@@ -355,7 +356,27 @@ export function usePersistentModel(): AppModel {
   }
   const refreshFiles = async (id: string) => {
     const tree = await api<ProjectEntry[]>(`/spaces/${id}/project/tree`)
-    change(id, (s) => ({ ...s, tree, ui: { ...s.ui, ...projectEntries(tree, s.ui.files) } }))
+    const before = cache.current[id]!
+    const loaded = await Promise.all(Object.values(before.files).filter((f) => tree.some((e) => e.path === f.path && e.kind === 'file'))
+      .map(async (file) => ({ before: file, disk: await api<ProjectFile>(`/spaces/${id}/project/file?path=${encodeURIComponent(file.path)}`) })))
+    change(id, (s) => {
+      const entries = projectEntries(tree, s.ui.files), files = { ...s.files }
+      // A terminal can delete/rename a file. Never discard an unsaved buffer.
+      entries.files.push(...unsavedFiles(s).filter((f) => !entries.files.some((entry) => entry.id === f.id)))
+      for (const { before, disk } of loaded) {
+        const file = entries.files.find((f) => f.id === disk.path)
+        if (file && files[disk.path]?.version === before.version && file.content === before.content) {
+          entries.files = entries.files.map((f) => f.id === disk.path ? { ...f, content: disk.content } : f)
+          files[disk.path] = disk
+        }
+      }
+      return { ...s, tree, files, ui: { ...s.ui, ...entries } }
+    })
+  }
+  const saveFile = async (space: string, path: string) => {
+    const entry = cache.current[space]!, content = entry.ui.files.find((f) => f.id === path)!.content, version = entry.files[path]!.version
+    const saved = await api<ProjectFile>(`/spaces/${space}/project/save`, { path, content, version })
+    change(space, (s) => ({ ...s, disk: null, files: { ...s.files, [path]: saved } }))
   }
   const readFile = async (space: string, path: string) => {
     const file = await api<ProjectFile>(`/spaces/${space}/project/file?path=${encodeURIComponent(path)}`)
@@ -592,14 +613,18 @@ export function usePersistentModel(): AppModel {
       },
       assessmentDirty: !!current?.draft && !same(answers(current.draft), answers(selected!.units[current.draft.unitId]!.draft)),
       fileDirty: !!activeFile && !!selected?.files[activeFile.id] && activeFile.content !== selected.files[activeFile.id]!.content,
+      unsavedFiles: selected ? unsavedFiles(selected).map((f) => f.id) : [],
+      saveFiles: () => { if (!current) return; const id = current.id
+        void run(`files:${id}`, async () => { for (const file of unsavedFiles(cache.current[id]!)) await saveFile(id, file.id); await refreshFiles(id) })
+      },
       saveAssessment: () => { if (!current?.draft || !selected) return; const id = current.id, draft = current.draft, revision = selected.units[draft.unitId]!.draft.revision
         void run(`assessment:${id}:${draft.unitId}`, async () => {
           const saved = await api<SavedAssessmentDraft>(`/spaces/${id}/units/${draft.unitId}/draft`, { revision, ...answers(draft) })
           change(id, (s) => ({ ...s, units: { ...s.units, [draft.unitId]: { ...s.units[draft.unitId]!, draft: saved } } }))
         })
       },
-      saveFile: () => { if (!current || !selected || !activeFile) return; const id = current.id, path = activeFile.id, content = activeFile.content, version = selected.files[path]!.version
-        void run(`file:${id}:${path}`, async () => { const saved = await api<ProjectFile>(`/spaces/${id}/project/save`, { path, content, version }); change(id, (s) => ({ ...s, disk: null, files: { ...s.files, [path]: saved } })); await refreshFiles(id) })
+      saveFile: () => { if (!current || !activeFile) return; const id = current.id, path = activeFile.id
+        void run(`file:${id}:${path}`, async () => { await saveFile(id, path); await refreshFiles(id) })
       },
       compareFile: () => { if (!current || !activeFile) return; const id = current.id, path = activeFile.id
         void run(`file:${id}:${path}`, async () => { const disk = await api<ProjectFile>(`/spaces/${id}/project/file?path=${encodeURIComponent(path)}`); change(id, (s) => ({ ...s, disk })) })
