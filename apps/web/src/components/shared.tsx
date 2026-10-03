@@ -6,7 +6,6 @@ import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from '@/components/ai-elements/chain-of-thought'
 import { RunContent } from '@/components/agent/run-content'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import type { UnitStatus } from '@/app/types'
@@ -172,11 +171,6 @@ export function Generating({
       </ChainOfThought>
       {parts !== undefined && <RunContent parts={parts} streaming />}
       {note && <p className="text-sm leading-relaxed text-muted-foreground">{note}</p>}
-      <div className="flex flex-col gap-2" aria-hidden>
-        {[92, 78, 85, 60].map((w, i) => (
-          <Skeleton key={i} className="h-3" style={{ width: `${w}%` }} />
-        ))}
-      </div>
     </div>
   )
 }

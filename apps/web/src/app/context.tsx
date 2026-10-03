@@ -62,7 +62,6 @@ export interface AppModel {
     ready: boolean
     busy: boolean
     error: string
-    connection?: string
     retry: Action
     requirementConfirmed: boolean
     planning: { run?: WorkStatus; error: string | null }

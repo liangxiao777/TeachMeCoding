@@ -420,10 +420,10 @@ test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dar
   await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-dark-${info.project.name}.png`, animations: 'disabled' });
 });
 
-test('planning shows streamed arguments, not stale thinking; inactivity and terminal failure survive reload', async ({ page }, info) => {
+test('planning shows real phases without counters, idle warnings or skeletons; failure survives reload', async ({ page }, info) => {
   test.setTimeout(45000);
   await page.clock.install();
-  const goal = `参数进度 ${info.project.name}`;
+  const goal = `学习路线 ${info.project.name}`;
   await create(page, goal);
   await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '修改', exact: true }).click();
@@ -431,25 +431,30 @@ test('planning shows streamed arguments, not stale thinking; inactivity and term
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   const tool = page.getByTestId('tool-call');
-  await expect(tool.getByText('生成参数中', { exact: true })).toBeVisible();
-  await expect(tool).toContainText('已接收 10 字符');
-  await expect.poll(async () => Number(/已接收 (\d+) 字符/.exec(await tool.innerText())?.[1] ?? 0)).toBeGreaterThan(10);
+  await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
+  await tool.getByRole('button').click();
+  await expect(tool.locator('code')).toHaveText('submit_route_proposal');
+  await expect(tool).not.toContainText(/已接收|字符|参数|尚未执行|尚未调用/);
+  await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
   await expect(page.getByText('正在思考…', { exact: true })).toHaveCount(0);
   await expect(page.getByText('生成路线内容', { exact: true })).toBeVisible();
   await expect(page.getByText('生成路线内容', { exact: true }).locator('../..')).toHaveClass(/text-foreground/);
   await expect(page.getByText('校验路线结构', { exact: true }).locator('../..')).toHaveClass(/text-muted-foreground\/50/);
   await expect(tool.getByText('执行中', { exact: true })).toHaveCount(0);
-  await page.screenshot({ path: `.amp/in/artifacts/planning-arguments-${info.project.name}.png`, animations: 'disabled' });
+  await page.screenshot({ path: `.amp/in/artifacts/planning-clean-detail-${info.project.name}.png`, animations: 'disabled' });
   const resumed: number[] = [];
   page.on('request', (r) => { if (r.url().includes('/stream?after=')) resumed.push(Number(new URL(r.url()).searchParams.get('after'))); });
   await page.reload();
-  await expect(tool.getByText('生成参数中', { exact: true })).toBeVisible();
+  await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
   await expect.poll(() => resumed.some((cursor) => cursor > 500)).toBe(true);
   await expect(page.getByText('正在思考…', { exact: true })).toHaveCount(0);
-  await expect.poll(async () => Number(/已接收 (\d+) 字符/.exec(await tool.innerText())?.[1] ?? 0)).toBeGreaterThan(40);
   await page.clock.fastForward(31_000);
-  await expect(page.getByTestId('run-inactivity')).toContainText('秒未收到新进度');
-  await page.screenshot({ path: `.amp/in/artifacts/planning-inactivity-${info.project.name}.png`, animations: 'disabled' });
+  await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('run-inactivity')).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText(/未收到新进度|等待模型继续响应|事件连接中断|正在重连|字符的工具参数/);
+  await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '停止规划', exact: true })).toBeEnabled();
+  await page.screenshot({ path: `.amp/in/artifacts/planning-clean-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible({ timeout: 20000 });
   await expect(tool.getByText('已中断', { exact: true })).toBeVisible();
   await expect(page.getByTestId('run-inactivity')).toHaveCount(0);
@@ -462,8 +467,9 @@ test('planning shows streamed arguments, not stale thinking; inactivity and term
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible();
   await expect(tool.getByText('已中断', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('模型响应未正常完成');
+  await expect(page.getByRole('alert')).not.toContainText('检查模型服务状态');
   expect(await page.locator('body').innerText()).not.toContain('PRIVATE-');
-  await page.screenshot({ path: `.amp/in/artifacts/planning-stream-failed-${info.project.name}.png`, animations: 'disabled' });
+  await page.screenshot({ path: `.amp/in/artifacts/planning-clean-failed-${info.project.name}.png`, animations: 'disabled' });
 });
 
 test('a silent event connection recovers the terminal state by polling every durable event page', async ({ page }, info) => {
@@ -497,6 +503,7 @@ test('a silent event connection recovers the terminal state by polling every dur
   expect(cursors).toHaveLength(2);
   expect([1, 2]).toContain(cursors[0]);
   expect(cursors[1]).toBe(cursors[0]! + 500);
+  await expect(page.locator('body')).not.toContainText(/事件连接中断|正在重连/);
   await expect(page.getByTestId('tool-call').getByText('已中断', { exact: true })).toBeVisible();
   await page.getByTestId('reasoning').getByRole('button').click();
   await expect(page.getByTestId('reasoning')).toContainText('核对需求。'.repeat(121));

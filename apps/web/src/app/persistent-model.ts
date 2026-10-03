@@ -103,7 +103,6 @@ export function usePersistentModel(): AppModel {
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [connection, setConnection] = useState('')
   const [capabilities, setCapabilities] = useState({ agent: false, terminal: false, assessment: false })
   const subscriptions = useRef(new Map<string, AbortController>())
   const errorRef = useRef('')
@@ -249,7 +248,6 @@ export function usePersistentModel(): AppModel {
     let parts: AgentDisplayPart[] = saved?.parts ?? []
     const receive = (event: RunEvent) => {
       if (terminal || event.runId !== work.id || event.seq <= cursor) return
-      setConnection('')
       cursor = event.seq
       parts = applyAgentEvent(parts, event)
       if (event.data.type === 'text') text += event.data.delta
@@ -286,12 +284,11 @@ export function usePersistentModel(): AppModel {
                 if (work.kind === 'evaluation' && final.state === 'succeeded' && final.resultId) changeUi(space, (s) => s.view === 'assessment' && s.currentUnitId === work.unitId
                   ? { ...s, view: 'result', viewingRecordId: final.resultId! } : s)
               }
-              setConnection(''); return
+              return
             }
             throw new Error('Disconnected before final event')
           } catch {
             if (controller.signal.aborted) return
-            setConnection('事件连接中断，正在重连；后台运行不会重新提交。')
             // A dead SSE connection must not hide a durable terminal state. Drain
             // every page before using the run state; a backlog can exceed 500 events.
             try {
@@ -549,7 +546,7 @@ export function usePersistentModel(): AppModel {
     goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) navigate('unit', next.id) } },
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
-      ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
       planning: { run: selected ? latestPlan(selected.saved) : undefined, error: selected?.planningError ?? null },
       conclusions: selected?.saved.conclusions ?? [],
       tasks: selected?.saved.tasks ?? [],

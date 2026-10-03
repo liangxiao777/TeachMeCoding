@@ -375,11 +375,11 @@ test('legacy display events reduce immutably in order and terminal states do not
     [{ type: 'tool', id: 'legacy:legacy-tool:1', name: 'read', status: 'error' }]);
 });
 
-test('real Pi adapter exposes argument progress before delayed thinking_end and never executes a failed stream', async () => {
+test('real Pi adapter exposes tool phases without argument counters and never executes a failed stream', async () => {
   for (const mode of ['success', 'failure', 'cancel'] as const) {
     const { db, learning, a, sa } = setup();
     const adapter = providerStream();
-    let requests = 0, executions = 0, commits = 0;
+    let requests = 0, executions = 0, commits = 0, chunks = 0;
     let wire!: ReadableStreamDefaultController<Uint8Array>;
     const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
     const chunk = (delta: unknown, finish_reason: string | null = null) => ({ id: 'gen-synthetic-stream', object: 'chat.completion.chunk', created: 1,
@@ -387,12 +387,14 @@ test('real Pi adapter exposes argument progress before delayed thinking_end and 
     const runtime = new TeachingRuntime(learning, syntheticConfig, {
       scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
         async execute() { executions++; return { content: [{ type: 'text', text: 'tool result' }], details: {} }; } }], commit() { commits++; } }),
-      stream: (model, context, options) => adapter(model, context, { ...options, fetch: async () => {
-        requests++;
-        const body = requests === 1 ? new ReadableStream<Uint8Array>({ start(controller) { wire = controller; } })
-          : new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encode(chunk({ content: 'Finished.' }, 'stop'))); controller.close(); } });
-        return new Response(body, { headers: { 'content-type': 'text/event-stream', 'x-private': 'PRIVATE-HEADER' } });
-      } }),
+      stream: (model, context, options) => adapter(model, context, { ...options,
+        onProviderStreamEvent: (...args) => { chunks++; options?.onProviderStreamEvent?.(...args); },
+        fetch: async () => {
+          requests++;
+          const body = requests === 1 ? new ReadableStream<Uint8Array>({ start(controller) { wire = controller; } })
+            : new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encode(chunk({ content: 'Finished.' }, 'stop'))); controller.close(); } });
+          return new Response(body, { headers: { 'content-type': 'text/event-stream', 'x-private': 'PRIVATE-HEADER' } });
+        } }),
     });
     try {
       const { run } = runtime.submit(a.id, sa, randomUUID(), message(mode));
@@ -401,11 +403,12 @@ test('real Pi adapter exposes argument progress before delayed thinking_end and 
       wire.enqueue(encode(chunk({ reasoning: 'Analyse the request.' })));
       wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, id: 'native-call', type: 'function', function: { name: 'read', arguments: '{"marker":' } }] })));
       wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, function: { arguments: '"PRIVATE-ARGUMENT"}' } }] })));
-      for (let i = 0; i < 100 && !runtime.events(a.id, run.id).events.some((e) => e.data.type === 'tool' && e.data.inputCharacters === 29); i++) await new Promise((r) => setTimeout(r, 1));
+      for (let i = 0; i < 100 && chunks < 3; i++) await new Promise((r) => setTimeout(r, 1));
+      assert.equal(chunks, 3);
       const before = learning.session(a.id, sa).messages.at(-1)!;
       assert.deepEqual(before.parts, [
         { type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'Analyse the request.', status: 'streaming' },
-        { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating', inputCharacters: 29 },
+        { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating' },
       ]);
       assert.equal(executions, 0, 'Even complete-looking JSON is not permission to execute before normal stream termination');
       if (mode === 'failure') wire.enqueue(encode({ error: { code: 502, message: 'PRIVATE-PROVIDER-ERROR', metadata: { raw: 'PRIVATE-ERROR-BODY' } } }));
@@ -415,7 +418,8 @@ test('real Pi adapter exposes argument progress before delayed thinking_end and 
       await runtime.idle(run.id);
       const events = runtime.events(a.id, run.id).events;
       const toolEvents = events.flatMap((e) => e.data.type === 'tool' ? [e.data] : []);
-      assert.deepEqual(toolEvents.map((e) => e.phase), mode === 'success' ? ['input', 'input', 'input', 'ready', 'start', 'end'] : ['input', 'input', 'input']);
+      assert.deepEqual(toolEvents.map((e) => e.phase), mode === 'success' ? ['input', 'ready', 'start', 'end'] : ['input']);
+      assert.ok(toolEvents.every((e) => !('inputCharacters' in e)));
       assert.equal(new Set(toolEvents.map((e) => e.callId)).size, 1);
       assert.equal(executions, mode === 'success' ? 1 : 0);
       assert.equal(commits, mode === 'success' ? 1 : 0);
