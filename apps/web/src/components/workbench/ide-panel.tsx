@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 import type { TermLine } from '@/app/types'
+import { LocalTerminalView } from './local-terminal'
 
 export { CodeEditor } from '@/components/code-editor'
 
@@ -116,6 +117,7 @@ export function IdePanel() {
     connectEnv,
     capabilities,
     persistence,
+    localTerminal,
   } = useApp()
   const [selected, setSelected] = useState('')
   const [terminalSelection, setTerminalSelection] = useState('')
@@ -354,6 +356,7 @@ export function IdePanel() {
           maxSize="65%"
           className="flex min-h-0 min-w-0 flex-col"
         >
+          {localTerminal ? (space.ideOpen ? <LocalTerminalView /> : null) : <>
           <div className="flex h-9 shrink-0 items-center justify-between border-b pr-1.5 pl-3">
             <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <TerminalSquare className="size-3.5" aria-hidden />
@@ -472,6 +475,7 @@ export function IdePanel() {
             )}
             <div ref={termEnd} />
           </div>
+          </>}
         </ResizablePanel>
       </ResizablePanelGroup>
       {space.ideFullscreen && (

@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import os from 'node:os';
+import type { Terminals } from '../runtime/terminals.js';
 
 export function createLocalAccess({ port, hostname = '127.0.0.1', development = false, webPort = 5173 }: { port: number; hostname?: string; development?: boolean; webPort?: number }) {
   const ports = development ? [port, webPort] : [port];
@@ -42,16 +43,25 @@ export function localAccessError(
   if (!timingSafeEqual(Buffer.from(token), Buffer.from(access.token))) return 401;
 }
 
-// This is only the upgrade gate. No PTY or WebSocket session is created yet.
-export function terminalUpgradeGate(access: LocalAccess) {
-  return (request: IncomingMessage, socket: Duplex) => {
+export function terminalUpgradeGate(access: LocalAccess, terminals?: Terminals, validateSpace?: (space: string) => unknown) {
+  return (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const headers = new Headers();
     for (const [name, value] of Object.entries(request.headers)) {
       if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(',') : value);
     }
     const denied = localAccessError(headers, access, { websocket: true });
-    const status = denied ?? (request.url === '/api/terminal/socket' ? 501 : 404);
-    const reason = { 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 501: 'Not Implemented' }[status];
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    let status: number = denied ?? (url.pathname === '/api/terminal/socket' ? terminals ? 400 : 501 : 404);
+    if (!denied && terminals && url.pathname === '/api/terminal/socket') {
+      const space = url.searchParams.get('space') ?? '';
+      try {
+        if (!validateSpace) throw new Error();
+        validateSpace(space);
+        terminals.sockets.handleUpgrade(request, socket, head, (client) => terminals.attach(space, client));
+        return;
+      } catch { status = 400; }
+    }
+    const reason = ({ 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 501: 'Not Implemented' } as Record<number, string>)[status];
     socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nCache-Control: no-store\r\nContent-Length: 0\r\n\r\n`, () => socket.destroy());
   };
 }

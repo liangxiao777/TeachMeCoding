@@ -1,0 +1,36 @@
+import { readFileSync } from 'node:fs';
+import { expect, test } from '@playwright/test';
+import type { seedWorkspaces } from '../seed-workspaces';
+
+test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
+test('formal IDE auto-connects real PTY, keeps it through refresh/fullscreen and reports exit', async ({ page }, info) => {
+  const seed = JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
+  const errors: string[] = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`/?space=${seed.spaceId}&tab=unit&unit=${seed.unitIds[0]}`);
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'src', exact: true }).press('ArrowRight');
+  await page.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
+  await expect(page.getByText('本机终端 · 非沙箱', { exact: true })).toBeVisible();
+  const input = page.getByRole('textbox', { name: '本机终端输入', exact: true });
+  await expect(page.locator('.xterm-rows')).toHaveCSS('font-size', '13px');
+  await expect(page.locator('.xterm-rows')).toHaveCSS('font-family', /monospace/);
+  await input.pressSequentially("printf 'REAL_OUTPUT_73\\n'; export TMC_RECONNECT=kept"); await input.press('Enter');
+  await expect(page.locator('.xterm-rows')).toContainText('REAL_OUTPUT_73');
+  await page.screenshot({ path: `.amp/in/artifacts/terminal-normal-${info.project.name}.png` });
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await input.pressSequentially('printf "RECONNECTED_%s\\n" "$TMC_RECONNECT"'); await input.press('Enter');
+  await expect(page.locator('.xterm-rows')).toContainText('RECONNECTED_kept');
+  await page.reload();
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await page.getByRole('treeitem', { name: 'src', exact: true }).press('ArrowRight');
+  await page.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
+  await expect(page.locator('.xterm-rows')).toContainText('RECONNECTED_kept');
+  await input.pressSequentially('exit 7'); await input.press('Enter');
+  await expect(page.getByText('终端已退出：7（信号 无）', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/terminal-exit-${info.project.name}.png` });
+  await page.getByRole('button', { name: '新建终端', exact: true }).click();
+  await expect(page.getByText('终端已退出：7（信号 无）', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '停止终端', exact: true }).click();
+  await expect(page.getByText(/终端已退出：/)).toBeVisible();
+  expect(errors).toEqual([]);
+});

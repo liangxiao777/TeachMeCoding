@@ -6,6 +6,7 @@ import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
 import { useUnsavedWarning } from './request-state'
 import type { AssessmentDraft, LessonBlock, Requirement, Session, Space, SpaceView } from './types'
+import { LocalTerminal } from '@/lib/terminal'
 
 interface StoredSpace {
   ui: Space
@@ -105,6 +106,7 @@ export function usePersistentModel(): AppModel {
   const [error, setError] = useState('')
   const [capabilities, setCapabilities] = useState({ agent: false, terminal: false, assessment: false })
   const subscriptions = useRef(new Map<string, AbortController>())
+  const terminals = useRef(new Map<string, LocalTerminal>())
   const errorRef = useRef('')
   const retry = useRef<() => void>(() => {})
   const inFlight = useRef(new Map<string, Promise<unknown>>())
@@ -133,6 +135,12 @@ export function usePersistentModel(): AppModel {
   const selected = currentId ? cache.current[currentId] : undefined
   const current = selected?.ui ?? null
   const session = current ? activeSession(current) : undefined
+  if (current && capabilities.terminal && !terminals.current.has(current.id)) {
+    const id = current.id
+    terminals.current.set(id, new LocalTerminal(id, (connected) => changeUi(id, (s) => ({ ...s,
+      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' }))))
+  }
+  const localTerminal = current ? terminals.current.get(current.id) : undefined
 
   useEffect(() => {
     if (booted.current) return
@@ -165,7 +173,12 @@ export function usePersistentModel(): AppModel {
       }
     })
   }, [])
-  useEffect(() => () => { for (const subscription of subscriptions.current.values()) subscription.abort(); subscriptions.current.clear() }, [])
+  useEffect(() => () => {
+    for (const subscription of subscriptions.current.values()) subscription.abort()
+    subscriptions.current.clear()
+    for (const terminal of terminals.current.values()) terminal.dispose()
+    terminals.current.clear()
+  }, [])
   useEffect(() => {
     if (!ready) return
     const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
@@ -409,7 +422,7 @@ export function usePersistentModel(): AppModel {
 
   return {
     state: { spaces, currentSpaceId: currentId, globalView }, current: uiCurrent, session,
-    capabilities,
+    capabilities, localTerminal,
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null
@@ -541,7 +554,8 @@ export function usePersistentModel(): AppModel {
       }
       void createEntry(name, 'file', null, code)
     },
-    connectEnv: unavailable, terminalCommand: unavailable,
+    connectEnv: () => { void localTerminal?.connect() },
+    terminalCommand: (command) => { localTerminal?.send('input', { data: `${command}\r` }) },
     startAssessment: () => { if (!recordUnit || !current) return
       navigate('assessment', recordUnit)
       if (capabilities.assessment && !selected?.units[recordUnit]?.assessment) assessmentTask(current.id, recordUnit, 'assessment')

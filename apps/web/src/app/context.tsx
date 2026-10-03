@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import type { AgentDisplayPart, LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
+import type { LocalTerminal } from '@/lib/terminal'
 
 type Action = () => void
 type EntryResult = string | null | Promise<string | null>
@@ -10,6 +11,7 @@ export interface AppModel {
   state: Pick<AppState, 'spaces' | 'currentSpaceId' | 'globalView'>
   current: Space | null
   session?: Session
+  localTerminal?: LocalTerminal
   capabilities: { agent: boolean; terminal: boolean; assessment: boolean }
   lesson: (unit: Unit) => Lesson | null
   assessment: (unit: Unit) => AssessmentSpec | null

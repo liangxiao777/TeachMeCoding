@@ -19,7 +19,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   api.get('/spaces/:space/sessions/:session', (c) => c.json(learning.session(c.req.param('space'), c.req.param('session'))));
   api.get('/spaces/:space/units/:unit', (c) => c.json(learning.unit(c.req.param('space'), c.req.param('unit'))));
   api.get('/spaces/:space/records/:record', (c) => c.json(learning.record(c.req.param('space'), c.req.param('record'))));
-  api.get('/capabilities', (c) => c.json({ agent: agents?.available ?? false, terminal: false, assessment: agents?.available ?? false }));
+  api.get('/capabilities', (c) => c.json({ agent: agents?.available ?? false, terminal: !!projects, assessment: agents?.available ?? false }));
   if (agents) {
     api.post('/spaces/:space/plan', async (c) => c.json(agents.plan(c.req.param('space'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/tasks/:task/retry', (c) => c.json(agents.retryTask(c.req.param('space'), c.req.param('task'), c.req.header('Idempotency-Key') ?? '')));

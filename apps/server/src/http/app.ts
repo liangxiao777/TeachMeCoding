@@ -19,7 +19,9 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
     c.header('X-Frame-Options', 'DENY');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('Cross-Origin-Resource-Policy', 'same-origin');
-    c.header('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+    // xterm's DOM renderer generates cell/color styles. Script execution stays
+    // same-origin; only styles need the inline allowance.
+    c.header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
     const api = c.req.path === '/api' || c.req.path.startsWith('/api/');
     if (api) c.header('Cache-Control', 'no-store');
     const publicRead = ['GET', 'HEAD'].includes(c.req.method) && ['/api/health', '/api/access'].includes(c.req.path);

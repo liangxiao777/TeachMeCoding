@@ -4,3 +4,4 @@ export interface HealthResponse {
 }
 
 export * from './workspace.js';
+export * from './terminal.js';

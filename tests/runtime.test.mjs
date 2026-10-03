@@ -7,6 +7,8 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { createRequire } from 'node:module';
+const { WebSocket } = createRequire(new URL('../apps/server/package.json', import.meta.url))('ws');
 
 test('compiled teaching prompt assets load without a source-tree cwd', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'tmc-prompt-assets-'));
@@ -43,6 +45,7 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
   let logs = '';
   child.stdout.on('data', (data) => { logs += data; });
   child.stderr.on('data', (data) => { logs += data; });
+  let terminalPid;
   try {
     await new Promise((resolve, reject) => {
       child.stdout.on('data', (data) => { if (data.toString().includes('listening')) resolve(); });
@@ -92,7 +95,7 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
       'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13',
       'Sec-WebSocket-Protocol': `tmc-terminal, tmc-token.${token}`,
     };
-    assert.equal((await rawRequest('/api/terminal/socket', upgrade)).status, 501);
+    assert.equal((await rawRequest('/api/terminal/socket', upgrade)).status, 400);
     for (const [changed, expected] of [
       [{ 'Sec-WebSocket-Protocol': 'tmc-terminal' }, 401],
       [{ 'Sec-WebSocket-Protocol': `tmc-terminal, tmc-token.${'0'.repeat(64)}` }, 401],
@@ -104,10 +107,28 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
     for (const path of ['/.env', '/@fs/../../.env', '/apps/server/src/config/model.ts']) {
       assert.equal((await rawRequest(path)).status, 404);
     }
+    const created = await fetch(`${base}/api/spaces`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ name: 'Disposable terminal', goal: 'Synthetic local execution' }) });
+    const space = await created.json();
+    assert.equal(created.status, 200);
+    const socket = new WebSocket(`ws://127.0.0.1:14310/api/terminal/socket?space=${space.id}`, ['tmc-terminal', `tmc-token.${token}`], { origin: base });
+    await new Promise((resolve, reject) => {
+      let output = '';
+      socket.on('error', reject);
+      socket.on('message', (raw) => {
+        const event = JSON.parse(raw.toString());
+        if (event.type === 'snapshot') socket.send(JSON.stringify({ type: 'input', id: event.id, data: "printf 'OWNED_PID=%s\\n' $$; printenv OPENROUTER_API_KEY; printf 'NO_KEY=%s\\n' $?\r" }));
+        if (event.type === 'data') output += event.data;
+        if (/NO_KEY=1\r?\n/.test(output)) {
+          terminalPid = Number(output.match(/OWNED_PID=(\d+)/)[1]);
+          assert.ok(!output.includes(syntheticSecret)); socket.close(); resolve();
+        }
+      });
+    });
     assert.ok(![html, await js.text(), bootstrap.body, checked.body, logs].some((value) => value.includes(syntheticSecret)));
   } finally {
     child.kill('SIGTERM');
     await exited;
+    if (terminalPid) assert.throws(() => process.kill(terminalPid, 0), { code: 'ESRCH' });
     await rm(cwd, { recursive: true, force: true });
   }
 });

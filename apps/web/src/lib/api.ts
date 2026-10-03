@@ -16,7 +16,8 @@ function requestId() {
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
-async function access() {
+export async function access(refresh = false) {
+  if (refresh) token = undefined;
   token ??= fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } }).then(async (response) => {
     if (!response.ok) throw new ApiError(response.status, '无法连接本地服务，请重试。');
     return (await response.json() as { token: string }).token;

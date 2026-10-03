@@ -14,7 +14,7 @@ const stat = (path: string) => {
 
 export class Projects {
   constructor(readonly dataRoot: string) {}
-  private root(space: string) {
+  root(space: string) {
     idSchema.parse(space);
     const projects = join(this.dataRoot, 'projects');
     const root = join(projects, space);
