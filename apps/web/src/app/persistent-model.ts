@@ -243,10 +243,13 @@ export function usePersistentModel(): AppModel {
     if (subscriptions.current.has(work.id)) return
     const controller = new AbortController()
     subscriptions.current.set(work.id, controller)
-    let cursor = 0, text = '', terminal = false
-    let parts: AgentDisplayPart[] = []
+    const saved = cache.current[space]?.ui.sessions.find((s) => s.id === work.sessionId)?.messages.find((m) => m.id === work.id)
+    let cursor = saved?.sequence ?? 0, text = saved?.text ?? ''
+    let terminal = !['pending', 'running'].includes(work.state) || !!saved?.status && ['done', 'error', 'stopped'].includes(saved.status)
+    let parts: AgentDisplayPart[] = saved?.parts ?? []
     const receive = (event: RunEvent) => {
-      if (event.runId !== work.id || event.seq <= cursor) return
+      if (terminal || event.runId !== work.id || event.seq <= cursor) return
+      setConnection('')
       cursor = event.seq
       parts = applyAgentEvent(parts, event)
       if (event.data.type === 'text') text += event.data.delta
@@ -277,9 +280,10 @@ export function usePersistentModel(): AppModel {
             if (controller.signal.aborted) return
             if (terminal) {
               await refreshBusiness(space)
-              if (work.kind === 'evaluation') {
+              if (work.kind === 'evaluation' || work.kind === 'roadmap') {
                 const final = await api<AgentRun>(`/spaces/${space}/runs/${work.id}`)
-                if (final.state === 'succeeded' && final.resultId) changeUi(space, (s) => s.view === 'assessment' && s.currentUnitId === work.unitId
+                if (work.kind === 'roadmap') change(space, (s) => latestPlan(s.saved)?.id === work.id ? { ...s, planningError: final.error } : s)
+                if (work.kind === 'evaluation' && final.state === 'succeeded' && final.resultId) changeUi(space, (s) => s.view === 'assessment' && s.currentUnitId === work.unitId
                   ? { ...s, view: 'result', viewingRecordId: final.resultId! } : s)
               }
               setConnection(''); return
@@ -288,6 +292,17 @@ export function usePersistentModel(): AppModel {
           } catch {
             if (controller.signal.aborted) return
             setConnection('事件连接中断，正在重连；后台运行不会重新提交。')
+            // A dead SSE connection must not hide a durable terminal state. Drain
+            // every page before using the run state; a backlog can exceed 500 events.
+            try {
+              let page: RunEvents
+              do {
+                page = await api<RunEvents>(`/spaces/${space}/runs/${work.id}/events?after=${cursor}`)
+                if (controller.signal.aborted) return
+                page.events.forEach(receive)
+              } while (!terminal && page.events.length === 500)
+              terminal ||= !['pending', 'running'].includes(page.run.state)
+            } catch { /* The next subscription/poll resumes from the same cursor. */ }
             await new Promise((resolve) => setTimeout(resolve, 1000))
           }
         }

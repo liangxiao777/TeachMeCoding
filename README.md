@@ -6,6 +6,8 @@
 
 所有 Agent 会话及学习需求入口使用通过 shadcn 官方 registry 导入的 AI Elements：Conversation、Message、PromptInput、Reasoning、Tool 和 ChainOfThought。源码在 `apps/web/src/components/ai-elements`，配置在 `apps/web/components.json`；仅对新组件做 Base UI 组合、事件及状态适配，不覆盖已有基础组件。模型与传输仍使用 Pi 和现有 SSE，不使用 Vercel AI SDK 的 `useChat` 或服务端协议。流式 Markdown 支持表格、代码、数学公式；代码块保留「带入 IDE」，行内代码没有该操作。
 
+正式生成页按真实事件区分分析、生成内容、校验和保存；工具参数生成只显示累计字符数，不公开参数正文，也不等于工具已执行或产物已保存。本页连续 30 秒没有新进度会提示等待，连接心跳不算模型进度；SSE 静默断线后通过持久事件游标恢复，不会自动重发模型请求。请求诊断清单记录响应 ID、HTTP 状态、接收事件数及时间、结束原因和错误指纹，不保留原始 Provider 错误正文或凭据。
+
 Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsource 包随构建分发，中文优先使用原型已有的系统字体；Lucide 图标编入应用，站点图标随静态资源提供。不需要 Next.js，也不请求在线字体或 Analytics。
 
 ## 界面演示与开发夹具

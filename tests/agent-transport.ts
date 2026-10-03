@@ -81,6 +81,31 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         { id: randomUUID(), title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
         { id: randomUUID(), title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
       ] }];
+      if (all.includes('PLAN-STREAM-ERROR')) {
+        const stream = createAssistantMessageEventStream();
+        void (async () => {
+          const tool = { type: 'toolCall' as const, id: 'streamed-route', name: 'submit_route_proposal', arguments: { note: 'PRIVATE-STREAMED-ROUTE', stages } };
+          const partial = reply([{ type: 'thinking', thinking: '核对需求。'.repeat(121) }, tool], 'pending');
+          stream.push({ type: 'start', partial: reply([], 'pending') });
+          stream.push({ type: 'thinking_start', contentIndex: 0, partial });
+          for (const delta of '核对需求。'.repeat(121)) stream.push({ type: 'thinking_delta', contentIndex: 0, delta, partial });
+          // Like the real OpenAI-completions adapter, do not send thinking_end
+          // before tool arguments; a later provider failure omits it entirely.
+          stream.push({ type: 'toolcall_start', contentIndex: 1, partial });
+          const json = JSON.stringify(tool.arguments);
+          for (const delta of [json.slice(0, 10), json.slice(10, 40), json.slice(40)]) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            stream.push({ type: 'toolcall_delta', contentIndex: 1, delta, partial });
+          }
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 12_000);
+            options?.signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+          });
+          const reason = options?.signal?.aborted ? 'aborted' : 'error';
+          stream.push({ type: 'error', reason, error: { ...partial, stopReason: reason, errorMessage: 'PRIVATE-PROVIDER-ERROR' } });
+        })();
+        return stream;
+      }
       return response(reply([{ type: 'toolCall', id: 'route-call', name: 'submit_route_proposal', arguments: {
         note: previous ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages,
       } }], 'toolUse'));

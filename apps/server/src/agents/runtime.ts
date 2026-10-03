@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
@@ -222,6 +222,8 @@ export class TeachingRuntime {
     // Publish real phase/tool activity, but never their unvalidated model prose.
     const displayModelText = frozen.scenario !== 'assessment' && frozen.scenario !== 'evaluation';
     const toolSources: unknown[] = [];
+    const toolParts = new Map<string, string>(), inputCharacters = new Map<string, number>();
+    let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
     let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -251,7 +253,12 @@ export class TeachingRuntime {
               mkdirSync(this.options.debugDirectory, { recursive: true, mode: 0o700 });
               writeFileSync(join(this.options.debugDirectory, `${id}-${request}.json`), JSON.stringify({ manifest, messages: compiled.messages }), { mode: 0o600, flag: 'wx' });
             }
-            return await this.stream(model, normalizeContext({ messages: compiled.messages }), { ...options, maxTokens: Math.min(budget.output, budget.outputTotal - output) });
+            transport = { startedAt: Date.now(), httpStatus: null, eventCount: 0, lastEventAt: null };
+            return await this.stream(model, normalizeContext({ messages: compiled.messages }), {
+              ...options, maxTokens: Math.min(budget.output, budget.outputTotal - output),
+              onResponse: (response) => { transport.httpStatus = response.status; },
+              onProviderStreamEvent: () => { transport.eventCount++; transport.lastEventAt = Date.now(); },
+            });
           } catch (error) {
             failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
             return failureStream(failure);
@@ -268,8 +275,13 @@ export class TeachingRuntime {
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
             output += m.usage.output;
-            this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
-              .run(JSON.stringify(m.usage), space, id, request);
+            // Keep enough transport evidence for diagnosis without retaining provider
+            // error bodies, headers, credentials, or an invented zero-token usage.
+            const diagnostic = { ...transport, elapsedMs: transport ? Date.now() - transport.startedAt : null,
+              responseId: m.responseId ?? null, stopReason: m.stopReason,
+              errorFingerprint: m.errorMessage ? createHash('sha256').update(m.errorMessage).digest('hex') : null };
+            this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?),'$.transport',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
+              .run(JSON.stringify(m.stopReason === 'error' && m.usage.totalTokens === 0 ? null : m.usage), JSON.stringify(diagnostic), space, id, request);
           }
         }
         if (!active(this.get(space, id))) return;
@@ -292,9 +304,20 @@ export class TeachingRuntime {
               ...(update.type === 'thinking_delta' ? { delta: update.delta } : {}),
             });
           }
+          if (update.type === 'toolcall_start' || update.type === 'toolcall_delta' || update.type === 'toolcall_end') {
+            const native = update.partial.content[update.contentIndex];
+            if (native?.type === 'toolCall') {
+              const partId = `${id}:${request}:tool-input:${update.contentIndex}`;
+              toolParts.set(`${request}:${native.id}`, partId);
+              const count = (inputCharacters.get(partId) ?? 0) + (update.type === 'toolcall_delta' ? update.delta.length : 0);
+              inputCharacters.set(partId, count);
+              this.emit(space, id, { type: 'tool', callId: partId, name: native.name,
+                phase: update.type === 'toolcall_end' ? 'ready' : 'input', inputCharacters: count });
+            }
+          }
         }
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') this.emit(space, id,
-          { type: 'tool', callId: `${id}:${request}:tool:${event.toolCallId}`, name: event.toolName,
+          { type: 'tool', callId: toolParts.get(`${request}:${event.toolCallId}`) ?? `${id}:${request}:tool:${event.toolCallId}`, name: event.toolName,
             phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
       await agent.prompt({ role: 'user', content: frozen.references.length ? [
@@ -304,7 +327,8 @@ export class TeachingRuntime {
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
       if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
-        last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。' : '模型请求失败或中断，未保存生成产物。');
+        last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
+          : '模型响应未正常完成，未保存生成产物。可以重试；若反复发生，请检查模型服务状态。');
       this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();

@@ -36,6 +36,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
       let cursor = Number(c.req.query('after') ?? 0);
       agents.events(space, run, cursor); // Validate before starting a successful stream response.
       return streamSSE(c, async (stream) => {
+        let heartbeat = Date.now();
         while (!stream.aborted) {
           const result = agents.events(space, run, cursor);
           for (const event of result.events) {
@@ -43,6 +44,10 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
             cursor = event.seq;
           }
           if (!['pending', 'running'].includes(result.run.state) && result.events.length < 500) return;
+          if (Date.now() - heartbeat >= 5000) {
+            await stream.write(': keep-alive\n\n'); // Connection health, never model progress.
+            heartbeat = Date.now();
+          }
           await stream.sleep(100);
         }
       }); // Subscription cancellation never calls agents.stop().

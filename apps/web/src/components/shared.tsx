@@ -144,8 +144,9 @@ export function Generating({
   parts?: AgentDisplayPart[]
 }) {
   const [simulated, setActive] = useState(0)
-  const recordedStep = parts === undefined ? undefined : parts.some((p) => p.type === 'tool' && p.status === 'done') ? 2
-    : parts.some((p) => p.type === 'tool') ? 1 : 0
+  const tool = parts?.findLast((p) => p.type === 'tool')
+  const recordedStep = parts === undefined ? undefined : tool?.status === 'done' ? 3
+    : tool?.status === 'running' ? 2 : tool ? 1 : 0
   const active = recordedStep ?? simulated
   useEffect(() => {
     if (recordedStep !== undefined) return

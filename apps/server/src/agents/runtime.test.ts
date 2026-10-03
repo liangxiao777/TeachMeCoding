@@ -126,7 +126,13 @@ test('protected SSE reconnect reads missing events and disconnect does not stop 
   let complete!: () => void;
   const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => {
     const stream = createAssistantMessageEventStream();
-    complete = () => stream.push({ type: 'done', reason: 'stop', message: reply([]) }); return stream;
+    complete = () => {
+      const partial = reply([{ type: 'text', text: 'x'.repeat(600) }]);
+      stream.push({ type: 'start', partial });
+      for (let i = 0; i < 600; i++) stream.push({ type: 'text_delta', contentIndex: 0, delta: 'x', partial });
+      stream.push({ type: 'done', reason: 'stop', message: partial });
+    };
+    return stream;
   } });
   const access = createLocalAccess(serverConfig({ NODE_ENV: 'production', PORT: '14320' }));
   const app = createApp(access, learning, undefined, runtime);
@@ -143,7 +149,10 @@ test('protected SSE reconnect reads missing events and disconnect does not stop 
     assert.equal(runtime.get(a.id, run.id).state, 'running');
     complete(); await runtime.idle(run.id);
     const replay = await app.request(`${path}?after=2`, { headers });
-    const text = await replay.text(); assert.match(text, /"seq":3/); assert.ok(!text.includes('"seq":1'));
+    const text = await replay.text();
+    const events = text.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
+    assert.deepEqual(events.map((event) => event.seq), Array.from({ length: 601 }, (_, i) => i + 3));
+    assert.equal(events.at(-1)?.data.state, 'succeeded', 'SSE must drain beyond its first 500-event page');
   } finally { complete?.(); await runtime.close(); db.close(); }
 });
 
@@ -364,4 +373,75 @@ test('legacy display events reduce immutably in order and terminal states do not
   ]);
   assert.deepEqual(applyAgentEvent([], { runId: 'legacy', seq: 1, data: { type: 'tool', name: 'read', phase: 'end', failed: true } }),
     [{ type: 'tool', id: 'legacy:legacy-tool:1', name: 'read', status: 'error' }]);
+});
+
+test('real Pi adapter exposes argument progress before delayed thinking_end and never executes a failed stream', async () => {
+  for (const mode of ['success', 'failure', 'cancel'] as const) {
+    const { db, learning, a, sa } = setup();
+    const adapter = providerStream();
+    let requests = 0, executions = 0, commits = 0;
+    let wire!: ReadableStreamDefaultController<Uint8Array>;
+    const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
+    const chunk = (delta: unknown, finish_reason: string | null = null) => ({ id: 'gen-synthetic-stream', object: 'chat.completion.chunk', created: 1,
+      model: teachingModel.id, choices: [{ index: 0, delta, finish_reason }] });
+    const runtime = new TeachingRuntime(learning, syntheticConfig, {
+      scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
+        async execute() { executions++; return { content: [{ type: 'text', text: 'tool result' }], details: {} }; } }], commit() { commits++; } }),
+      stream: (model, context, options) => adapter(model, context, { ...options, fetch: async () => {
+        requests++;
+        const body = requests === 1 ? new ReadableStream<Uint8Array>({ start(controller) { wire = controller; } })
+          : new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encode(chunk({ content: 'Finished.' }, 'stop'))); controller.close(); } });
+        return new Response(body, { headers: { 'content-type': 'text/event-stream', 'x-private': 'PRIVATE-HEADER' } });
+      } }),
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(mode));
+      for (let i = 0; i < 100 && !wire; i++) await new Promise((r) => setTimeout(r, 1));
+      assert.ok(wire);
+      wire.enqueue(encode(chunk({ reasoning: 'Analyse the request.' })));
+      wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, id: 'native-call', type: 'function', function: { name: 'read', arguments: '{"marker":' } }] })));
+      wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, function: { arguments: '"PRIVATE-ARGUMENT"}' } }] })));
+      for (let i = 0; i < 100 && !runtime.events(a.id, run.id).events.some((e) => e.data.type === 'tool' && e.data.inputCharacters === 29); i++) await new Promise((r) => setTimeout(r, 1));
+      const before = learning.session(a.id, sa).messages.at(-1)!;
+      assert.deepEqual(before.parts, [
+        { type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'Analyse the request.', status: 'streaming' },
+        { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating', inputCharacters: 29 },
+      ]);
+      assert.equal(executions, 0, 'Even complete-looking JSON is not permission to execute before normal stream termination');
+      if (mode === 'failure') wire.enqueue(encode({ error: { code: 502, message: 'PRIVATE-PROVIDER-ERROR', metadata: { raw: 'PRIVATE-ERROR-BODY' } } }));
+      else if (mode === 'cancel') runtime.stop(a.id, run.id);
+      else wire.enqueue(encode(chunk({}, 'tool_calls')));
+      wire.close();
+      await runtime.idle(run.id);
+      const events = runtime.events(a.id, run.id).events;
+      const toolEvents = events.flatMap((e) => e.data.type === 'tool' ? [e.data] : []);
+      assert.deepEqual(toolEvents.map((e) => e.phase), mode === 'success' ? ['input', 'input', 'input', 'ready', 'start', 'end'] : ['input', 'input', 'input']);
+      assert.equal(new Set(toolEvents.map((e) => e.callId)).size, 1);
+      assert.equal(executions, mode === 'success' ? 1 : 0);
+      assert.equal(commits, mode === 'success' ? 1 : 0);
+      assert.equal(requests, mode === 'success' ? 2 : 1, 'No automatic retry on a failed stream');
+      assert.equal(runtime.get(a.id, run.id).state, mode === 'success' ? 'succeeded' : mode === 'failure' ? 'failed' : 'interrupted');
+      const hydrated = learning.session(a.id, sa).messages.at(-1)!;
+      assert.deepEqual(hydrated.parts, events.reduce<AgentDisplayPart[]>(applyAgentEvent, []));
+      const tool = hydrated.parts?.find((p) => p.type === 'tool');
+      assert.equal(tool?.type === 'tool' && tool.status, mode === 'success' ? 'done' : 'interrupted');
+      assert.doesNotMatch(JSON.stringify({ events, hydrated }), /PRIVATE-/);
+      const retained = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
+      assert.doesNotMatch(retained, /PRIVATE-PROVIDER-ERROR|PRIVATE-ERROR-BODY|PRIVATE-HEADER/);
+      const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests WHERE request=1').get() as { value: string }).value);
+      assert.equal(manifest.transport.httpStatus, 200, 'An SSE error is not an HTTP response status');
+      assert.equal(manifest.transport.responseId, 'gen-synthetic-stream');
+      assert.ok(manifest.transport.eventCount >= 3);
+      assert.ok(manifest.transport.lastEventAt >= manifest.transport.startedAt);
+      assert.ok(manifest.transport.elapsedMs >= 0);
+      if (mode === 'failure') {
+        assert.equal(manifest.actualUsage, null);
+        assert.match(manifest.transport.errorFingerprint, /^[a-f0-9]{64}$/);
+      }
+      assert.doesNotMatch(JSON.stringify(manifest), /PRIVATE-/);
+    } finally {
+      try { wire?.close(); } catch { /* Already closed by the fixture or adapter. */ }
+      await runtime.close(); db.close();
+    }
+  }
 });

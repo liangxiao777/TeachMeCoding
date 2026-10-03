@@ -302,7 +302,7 @@ export function Onboarding() {
               </div>
             ) : <Generating
               title={`正在为「${space.name}」规划学习路线`}
-              steps={persistence ? ['模型规划学习路线', '校验路线结构', '保存完整路线'] : ['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
+              steps={persistence ? ['分析学习需求', '生成路线内容', '校验路线结构', '保存完整路线'] : ['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
               note="这一步只生成路线和单元概要。每个单元的课件，会在你进入该单元时结合你当时的学习情况再生成。"
               parts={persistence ? planningParts : undefined}
             />}

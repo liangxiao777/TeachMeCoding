@@ -115,7 +115,7 @@ export function AssessmentView() {
         {draft.state === 'generating' && capabilities.assessment ? (
           <Card>
             <CardContent>
-              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['模型生成题目', '校验题目与独立评分标准', '保存题目'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']}
+              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['分析单元与课件', '生成题目', '校验题目与独立评分标准', '保存题目'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']}
                 parts={persistence ? persistence.taskParts[task?.id ?? ''] ?? [] : undefined} />
             </CardContent>
           </Card>
