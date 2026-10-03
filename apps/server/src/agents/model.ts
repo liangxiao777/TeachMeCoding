@@ -6,10 +6,10 @@ import { budget } from './context.js';
 // OpenRouter /api/v1/models, checked 2026-10-03. Prices are USD / million tokens.
 // Application budgets below are deliberately much smaller than the provider limits.
 export const teachingModel: Model<'openai-completions'> = {
-  id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', provider: 'openrouter', api: 'openai-completions',
+  id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha', provider: 'openrouter', api: 'openai-completions',
   baseUrl: 'https://openrouter.ai/api/v1', reasoning: true, input: ['text', 'image'],
-  contextWindow: 1_048_576, maxTokens: 943_718,
-  cost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0.3 },
+  contextWindow: 1_000_000, maxTokens: 524_288,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   compat: { thinkingFormat: 'openrouter', maxTokensField: 'max_tokens' },
   samplingParams: { reasoning: { enabled: true, effort: budget.reasoning } },
 };

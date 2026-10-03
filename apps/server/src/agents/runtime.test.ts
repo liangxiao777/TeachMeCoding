@@ -219,7 +219,7 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
     const { run } = runtime.submit(a.id, sa, randomUUID(), message('serialize, do not send'));
     await runtime.idle(run.id);
     assert.equal(runtime.get(a.id, run.id).state, 'failed');
-    assert.equal(payload?.model, teachingModel.id);
+    assert.equal(payload?.model, 'stealth/space-bunny-alpha');
     assert.equal(payload?.max_tokens, budget.output);
     assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
     assert.ok(!JSON.stringify(payload).includes(syntheticConfig.apiKey));

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { type AgentEvent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
-import { createAssistantMessageEventStream, createModels, Type, type AssistantMessage } from '@earendil-works/pi-ai';
-import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter';
+import { createAssistantMessageEventStream, normalizeContext, Type, type AssistantMessage } from '@earendil-works/pi-ai';
 import { createProviderAgent } from './provider.js';
+import { providerStream } from './model.js';
 
 const config = { apiKey: 'synthetic-private-key', model: 'exact/configured-id' };
 function message(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
@@ -39,6 +39,7 @@ test('exact model and private key reach the stream; text and terminal lifecycle 
     assert.equal(model.id, 'exact/configured-id');
     assert.equal(model.provider, 'openrouter');
     assert.equal(options?.apiKey, 'synthetic-private-key');
+    assert.equal(options?.reasoning, 'high');
     assert.ok(options?.signal);
     return stream(message([{ type: 'text', text: 'hello 42' }]));
   } });
@@ -52,24 +53,24 @@ test('exact model and private key reach the stream; text and terminal lifecycle 
   assert.ok(!JSON.stringify(events).includes(config.apiKey));
 });
 
-test('real adapter preserves the output cap and disables upstream reasoning before transport', async () => {
-  const models = createModels();
-  models.setProvider(openrouterProvider());
+test('smoke uses the teaching output cap and mandatory high reasoning before transport', async () => {
   let payload: Record<string, unknown> | undefined;
-  const result = await models.streamSimple(createProviderAgent(config).state.model, {
+  const agent = createProviderAgent(config);
+  const stream = await providerStream()(agent.state.model, normalizeContext({
     messages: [{ role: 'user', content: 'Reply with exactly: Hello 42', timestamp: 0 }],
-  }, {
-    apiKey: config.apiKey, maxTokens: 256,
+  }), {
+    apiKey: config.apiKey, reasoning: 'high',
     onPayload(value) {
       payload = value as Record<string, unknown>;
       throw new Error('Test stops before network transport');
     },
-  }).result();
+  });
+  const result = await stream.result();
   assert.equal(result.stopReason, 'error');
   assert.equal(result.errorMessage, 'Test stops before network transport');
   assert.equal(payload?.model, 'exact/configured-id');
-  assert.equal(payload?.max_tokens, 256);
-  assert.deepEqual(payload?.reasoning, { enabled: false });
+  assert.equal(payload?.max_tokens, 4096);
+  assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
 });
 
 test('one validated tool call returns its result to the next model turn', async () => {
