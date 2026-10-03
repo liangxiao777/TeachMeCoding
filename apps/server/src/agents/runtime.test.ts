@@ -91,6 +91,28 @@ test('tool-result second request is budgeted; persisted messages omit source bod
   }
 });
 
+test('cancelling a multi-tool turn retains matching native results without committing or copying bodies', async () => {
+  const { db, learning, a, sa } = setup();
+  let entered!: () => void, release!: () => void, commits = 0;
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const runtime = new TeachingRuntime(learning, syntheticConfig, {
+    scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'synthetic only', parameters: Type.Object({}),
+      async execute() { entered(); await held; return { content: [{ type: 'text', text: 'CANCELLED-SOURCE-BODY' }], details: {} }; } }], commit() { commits++; } }),
+    stream: () => response(reply(['first', 'second'].map((id) => ({ type: 'toolCall', id, name: 'read', arguments: {} })), 'toolUse')),
+  });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('read twice'));
+    await ready; runtime.stop(a.id, run.id); release(); await runtime.idle(run.id);
+    const values = db.prepare('SELECT value FROM agent_messages ORDER BY seq').all() as { value: string }[];
+    const results = values.map((r) => JSON.parse(r.value)).filter((m) => m.role === 'toolResult');
+    assert.deepEqual(results.map((m) => m.toolCallId), ['first', 'second']);
+    assert.equal(results[1].isError, true); assert.match(JSON.stringify(results[1]), /host recovery marker/);
+    assert.doesNotMatch(JSON.stringify(values), /CANCELLED-SOURCE-BODY/);
+    assert.equal(commits, 0); assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
+  } finally { release(); await runtime.close(); db.close(); }
+});
+
 test('protected SSE reconnect reads missing events and disconnect does not stop a run', async () => {
   const { db, learning, a, sa } = setup();
   let complete!: () => void;
@@ -125,11 +147,24 @@ test('startup appends an interrupted event once and does not replay a pending re
     const id = randomUUID();
     data.db.prepare("INSERT INTO runs VALUES (?,?,NULL,?,'intake','running')").run(a.id, id, a.sessions[0]!.id);
     data.db.prepare("INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,'{}',0)").run(a.id, id);
+    const task = randomUUID();
+    data.db.prepare("INSERT INTO tasks VALUES (?,?,NULL,NULL,'assessment','pending')").run(a.id, task);
+    data.db.prepare("INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,'{}',0)").run(a.id, task);
+    const call = JSON.stringify(reply([{ type: 'toolCall', id: 'unfinished', name: 'read', arguments: { path: 'synthetic.txt' } }], 'toolUse'));
+    data.db.prepare('INSERT INTO agent_messages VALUES (?,?,1,1,?)').run(a.id, id, call);
+    data.db.prepare('INSERT INTO task_messages VALUES (?,?,1,1,?)').run(a.id, task, call);
     data.close(); data = openDataDirectory(root);
     let runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
     assert.equal(runtime.get(a.id, id).state, 'interrupted');
     assert.equal(runtime.events(a.id, id).events[0]?.data.type, 'state');
+    assert.equal(runtime.get(a.id, task).state, 'interrupted');
+    assert.equal(runtime.events(a.id, task).events[0]?.data.type, 'state');
     data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
     assert.equal(runtime.events(a.id, id).events.length, 1);
+    assert.equal(runtime.events(a.id, task).events.length, 1);
+    for (const table of ['agent_messages', 'task_messages']) {
+      const rows = data.db.prepare(`SELECT value FROM ${table} ORDER BY seq`).all();
+      assert.equal(rows.length, 2); assert.match(JSON.stringify(rows), /host recovery marker/);
+    }
   } finally { data.close(); rmSync(root, { recursive: true, force: true }); }
 });

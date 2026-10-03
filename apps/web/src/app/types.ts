@@ -109,6 +109,7 @@ export interface AssessmentRecord {
   toVerify: string[]
   valid?: boolean
   verification?: string
+  q2Kind?: 'code' | 'reasoning'
 }
 
 export type SpaceView = 'onboarding' | 'planning' | 'route' | 'unit' | 'assessment' | 'result'

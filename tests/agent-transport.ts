@@ -4,15 +4,18 @@ import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-ag
 import { reply, response } from '../apps/server/src/agents/test-support.js';
 
 // Deterministic test provider ONLY. Real HTTP, SQLite, Pi loop and UI are not mocked.
+let evaluationFailed = false;
 export const agentTransport: StreamFn = (_model, context, options) => {
   const last = context.messages.at(-1);
   const user = [...context.messages].reverse().find((m) => m.role === 'user');
   const text = JSON.stringify(user?.content);
+  const all = JSON.stringify(context);
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
   if (last?.role !== 'toolResult') {
     if (text.includes('失败')) return response(reply([], 'error'));
+    if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }
     if (has('submit_assessment')) return response(reply([{ type: 'toolCall', id: 'assessment-call', name: 'submit_assessment', arguments: {
-      public: { q1: '解释命令行参数来自哪里', q2: '读取并输出参数个数', starter: '', q2Kind: 'code' },
+      public: { q1: '解释命令行参数来自哪里', q2: all.includes('纯推理') ? '说明零个参数与两个参数的区别' : '读取并输出参数个数', starter: 'import sys\n', q2Kind: all.includes('纯推理') ? 'reasoning' : 'code' },
       rubric: { q1: { answer: 'PRIVATE-RUBRIC', criteria: ['调用者'] }, q2: { answer: 'PRIVATE-CODE', criteria: ['正确计数'] } },
     } }], 'toolUse'));
     if (has('submit_evaluation')) return response(reply([{ type: 'toolCall', id: 'evaluation-call', name: 'submit_evaluation', arguments: {
@@ -35,7 +38,7 @@ export const agentTransport: StreamFn = (_model, context, options) => {
       ] }],
     } }], 'toolUse'));
     if (!text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
-      goal: '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
+      goal: text.includes('纯推理') ? '纯推理' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
     } }], 'toolUse'));
   }
   const stream = createAssistantMessageEventStream();

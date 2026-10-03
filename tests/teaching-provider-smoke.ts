@@ -37,7 +37,28 @@ try {
   const session = learning.createSession(space.id, { scope: 'unit', unitId: unit, title: '合成辅导' });
   await ask(session.id, '只读取当前目录合成的 sample.py，说明无参数和传入 Lin 时返回值的区别，勿读取其他文件。不运行代码。提交一条关于默认参数的待采纳学习结论。');
   assert.ok(learning.conclusions(space.id).length);
+  const reads = (db.prepare("SELECT COUNT(*) n FROM agent_messages WHERE json_extract(value,'$.role')='toolResult' AND json_extract(value,'$.toolName')='read' AND json_extract(value,'$.isError')=0").get() as { n: number }).n;
+  assert.ok(reads > 0, 'Real tutor completed a read, not just a claim in its reply');
+  const questions = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 0 });
+  await runtime.idle(questions.id);
+  const questionsFinal = runtime.get(space.id, questions.id);
+  console.log(JSON.stringify({ scenario: 'assessment', state: questionsFinal.state, error: questionsFinal.error }));
+  assert.equal(questionsFinal.state, 'succeeded');
+  const spec = learning.unit(space.id, unit).assessment!;
+  assert.equal(spec.revision, 1);
+  const evaluation = runtime.generate(space.id, unit, randomUUID(), { kind: 'evaluation', revision: 0, specRevision: spec.revision,
+    q1: '默认参数在调用时缺省实参时使用；显式传参会覆盖默认值。这里没传 name 时使用 Ada，传入 Lin 时使用 Lin。',
+    q2: 'def greet(name="Ada"):\n    return "Hi " + name\n' });
+  learning.saveAssessmentDraft(space.id, unit, { revision: 0, q1: '评估期间新草稿，不属于提交', q2: 'new draft' });
+  await runtime.idle(evaluation.id);
+  const evaluationFinal = runtime.get(space.id, evaluation.id);
+  console.log(JSON.stringify({ scenario: 'evaluation', state: evaluationFinal.state, error: evaluationFinal.error }));
+  assert.equal(evaluationFinal.state, 'succeeded');
+  const record = learning.unit(space.id, unit).records[0]!;
+  if (spec.q2Kind === 'code') { assert.equal(record.result, 'unverified'); assert.equal(record.valid, false); }
+  assert.equal(learning.unit(space.id, unit).draft.q1, '评估期间新草稿，不属于提交');
+  console.log(JSON.stringify({ q2Kind: spec.q2Kind, result: record.result, verification: record.verification, attempt: record.attempt }));
   console.log(JSON.stringify({ requests: (db.prepare('SELECT COUNT(*) AS n FROM context_manifests').get() as { n: number }).n,
     taskRequests: (db.prepare('SELECT COUNT(*) AS n FROM task_manifests').get() as { n: number }).n,
-    lessonBlocks: learning.unit(space.id, unit).lesson!.blocks!.length, conclusions: learning.conclusions(space.id).length }));
+    lessonBlocks: learning.unit(space.id, unit).lesson!.blocks!.length, conclusions: learning.conclusions(space.id).length, reads }));
 } finally { await runtime.close(); db.close(); rmSync(root, { recursive: true, force: true }); }

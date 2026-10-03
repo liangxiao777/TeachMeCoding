@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { openDatabase } from './database.js';
+import { sealToolCalls } from './agent-messages.js';
 
 export function dataDirectory(environment: NodeJS.ProcessEnv = process.env) {
   const root = environment.TMC_DATA_DIR ?? join(homedir(), '.teach-me-coding');
@@ -40,6 +41,10 @@ export function openDataDirectory(directory: string) {
           WHERE (space_id,id) IN (SELECT space_id,id FROM runs WHERE state IN ('pending','running'))`).run();
         db.prepare("UPDATE runs SET state='interrupted' WHERE state IN ('pending','running')").run();
         db.prepare("UPDATE tasks SET state='interrupted' WHERE state IN ('pending','running')").run();
+        for (const [work, messages] of [['runs', 'agent_messages'], ['tasks', 'task_messages']] as const) {
+          const interrupted = db.prepare(`SELECT space_id,id FROM ${work} WHERE state='interrupted'`).all() as { space_id: string; id: string }[];
+          for (const row of interrupted) sealToolCalls(db, messages, row.space_id, row.id);
+        }
       })();
     } catch (error) { db.close(); throw error; }
     let closed = false;

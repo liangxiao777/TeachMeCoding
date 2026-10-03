@@ -96,6 +96,7 @@ export function ResultView() {
   )
   const passed = record.result === 'pass'
   const unverified = record.result === 'unverified'
+  const expired = record.verification === 'non-execution' && record.valid === false
   const unit = findUnit(space, record.unitId)
   const next = nextUnit(space, record.unitId)
   const isLatest = [...space.records].reverse().find((r) => r.unitId === record.unitId)?.id === record.id
@@ -124,10 +125,10 @@ export function ResultView() {
               </div>
               <div className="flex flex-col gap-1">
                 <Badge variant={passed ? 'default' : 'secondary'} className="w-fit">
-                  {unverified ? '尚未验证' : passed ? '通过' : '需要加强'}
+                  {expired ? '历史结论 · 来源已变化' : unverified ? '尚未验证' : passed ? '通过' : '需要加强'}
                 </Badge>
                 <CardTitle className="text-2xl tracking-tight">
-                  {unverified ? '代码尚未通过真实执行验证' : passed ? '你已经掌握了这个单元' : '再巩固一下会更扎实'}
+                  {expired ? '此结果基于旧版本，请重新测评' : unverified ? '代码尚未通过真实执行验证' : passed ? '你已经掌握了这个单元' : '再巩固一下会更扎实'}
                 </CardTitle>
               </div>
             </div>
@@ -135,7 +136,7 @@ export function ResultView() {
           </CardHeader>
         </Card>
 
-        {passed && space.completed && !next && isLatest && (
+        {passed && !expired && space.completed && !next && isLatest && (
           <Alert>
             <Trophy aria-hidden />
             <AlertTitle>学习路线已完成</AlertTitle>
@@ -159,19 +160,20 @@ export function ResultView() {
             <div className="flex flex-col gap-3 border-t px-4 py-4">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">解释题</p>
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q1 || '（未作答）'}</p>
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">代码题</p>
-              <pre className="overflow-x-auto rounded-lg bg-ide p-3 font-mono text-xs leading-relaxed text-ide-foreground">{record.answers.q2}</pre>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{record.q2Kind === 'reasoning' ? '分析题' : '代码题'}</p>
+              {record.q2Kind === 'reasoning' ? <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q2 || '（未作答）'}</p>
+                : <pre className="overflow-x-auto rounded-lg bg-ide p-3 font-mono text-xs leading-relaxed text-ide-foreground">{record.answers.q2}</pre>}
             </div>
           </CollapsibleContent>
         </Collapsible>
 
         <div className="flex flex-wrap items-center gap-3 border-t pt-6">
-          {passed && next && isLatest ? (
+          {passed && !expired && next && isLatest ? (
             <Button size="lg" onClick={goNextUnit}>
               进入下一单元：{next.title}
               <ArrowRight data-icon="inline-end" />
             </Button>
-          ) : !passed && isLatest ? (
+          ) : (!passed || expired) && isLatest ? (
             <>
               <Button size="lg" onClick={backToStudy}>
                 <BookOpen data-icon="inline-start" />

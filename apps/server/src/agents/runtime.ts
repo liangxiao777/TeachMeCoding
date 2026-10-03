@@ -11,6 +11,7 @@ import { failureStream, providerStream, teachingModel } from './model.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
 import { Assessments } from '../modules/assessments.js';
+import { sealToolCalls } from '../storage/agent-messages.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -264,6 +265,10 @@ export class TeachingRuntime {
       this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
-    } finally { if (timer) clearTimeout(timer); }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (this.get(space, id).state !== 'succeeded') this.learning.db.transaction(() => sealToolCalls(this.learning.db,
+        frozen.sessionId ? 'agent_messages' : 'task_messages', space, id))();
+    }
   }
 }

@@ -160,6 +160,7 @@ export function AssessmentView() {
                 {spec?.q2Kind === 'reasoning' ? <Textarea aria-label="分析题回答" rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
                   <div className="flex items-center justify-between border-b py-1.5 pr-1.5 pl-3">
                     <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? '代码答案草稿'}</span>
+                    {persistence && spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>载入起始代码</Button>}
                     <Button size="xs" disabled={!canRun || draft.q2Running || storageBusy} onClick={runDraft}>
                       {canRun && draft.q2Running ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
                       运行

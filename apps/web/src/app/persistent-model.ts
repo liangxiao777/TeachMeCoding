@@ -189,9 +189,14 @@ export function usePersistentModel(): AppModel {
       const requirement = loaded.saved.requirement.revision >= s.saved.requirement.revision ? loaded.saved.requirement : s.saved.requirement
       const sessions = { ...s.sessions }
       for (const [id, fresh] of Object.entries(loaded.sessions)) if (fresh.draft.revision >= (sessions[id]?.draft.revision ?? 0)) sessions[id] = fresh
+      const units = { ...loaded.units }
+      for (const [id, fresh] of Object.entries(units)) {
+        const known = s.units[id]?.draft
+        if (known && known.revision > fresh.draft.revision) units[id] = { ...fresh, draft: known }
+      }
       const drafts = { ...s.drafts }
       for (const [id, fresh] of Object.entries(loaded.drafts)) drafts[id] = { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }
-      return { ...s, saved: { ...loaded.saved, requirement }, units: loaded.units, drafts,
+      return { ...s, saved: { ...loaded.saved, requirement }, units, drafts,
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
           requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
           sessions: s.ui.sessions.map((old) => {
@@ -218,7 +223,10 @@ export function usePersistentModel(): AppModel {
       const state = event.data.type === 'state' ? event.data.state : 'running'
       if (!work.sessionId && event.data.type === 'state') {
         change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: s.saved.tasks.map((t) => t.id === work.id ? { ...t, state } : t) } }))
-        if (event.data.error) setError(event.data.error)
+        if (event.data.error) {
+          setError(event.data.error)
+          retry.current = () => retryTask(space, work.id)
+        }
       }
       changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
         messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, sequence: event.seq,
@@ -337,6 +345,12 @@ export function usePersistentModel(): AppModel {
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] } }))
       await refreshBusiness(space)
       watchRun(space, task)
+    })
+  }
+  const retryTask = (space: string, id: string) => {
+    void run(`task-retry:${id}`, async () => {
+      const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
+      await refreshBusiness(space); watchRun(space, task)
     })
   }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
@@ -488,12 +502,7 @@ export function usePersistentModel(): AppModel {
       tasks: selected?.saved.tasks ?? [],
       generateAssessment: () => { if (current && recordUnit) assessmentTask(current.id, recordUnit, 'assessment') },
       stopTask: (id) => { if (current) void run(`stop:${id}`, () => api(`/spaces/${current.id}/runs/${id}/stop`, {})) },
-      retryTask: (id) => { if (!current) return; const space = current.id
-        void run(`task-retry:${id}`, async () => {
-          const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
-          await refreshBusiness(space); watchRun(space, task)
-        })
-      },
+      retryTask: (id) => { if (current) retryTask(current.id, id) },
       decideConclusion: (id, adopted) => { if (!current || !selected) return
         const space = current.id, conclusion = selected.saved.conclusions.find((c) => c.id === id)!
         void run(`conclusion:${id}`, async () => {

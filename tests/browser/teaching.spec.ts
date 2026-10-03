@@ -58,19 +58,36 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByText('解释命令行参数来自哪里', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
   await page.getByLabel('你的回答', { exact: true }).fill('固定提交：由程序的调用者传入');
+  await page.getByRole('button', { name: '载入起始代码', exact: true }).click();
+  await expect(page.getByLabel('编辑 代码答案', { exact: true })).toHaveValue('import sys\n');
   await page.getByLabel('编辑 代码答案', { exact: true }).fill('print(2)');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
   await expect(page.getByText('正在评估固定提交；你可以继续编辑新草稿。代码不会执行。', { exact: true })).toBeVisible();
-  await page.getByLabel('你的回答', { exact: true }).fill('评估期间的新草稿');
-  await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
-  await page.screenshot({ path: `.amp/in/artifacts/teaching-evaluating-${info.project.name}.png`, animations: 'disabled' });
+  // Hold the terminal refresh at an older saved revision while the user saves a new draft.
+  let captured = false, release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const unit = new URL(page.url()).searchParams.get('unit');
+  await page.route(`**/units/${unit}`, async (route) => {
+    if (captured) return route.continue();
+    const response = await route.fetch(); captured = true;
+    await held; await route.fulfill({ response });
+  });
+  try {
+    await expect.poll(() => captured, { timeout: 15000 }).toBe(true);
+    await page.getByLabel('你的回答', { exact: true }).fill('评估期间的新草稿');
+    await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
+    await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
+    await page.screenshot({ path: `.amp/in/artifacts/teaching-evaluating-${info.project.name}.png`, animations: 'disabled' });
+  } finally { release(); }
   await expect(page.getByText('代码尚未通过真实执行验证', { exact: true })).toBeVisible({ timeout: 15000 });
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('固定提交：由程序的调用者传入', { exact: true })).toBeVisible();
   await expect(page.getByText('已经掌握', { exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 1200 });
   await page.screenshot({ path: `.amp/in/artifacts/teaching-unverified-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
   await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
+  await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
   await expect(page.getByText('单元测评 · 第 2 次', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
@@ -97,4 +114,43 @@ test('stream survives page reload and session switching; stop and model failure 
   await page.reload();
   await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
   await expect(page.getByText('模型失败', { exact: true })).toHaveCount(1);
+});
+
+test('reasoning assessment failure retries the same attempt; expired evidence stays historical', async ({ page }, info) => {
+  test.setTimeout(60000);
+  await create(page, `非执行测评 ${info.project.name}`);
+  await send(page, '纯推理');
+  await expect(page.locator('dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  await page.getByLabel('分析题回答', { exact: true }).fill('零个参数不会有用户输入，两个则包含两个字符串。');
+  await page.getByLabel('你的回答', { exact: true }).fill('FAIL-ONCE：调用者');
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-reasoning-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('任务失败或已中断；原题目和答案仍保留。', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-task-failure-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByLabel('你的回答', { exact: true }).fill('NEW-DRAFT');
+  await page.getByRole('button', { name: info.project.name === 'development' ? '重试' : '重试原任务', exact: true }).click();
+  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
+  await expect(page.getByText('FAIL-ONCE：调用者', { exact: true })).toBeVisible();
+  await expect(page.getByText(/第 1 次测评/)).toBeVisible();
+  await expect(page.getByText('分析题', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-nonexecution-result-${info.project.name}.png`, animations: 'disabled' });
+  const changed = await page.evaluate(async () => {
+    const id = new URLSearchParams(location.search).get('space');
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() };
+    const workspace = await (await fetch(`/api/spaces/${id}`, { headers })).json();
+    return (await fetch(`/api/spaces/${id}/requirement`, { method: 'POST', headers, body: JSON.stringify({ ...workspace.requirement,
+      value: { ...workspace.requirement.value, schedule: '改变后的计划' } }) })).status;
+  });
+  expect(changed).toBe(200);
+  await page.reload();
+  await expect(page.getByText('此结果基于旧版本，请重新测评', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^进入下一单元/ })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-expired-${info.project.name}.png`, animations: 'disabled' });
 });
