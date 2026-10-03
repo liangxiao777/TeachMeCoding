@@ -12,6 +12,11 @@ export function descendants(root: number): number[] {
   }
   return [...found].reverse();
 }
+export function groupMembers(group: number): number[] {
+  return execFileSync('/bin/ps', ['-axo', 'pid=,pgid='], { encoding: 'utf8' }).trim().split('\n')
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .flatMap(([pid, pgid]) => pid && pgid === group ? [pid] : []);
+}
 export function signalProcess(pid: number, signal: NodeJS.Signals) {
   try { process.kill(pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
 }

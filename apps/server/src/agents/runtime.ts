@@ -11,6 +11,7 @@ import { failureStream, providerStream, teachingModel } from './model.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
 import { Assessments } from '../modules/assessments.js';
+import type { Actions } from '../modules/actions.js';
 import { sealToolCalls } from '../storage/agent-messages.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
@@ -20,6 +21,7 @@ interface RuntimeOptions {
   milliseconds?: number;
   debugDirectory?: string;
   projectDirectory?: (space: string) => string;
+  actions?: Actions;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
@@ -30,6 +32,7 @@ export class TeachingRuntime {
     this.stream = options.stream ?? providerStream();
   }
   get available() { return this.config !== null && this.config.model === teachingModel.id; }
+  get actions() { return this.options.actions; }
 
   private tables(space: string, id: string) {
     return this.learning.db.prepare('SELECT 1 FROM task_runs WHERE space_id=? AND id=?').get(space, id)
@@ -68,6 +71,7 @@ export class TeachingRuntime {
       conclusions: s.scope === 'intake' ? [] : w.conclusions.filter((c) => c.adopted && c.valid),
       evidence: s.scope === 'intake' ? [] : this.evidence(space),
       publicAssessment: s.unitId ? this.learning.unit(space, s.unitId).assessment : null,
+      actions: s.scope === 'unit' ? this.actions?.list(space, session) : undefined,
     });
   }
   private evidence(space: string) {
@@ -238,7 +242,7 @@ export class TeachingRuntime {
     let failure = '', toolFailed = false, request = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space)) : createTask(this.learning, frozen));
+      const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({
         initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: budget.reasoning },

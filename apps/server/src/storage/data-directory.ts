@@ -27,6 +27,9 @@ export function openDataDirectory(directory: string) {
     const db = openDatabase(join(root, 'app.db'));
     try {
       db.transaction(() => {
+        db.prepare(`UPDATE action_proposals SET value=json_set(value,'$.state',
+          CASE json_extract(value,'$.state') WHEN 'running' THEN 'interrupted' ELSE 'expired' END)
+          WHERE json_extract(value,'$.state') IN ('pending','running')`).run();
         db.prepare(`INSERT INTO task_events(space_id,run_id,seq,value)
           SELECT a.space_id,a.id,COALESCE((SELECT MAX(seq) FROM task_events e WHERE e.space_id=a.space_id AND e.run_id=a.id),0)+1,
             '{"type":"state","state":"interrupted","error":"服务重启，任务已中断；未自动重放。"}'

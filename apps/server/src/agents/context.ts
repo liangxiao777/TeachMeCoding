@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { AssessmentRecord, AssessmentSpec, LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
 import type { FixedAssessment } from '../modules/assessments.js';
 
 export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' | 'evaluation';
@@ -20,10 +20,11 @@ export interface FrozenContext {
   assessmentRevision?: number;
   evaluation?: FixedAssessment;
   evidence?: AssessmentRecord[];
+  actions?: ActionProposal[];
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '3';
+export const compilerVersion = '4';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const budget = { reasoning: 'high' as const, milliseconds: 300_000 };
 
@@ -48,6 +49,7 @@ export function compileContext(input: FrozenContext) {
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
     ...(input.conclusions ?? []).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
     ...(input.evidence ?? []).map((value) => ({ kind: 'valid-assessment', id: value.id, revision: value.specRevision ?? 0, value })),
+    ...(input.actions ?? []).map((value) => ({ kind: 'local-action', id: value.id, revision: hash(value), value })),
     ...(input.publicAssessment ? [{ kind: 'public-assessment', id: input.unitId!, revision: input.publicAssessment.revision ?? 0, value: input.publicAssessment }] : []),
     ...input.references.map((value, index) => ({ kind: 'reference', id: `${input.sessionId}:${index}`, revision: hash(value), value })),
   ];

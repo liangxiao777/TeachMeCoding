@@ -27,7 +27,7 @@ import { RunContent } from './run-content'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import {
   DropdownMenu,
@@ -119,6 +119,32 @@ export function AgentMessage({ msg }: { msg: Message }) {
           <CardFooter><Button size="xs" variant="outline" disabled={persistence.busy || !c.valid && !c.adopted} onClick={() => persistence.decideConclusion(c.id, !c.adopted)}>
             {c.adopted ? '撤销采纳' : '采纳结论'}
           </Button></CardFooter>
+        </Card>
+      ))}
+      {persistence?.actions.filter((p) => p.runId === msg.id).map((p) => (
+        <Card key={p.id} size="sm" data-testid="local-action">
+          <CardHeader><CardTitle className="text-sm">{p.action.kind === 'file' ? '文件修改提案' : '本机命令提案'} · {{ pending: '待确认', running: '执行中', succeeded: '成功', failed: '失败', rejected: '已拒绝', expired: '已过期', cancelled: '已取消', interrupted: '已中断' }[p.state]}</CardTitle>
+            <CardDescription>{p.action.reason}</CardDescription></CardHeader>
+          <CardContent className="min-w-0 space-y-2 text-xs">
+            <p className="break-all">工作目录：{p.action.cwd}</p>
+            {p.action.kind === 'file' ? <>
+              <p className="break-all">文件：{p.action.path}</p>
+              <details><summary className="cursor-pointer">查看完整修改前后内容</summary>
+                <p className="mt-2">修改前{p.action.before === null ? '（新文件）' : ''}</p><pre className="max-h-64 overflow-auto whitespace-pre rounded bg-muted p-2">{p.action.before ?? ''}</pre>
+                <p className="mt-2">修改后</p><pre className="max-h-64 overflow-auto whitespace-pre rounded bg-muted p-2">{p.action.content}</pre>
+              </details>
+            </> : <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{p.action.command}</pre>}
+            <p className="text-muted-foreground">在本机执行，不是沙箱；拥有服务账号权限。取消不能撤销已发生的修改。命令最多 30 秒、256 KiB 输出；不自动安装环境。</p>
+            {p.state === 'interrupted' && <p>服务已重启，执行结果可能不完整；没有自动重放，请检查磁盘。</p>}
+            {p.result && <><p>结果：{p.result.status} · 退出码 {p.result.exitCode ?? '无'}</p><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{p.result.output}</pre></>}
+            {p.state === 'pending' && persistence.unsavedFiles.length > 0 && <p role="status">请先保存所有编辑器文件，再确认执行。</p>}
+          </CardContent>
+          {(p.state === 'pending' || p.state === 'running') && <CardFooter className="gap-2">
+            {p.state === 'pending' ? <>
+              <Button size="xs" disabled={persistence.busy || persistence.unsavedFiles.length > 0} onClick={() => persistence.decideAction(p.id, 'confirm')}>确认执行</Button>
+              <Button size="xs" variant="outline" disabled={persistence.busy} onClick={() => persistence.decideAction(p.id, 'reject')}>拒绝</Button>
+            </> : <Button size="xs" variant="outline" onClick={() => persistence.decideAction(p.id, 'cancel')}>取消执行</Button>}
+          </CardFooter>}
         </Card>
       ))}
       {!persistence && msg.action && msg.status === 'done' && (

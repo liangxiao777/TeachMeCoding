@@ -9,6 +9,7 @@ import { loadModelConfig, type ModelConfig } from './config/model.js';
 import { TeachingRuntime } from './agents/runtime.js';
 import { join } from 'node:path';
 import { Terminals } from './runtime/terminals.js';
+import { Actions } from './modules/actions.js';
 
 try {
   const config = serverConfig();
@@ -20,7 +21,9 @@ try {
   const learning = new Learning(data.db);
   const projects = new Projects(data.root);
   const terminals = new Terminals((space) => projects.root(space));
+  const actions = new Actions(learning, projects);
   const agents = new TeachingRuntime(learning, model, {
+    actions,
     projectDirectory: (space) => projects.root(space),
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
@@ -29,7 +32,7 @@ try {
     if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
-  const close = () => Promise.all([agents.close(), terminals.close()]);
+  const close = () => Promise.all([agents.close(), terminals.close(), actions.close()]);
   server.on('error', () => {
     void close().finally(() => data.close());
     console.error('Cannot start local server. Check whether PORT is already in use.');

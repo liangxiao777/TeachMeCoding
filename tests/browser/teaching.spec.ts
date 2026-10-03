@@ -536,3 +536,57 @@ async function workspace(page: Page, name: string) {
     return (await fetch(`/api/spaces/${id}`, { headers })).json();
   }, name);
 }
+
+test('local proposals require confirmation, recover pending cards and return real execution to their session', async ({ page }, info) => {
+  test.setTimeout(60000);
+  await create(page, `确认本机操作 ${info.project.name}`);
+  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const ask = async (text: string) => { await page.getByLabel('向 Agent 提问', { exact: true }).fill(text); await page.getByRole('button', { name: '发送', exact: true }).click(); };
+  const last = page.getByTestId('local-action').last();
+  await ask('本机提案文件');
+  await expect(last).toContainText('待确认');
+  await expect(page.getByRole('treeitem', { name: 'proposal.sh', exact: true })).toHaveCount(0);
+  await last.getByText('查看完整修改前后内容', { exact: true }).click();
+  await expect(last.locator('pre').last()).toHaveText('printf "CONFIRMED_47\\n"');
+  await last.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/action-file-pending-${info.project.name}.png` });
+  await page.reload();
+  await expect(last).toContainText('待确认');
+  await last.getByRole('button', { name: '拒绝', exact: true }).click();
+  await expect(last).toContainText('已拒绝');
+  await expect(page.getByRole('treeitem', { name: 'proposal.sh', exact: true })).toHaveCount(0);
+  await ask('本机提案文件');
+  await expect(last).toContainText('待确认');
+  await last.getByRole('button', { name: '确认执行', exact: true }).click();
+  await expect(last).toContainText('成功');
+  await page.getByRole('treeitem', { name: 'proposal.sh', exact: true }).click();
+  await expect(page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true })).toHaveValue('printf "CONFIRMED_47\\n"\n');
+  await ask('本机提案命令');
+  await expect(last).toContainText('待确认');
+  await page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true }).fill('new buffer');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeDisabled();
+  await page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true }).fill('printf "CONFIRMED_47\\n"\n');
+  let dropped = false;
+  await page.route('**/actions/*', async (route) => {
+    if (!dropped && route.request().method() === 'POST') { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await last.getByRole('button', { name: '确认执行', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(last).toContainText('成功');
+  await expect(last).toContainText('CONFIRMED_47');
+  await page.getByRole('treeitem', { name: 'confirmations', exact: true }).click();
+  await expect(page.getByLabel('编辑 confirmations', { exact: true }).filter({ visible: true })).toHaveValue('once\n');
+  await last.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/action-command-result-${info.project.name}.png` });
+  await ask('本机提案等待');
+  await expect(last).toContainText('待确认');
+  await last.getByRole('button', { name: '确认执行', exact: true }).click();
+  await last.getByRole('button', { name: '取消执行', exact: true }).click();
+  await expect(last).toContainText('已取消');
+  await expect(page.getByRole('treeitem', { name: 'must-not-exist', exact: true })).toHaveCount(0);
+});

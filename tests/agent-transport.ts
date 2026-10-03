@@ -52,6 +52,11 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     return stream;
   }
   if (last?.role !== 'toolResult') {
+    if (has('propose_command') && text.includes('本机提案')) return response(reply([{ type: 'toolCall', id: 'local-proposal',
+      name: text.includes('文件') ? 'propose_file_change' : 'propose_command',
+      arguments: text.includes('文件') ? { path: 'proposal.sh', content: 'printf "CONFIRMED_47\\n"\n', reason: '添加可运行练习' }
+        : { command: text.includes('等待') ? 'sleep 30; touch must-not-exist' : 'bash proposal.sh; echo once >> confirmations', reason: '运行已保存练习' },
+    }], 'toolUse'));
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }
     if (has('submit_assessment')) return response(reply([{ type: 'toolCall', id: 'assessment-call', name: 'submit_assessment', arguments: {

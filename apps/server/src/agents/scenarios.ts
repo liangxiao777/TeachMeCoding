@@ -1,13 +1,14 @@
 import { Type } from '@earendil-works/pi-ai';
-import { conclusionSchema, requirementSchema, type Requirement } from '@teach-me-coding/contracts';
+import { commandProposalSchema, fileProposalSchema, conclusionSchema, requirementSchema, type ActionProposal, type Requirement } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
+import type { Actions } from '../modules/actions.js';
 import type { FrozenContext } from './context.js';
 import type { ScenarioRun } from './runtime.js';
 import { readTools } from './read-tools.js';
 import { createRouteTools } from './route-tools.js';
 import { baseline } from './tasks.js';
 
-export function createScenario(learning: Learning, input: FrozenContext, runId: string, cwd?: string): ScenarioRun {
+export function createScenario(learning: Learning, input: FrozenContext, runId: string, cwd?: string, actions?: Actions): ScenarioRun {
   if (input.scenario === 'intake') {
     let draft: Requirement | undefined;
     return {
@@ -40,7 +41,22 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
     };
   }
   let conclusion: ReturnType<typeof conclusionSchema.parse> | undefined;
-  return { tools: [...(cwd ? readTools(cwd) : []), {
+  const proposals: ActionProposal[] = [];
+  const proposalTools: ScenarioRun['tools'] = actions ? [
+    { name: 'propose_file_change', label: '提议修改文件', description: 'Propose full new content for one project file. Does not write; requires explicit user confirmation.',
+      parameters: Type.Unsafe<ReturnType<typeof fileProposalSchema.parse>>(JSON.parse(JSON.stringify(fileProposalSchema.toJSONSchema()))),
+      async execute(_id, args) {
+        const p = actions.prepare(input.spaceId, input.sessionId!, runId, 'file', args); proposals.push(p);
+        return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
+      } },
+    { name: 'propose_command', label: '提议本机命令', description: 'Propose a bash command in the current project directory. Does not execute; requires explicit user confirmation. Never auto-install toolchains.',
+      parameters: Type.Unsafe<ReturnType<typeof commandProposalSchema.parse>>(JSON.parse(JSON.stringify(commandProposalSchema.toJSONSchema()))),
+      async execute(_id, args) {
+        const p = actions.prepare(input.spaceId, input.sessionId!, runId, 'command', args); proposals.push(p);
+        return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
+      } },
+  ] : [];
+  return { tools: [...(cwd ? readTools(cwd) : []), ...proposalTools, {
     name: 'submit_learning_conclusion', label: '整理学习结论', description: 'Stage a specific learning conclusion for user adoption; never infer mastery or assign a score.',
     parameters: Type.Unsafe<ReturnType<typeof conclusionSchema.parse>>(JSON.parse(JSON.stringify(conclusionSchema.toJSONSchema()))),
     async execute(_id, args) {
@@ -49,5 +65,6 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
     },
   }], commit() {
     if (conclusion) learning.proposeConclusion(input.spaceId, input.unitId!, runId, conclusion, baseline(input));
+    for (const proposal of proposals) actions!.save(input.spaceId, proposal);
   } };
 }

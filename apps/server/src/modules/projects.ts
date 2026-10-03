@@ -80,6 +80,14 @@ export class Projects {
     return entries;
   }
   read(space: string, path: string) { return this.file(this.path(this.root(space), path), path); }
+  newFile(space: string, relative: string, content: string) {
+    if (Buffer.byteLength(content) > 1_000_000 || content.includes('\0')) throw new BusinessError(413, '文件必须为不超过 1 MB 的 UTF-8 文本。');
+    const path = this.path(this.root(space), relative, true);
+    if (stat(path)) throw conflict();
+    const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+    try { writeFileSync(fd, content); fsyncSync(fd); } finally { closeSync(fd); }
+    return this.read(space, relative);
+  }
   create(space: string, input: unknown) {
     const v = createEntrySchema.parse(input);
     const path = this.path(this.root(space), v.path, true);

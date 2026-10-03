@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { AgentDisplayPart, LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentDisplayPart, LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 import type { LocalTerminal } from '@/lib/terminal'
 
@@ -84,6 +84,8 @@ export interface AppModel {
     applyProposal: (id: string) => void
     conclusions: LearningConclusion[]
     decideConclusion: (id: string, adopted: boolean) => void
+    actions: ActionProposal[]
+    decideAction: (id: string, decision: 'confirm' | 'reject' | 'cancel') => void
     tasks: WorkStatus[]
     taskParts: Record<string, AgentDisplayPart[]>
     generateAssessment: Action

@@ -14,17 +14,19 @@ const { createApp } = await import(`../apps/server/${directory}/http/app.js`) as
 const { openDataDirectory } = await import(`../apps/server/${directory}/storage/data-directory.js`) as typeof import('../apps/server/src/storage/data-directory.js');
 const { Learning } = await import(`../apps/server/${directory}/modules/learning.js`) as typeof import('../apps/server/src/modules/learning.js');
 const { Projects } = await import(`../apps/server/${directory}/modules/projects.js`) as typeof import('../apps/server/src/modules/projects.js');
+const { Actions } = await import(`../apps/server/${directory}/modules/actions.js`) as typeof import('../apps/server/src/modules/actions.js');
 const { createLocalAccess, terminalUpgradeGate } = await import(`../apps/server/${directory}/http/local-access.js`) as typeof import('../apps/server/src/http/local-access.js');
 const { Terminals } = await import(`../apps/server/${directory}/runtime/terminals.js`) as typeof import('../apps/server/src/runtime/terminals.js');
 const { serverConfig } = await import(`../apps/server/${directory}/config/server.js`) as typeof import('../apps/server/src/config/server.js');
 const root = mkdtempSync(join(tmpdir(), `tmc-teaching-browser-${mode}-`));
 const data = openDataDirectory(root), learning = new Learning(data.db);
 const projects = new Projects(root), terminals = new Terminals((space) => projects.root(space));
-const agents = new TeachingRuntime(learning, syntheticConfig, { stream: agentTransport, projectDirectory: (space) => projects.root(space) });
+const actions = new Actions(learning, projects);
+const agents = new TeachingRuntime(learning, syntheticConfig, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions });
 const config = serverConfig({ NODE_ENV: mode, PORT: mode === 'production' ? '14320' : '14321', TMC_WEB_PORT: '15173' });
 const access = createLocalAccess(config);
 const server = serve({ hostname: config.hostname, port: config.port, fetch: createApp(access, learning, projects, agents).fetch });
 server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
-  void Promise.all([agents.close(), terminals.close()]).finally(() => server.close(() => { data.close(); rmSync(root, { recursive: true, force: true }); }));
+  void Promise.all([agents.close(), terminals.close(), actions.close()]).finally(() => server.close(() => { data.close(); rmSync(root, { recursive: true, force: true }); }));
 });

@@ -20,6 +20,14 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   api.get('/spaces/:space/units/:unit', (c) => c.json(learning.unit(c.req.param('space'), c.req.param('unit'))));
   api.get('/spaces/:space/records/:record', (c) => c.json(learning.record(c.req.param('space'), c.req.param('record'))));
   api.get('/capabilities', (c) => c.json({ agent: agents?.available ?? false, terminal: !!projects, assessment: agents?.available ?? false }));
+  api.get('/spaces/:space/sessions/:session/actions', (c) => {
+    learning.session(c.req.param('space'), c.req.param('session'));
+    return c.json(agents?.actions?.list(c.req.param('space'), c.req.param('session')) ?? []);
+  });
+  api.post('/spaces/:space/actions/:action', async (c) => {
+    if (!agents?.actions) throw new BusinessError(503, '本机确认执行不可用。');
+    return c.json(agents.actions.decide(c.req.param('space'), c.req.param('action'), await c.req.json()));
+  });
   if (agents) {
     api.post('/spaces/:space/plan', async (c) => c.json(agents.plan(c.req.param('space'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/tasks/:task/retry', (c) => c.json(agents.retryTask(c.req.param('space'), c.req.param('task'), c.req.header('Idempotency-Key') ?? '')));
