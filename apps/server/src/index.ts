@@ -23,7 +23,8 @@ try {
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
   const server = serve({ fetch: createApp(access, learning, new Projects(data.root), agents).fetch, hostname, port }, () => {
-    console.log(`TeachMeCoding listening on http://127.0.0.1:${port}`);
+    console.log(`TeachMeCoding listening on http://${hostname}:${port}`);
+    if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access));
   server.on('error', () => {

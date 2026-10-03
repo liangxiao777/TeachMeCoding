@@ -3,7 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
@@ -33,11 +33,11 @@ function rawRequest(path, headers = {}, method = 'GET') {
   });
 }
 
-test('production startup, static routing, HTTP and upgrade boundaries from an unrelated cwd', { timeout: 15000 }, async () => {
+for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: 15000 }, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'teach-me-coding-start-'));
   const syntheticSecret = 'server-only-credential-sentinel';
   const child = spawn(process.execPath, [fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url))], {
-    cwd, env: { PATH: process.env.PATH, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd, env: { PATH: process.env.PATH, HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');
   let logs = '';
@@ -51,6 +51,15 @@ test('production startup, static routing, HTTP and upgrade boundaries from an un
     });
     const base = 'http://127.0.0.1:14310';
     assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { status: 'ok', service: 'teach-me-coding' });
+    const lan = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address;
+    if (hostname === '0.0.0.0' && lan) {
+      const network = `http://${lan}:14310`;
+      assert.equal((await fetch(`${network}/api/health`)).status, 200);
+      const bootstrap = await fetch(`${network}/api/access`, { headers: { 'X-TMC-Client': 'browser', Origin: network } });
+      assert.equal(bootstrap.status, 200);
+      const { token } = await bootstrap.json();
+      assert.equal((await fetch(`${network}/api/access/check`, { method: 'POST', headers: { 'X-TMC-Token': token, Origin: network } })).status, 200);
+    }
     const html = await (await fetch(`${base}/`)).text();
     assert.match(html, /TeachMeCoding/);
     const asset = html.match(/src="([^"]+\.js)"/)[1];

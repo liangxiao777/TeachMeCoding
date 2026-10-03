@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
+import os from 'node:os';
 import { test } from 'node:test';
 import { createLocalAccess, localAccessError } from './local-access.js';
+
+test('network binding admits only this machine’s IPv4 authorities and keeps request protection', (t) => {
+  t.mock.method(os, 'networkInterfaces', () => ({ en0: ['192.0.2.23', '198.51.100.27'].map((address) => ({
+    address, family: 'IPv4', internal: false, netmask: '255.255.255.0', mac: '00:00:00:00:00:00', cidr: null,
+  })) }));
+  const access = createLocalAccess({ hostname: '0.0.0.0', port: 4310 });
+  for (const host of ['192.0.2.23:4310', '198.51.100.27:4310']) {
+    const headers = new Headers({ host, origin: `http://${host}`, 'sec-fetch-site': 'same-origin' });
+    assert.equal(localAccessError(headers, createLocalAccess({ port: 4310 })), 403);
+    assert.equal(localAccessError(headers, access, { requireToken: true }), 401);
+    headers.set('x-tmc-token', access.token);
+    assert.equal(localAccessError(headers, access, { requireToken: true }), undefined);
+    headers.set('origin', 'http://evil.test');
+    assert.equal(localAccessError(headers, access, { requireToken: true }), 403);
+  }
+  for (const host of ['192.0.2.24:4310', '192.0.2.23:5173', '192.0.2.23.evil.test:4310']) {
+    assert.equal(localAccessError(new Headers({ host, 'x-forwarded-host': '192.0.2.23:4310' }), access), 403);
+  }
+  const proxy = new Headers({ host: '192.0.2.23:15173', origin: 'http://192.0.2.23:15173' });
+  const dev = createLocalAccess({ hostname: '0.0.0.0', port: 4310, development: true, webPort: 15173 });
+  assert.equal(localAccessError(proxy, access), 403);
+  assert.equal(localAccessError(proxy, dev), undefined);
+  proxy.set('sec-fetch-site', 'cross-site');
+  assert.equal(localAccessError(proxy, dev), 403);
+});
 
 test('Host and Origin use exact allowed authorities; forwarded headers cannot grant access', () => {
   const access = createLocalAccess({ port: 4310 });

@@ -1,10 +1,16 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
+import os from 'node:os';
 
-export function createLocalAccess({ port, development = false, webPort = 5173 }: { port: number; development?: boolean; webPort?: number }) {
+export function createLocalAccess({ port, hostname = '127.0.0.1', development = false, webPort = 5173 }: { port: number; hostname?: string; development?: boolean; webPort?: number }) {
   const ports = development ? [port, webPort] : [port];
-  const hosts = new Set(ports.flatMap((value) => [`127.0.0.1:${value}`, `localhost:${value}`]));
+  const addresses = ['127.0.0.1', 'localhost'];
+  if (hostname === '0.0.0.0') {
+    addresses.push(...Object.values(os.networkInterfaces()).flatMap((entries) =>
+      (entries ?? []).filter((entry) => entry.family === 'IPv4').map((entry) => entry.address)));
+  }
+  const hosts = new Set(ports.flatMap((value) => addresses.map((address) => `${address}:${value}`)));
   return {
     token: randomBytes(32).toString('hex'),
     hosts,

@@ -1,5 +1,36 @@
 import { fileURLToPath } from 'node:url';
+import { networkInterfaces } from 'node:os';
 import { expect, test } from '@playwright/test';
+
+test('network HTTP entry can create and retry a space without secure-context UUID support', async ({ page, baseURL }, info) => {
+  test.skip(process.env.HOST !== '0.0.0.0', 'Run with HOST=0.0.0.0 to exercise network access.');
+  const address = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address;
+  test.skip(!address, 'Requires a non-loopback IPv4 interface.');
+  const url = new URL(baseURL!); url.hostname = address!;
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto(url.href);
+  expect(await page.evaluate(() => ({ secure: isSecureContext, uuid: typeof crypto.randomUUID }))).toEqual({ secure: false, uuid: 'undefined' });
+  const goal = `网络访问检查 ${info.project.name}`;
+  await page.getByRole('textbox', { name: '你想学什么', exact: true }).fill(goal);
+  const keys: string[] = [];
+  await page.route('**/api/spaces', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    keys.push(route.request().headers()['idempotency-key']!);
+    if (keys.length === 1) { await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await page.getByRole('button', { name: '开始', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '学习空间名称', exact: true })).toHaveValue(goal);
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(keys[1]).toBe(keys[0]);
+  await page.reload();
+  await expect(page.getByRole('textbox', { name: '学习空间名称', exact: true })).toHaveValue(goal);
+  await expect(page.getByText(goal, { exact: true })).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
 
 test('renders connected startup page', async ({ page }, testInfo) => {
   await page.goto('/diagnostics');

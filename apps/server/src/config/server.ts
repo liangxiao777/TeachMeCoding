@@ -4,8 +4,9 @@ export function serverConfig(environment: NodeJS.ProcessEnv = process.env) {
   if (!/^[1-9]\d*$/.test(value) || port > 65535) {
     throw new Error('PORT must be an integer between 1 and 65535.');
   }
-  // HOST is intentionally not configurable: this application runs locally only.
+  const hostname = environment.HOST ?? '127.0.0.1';
+  if (hostname !== '127.0.0.1' && hostname !== '0.0.0.0') throw new Error('HOST must be 127.0.0.1 or 0.0.0.0.');
   const webPort = environment.TMC_WEB_PORT;
   if (webPort !== undefined && (!/^[1-9]\d*$/.test(webPort) || Number(webPort) > 65535)) throw new Error('TMC_WEB_PORT must be an integer between 1 and 65535.');
-  return { hostname: '127.0.0.1', port, development: environment.NODE_ENV === 'development', ...(webPort === undefined ? {} : { webPort: Number(webPort) }) };
+  return { hostname, port, development: environment.NODE_ENV === 'development', ...(webPort === undefined ? {} : { webPort: Number(webPort) }) };
 }
