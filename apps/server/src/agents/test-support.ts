@@ -5,7 +5,7 @@ import type { Learning } from '../modules/learning.js';
 
 export function populated(learning: Learning, name = 'Rust') {
   const space = learning.create({ name, goal: `学习 ${name}` });
-  learning.saveRequirement(space.id, { ...space.requirement, confirmed: true });
+  learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: `学习 ${name}` }, confirmed: true });
   const unit = () => ({ id: randomUUID(), title: 'Unit', summary: 'Summary', goals: ['Goal'] });
   const units = [unit(), unit()];
   const routeSession = space.sessions.find((s) => s.scope === 'route')!.id;

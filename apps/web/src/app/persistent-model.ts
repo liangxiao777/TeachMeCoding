@@ -378,6 +378,9 @@ export function usePersistentModel(): AppModel {
       saved ??= await api<Workspace>('/spaces', { name: goal.trim().slice(0, 80), goal: goal.trim() })
       const entry = await loadSpace(saved)
       cache.current = { [saved.id]: entry, ...cache.current }; publish(); setCurrentId(saved.id)
+      // Creation already saved the first message and started intake. Subscribe even
+      // if it finished before the response arrived so its business result refreshes.
+      for (const work of saved.runs) watchRun(saved.id, work)
     }) },
     onboardSend: (text) => { void saveSession(true, text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
+import { createSpaceSchema } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
 import type { TeachingRuntime } from '../agents/runtime.js';
@@ -48,7 +49,14 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   }
   api.post('/spaces', async (c) => {
     const input: unknown = await c.req.json();
-    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.create(input)));
+    const key = c.req.header('Idempotency-Key') ?? '';
+    if (agents) return c.json(agents.createSpace(key, input));
+    return c.json(learning.once(key, c.req.path, input, () => {
+      const value = createSpaceSchema.parse(input), space = learning.create(value);
+      const session = space.sessions.find((s) => s.scope === 'intake')!;
+      learning.addMessage(space.id, session.id, { text: value.goal, quote: null, draftRevision: 0 });
+      return space;
+    }));
   });
   api.post('/spaces/:space/:action', async (c) => {
     const space = c.req.param('space');

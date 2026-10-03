@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { generationInputSchema, idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
 import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
@@ -112,6 +112,20 @@ export class TeachingRuntime {
     this.launch(space, id, '重试固定输入的独立任务，并提交结构化产物。');
     return this.get(space, id);
   }
+  createSpace(key: string, raw: unknown) {
+    const input = createSpaceSchema.parse(raw);
+    if (this.closing) throw new BusinessError(503, '服务正在关闭。');
+    const created = this.learning.once(key, '/api/spaces', raw, () => {
+      const space = this.learning.create(input), session = space.sessions.find((s) => s.scope === 'intake')!;
+      const message = { text: input.goal, quote: null, draftRevision: 0 };
+      if (this.available) this.recordRun(space.id, session.id, message);
+      else this.learning.addMessage(space.id, session.id, message);
+      return this.learning.space(space.id);
+    });
+    // Start only after creation, the opening message and the run commit atomically.
+    for (const run of created.runs) this.launch(created.id, run.id, input.goal);
+    return created;
+  }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);
   }
@@ -126,21 +140,22 @@ export class TeachingRuntime {
     const input = messageInputSchema.parse(raw);
     if (this.closing) throw new BusinessError(503, '服务正在关闭。');
     if (!this.available) throw new BusinessError(503, '教学模型未配置或模型不匹配；请检查服务端配置。');
-    const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => {
-      const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
-      if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
-        throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
-      }
-      if (!retryOf) this.learning.addMessage(space, session, input);
-      const id = randomUUID();
-      this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
-      this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input }), Date.now());
-      this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, session, id, Date.now());
-      this.emit(space, id, { type: 'state', state: 'pending', error: null });
-      return id;
-    });
+    const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => this.recordRun(space, session, input, retryOf));
     this.launch(space, id, input.text);
     return { run: this.get(space, id), session: this.learning.session(space, session) };
+  }
+  private recordRun(space: string, session: string, input: ReturnType<typeof messageInputSchema.parse>, retryOf?: string) {
+    const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
+    if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
+      throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
+    }
+    if (!retryOf) this.learning.addMessage(space, session, input);
+    const id = randomUUID();
+    this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
+    this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input }), Date.now());
+    this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, session, id, Date.now());
+    this.emit(space, id, { type: 'state', state: 'pending', error: null });
+    return id;
   }
   private launch(space: string, id: string, text: string) {
     if (this.get(space, id).state === 'pending' && !this.live.has(id)) {

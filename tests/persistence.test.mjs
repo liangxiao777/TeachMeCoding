@@ -12,7 +12,7 @@ import { Learning } from '../apps/server/dist/modules/learning.js';
 
 const entry = fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url));
 function launch(root, port, cwd) {
-  const child = spawn(process.execPath, [entry], { cwd, env: { PATH: process.env.PATH, PORT: String(port), TMC_DATA_DIR: root }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [entry], { cwd, env: { PATH: process.env.PATH, PORT: String(port), TMC_DATA_DIR: root, OPENROUTER_API_KEY: '', OPENROUTER_MODEL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', (chunk) => { logs += chunk; }); child.stderr.on('data', (chunk) => { logs += chunk; });
   const exited = once(child, 'exit');
@@ -43,14 +43,15 @@ test('real process restart and crash recovery preserve business data, idempotenc
     const other = await call('/spaces', { name: 'Restart B', goal: 'Independent space' });
     const session = space.sessions[0].id;
     const quote = { source: 'code', label: 'nested/main.rs', text: 'quoted snapshot 31' };
-    await call(`/spaces/${space.id}/requirement`, { ...space.requirement, confirmed: true });
-    await call(`/spaces/${space.id}/sessions/${session}/messages`, { text: 'Question 17', quote, draftRevision: 0 });
-    await call(`/spaces/${space.id}/sessions/${session}/draft`, { revision: 1, text: 'Unsent draft 29', quote, routeSuggestion: '' });
+    await call(`/spaces/${space.id}/requirement`, { ...space.requirement, value: { ...space.requirement.value, goal: 'Precise persistence' }, confirmed: true });
+    await call(`/spaces/${space.id}/sessions/${session}/messages`, { text: 'Question 17', quote, draftRevision: 1 });
+    await call(`/spaces/${space.id}/sessions/${session}/draft`, { revision: 2, text: 'Unsent draft 29', quote, routeSuggestion: '' });
     await call(`/spaces/${space.id}/project/create`, { path: 'nested', kind: 'directory' });
     await call(`/spaces/${space.id}/project/create`, { path: 'nested/main.rs', kind: 'file' });
     const file = await call(`/spaces/${space.id}/project/file?path=nested/main.rs`);
     const saved = await call(`/spaces/${space.id}/project/save`, { ...file, content: 'fn main() { println!("31"); }' });
     const expectedSession = await call(`/spaces/${space.id}/sessions/${session}`);
+    assert.deepEqual(expectedSession.messages.map((m) => m.text), ['Precise persistence', 'Question 17']);
     const oldToken = token;
     await first.stop();
 

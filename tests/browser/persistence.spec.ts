@@ -60,7 +60,11 @@ test('new spaces, requirements, session drafts and message retries persist witho
     page.waitForResponse((response) => response.url().endsWith('/name') && response.ok()),
     visible(page, '学习空间名称').press('Tab'),
   ]);
+  await expect(page.getByText(goal, { exact: true })).toHaveCount(1);
+  await expect(page.locator('dd').filter({ hasText: /^待补充$/ })).toHaveCount(4);
+  await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
+  await visible(page, '学习目标').fill('理解持久化数据的生命周期');
   await visible(page, '已有基础').fill('Python 基础，尚未学习 Rust');
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   // The requirement editor is unmounted, but its unsaved values belong to the provider.
@@ -117,6 +121,7 @@ test('a delayed requirement response preserves sessions created while saving', a
   await visible(page, '你想学什么').fill(`延迟需求保存 ${info.project.name}`);
   await page.getByRole('button', { name: '开始', exact: true }).click();
   await page.getByRole('button', { name: '修改', exact: true }).click();
+  await visible(page, '学习目标').fill('学习保存和会话隔离');
   await visible(page, '已有基础').fill('保存期间继续创建会话');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('dd').filter({ hasText: /^保存期间继续创建会话$/ })).toBeVisible();
@@ -365,6 +370,7 @@ test('a late requirement save does not close or discard a newer edit', async ({ 
   await visible(page, '你想学什么').fill(`需求草稿竞争 ${info.project.name}`);
   await page.getByRole('button', { name: '开始', exact: true }).click();
   await page.getByRole('button', { name: '修改', exact: true }).click();
+  await visible(page, '学习目标').fill('学习需求版本管理');
   await visible(page, '已有基础').fill('提交的旧内容');
   let release!: () => void;
   let received!: () => void;

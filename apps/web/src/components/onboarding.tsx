@@ -90,6 +90,7 @@ function RequirementCard() {
   }
 
   const current = editing && draft ? draft : req
+  const awaitingSummary = !!persistence && !Object.values(req).some((value) => value.trim())
   return (
     <Card aria-labelledby="req-title" className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
       <CardHeader>
@@ -97,7 +98,7 @@ function RequirementCard() {
           <ClipboardList className="size-4 text-primary" aria-hidden />
           学习需求摘要
         </CardTitle>
-        <CardDescription>{capabilities.agent ? '确认后 Agent 会据此规划路线' : '手动保存并确认学习需求；Agent 暂不可用，不会自动规划路线'}</CardDescription>
+        <CardDescription>{capabilities.agent ? awaitingSummary ? 'Agent 会根据对话整理需求，你也可以直接填写。确认后才会规划路线。' : '确认后 Agent 会据此规划路线' : '手动保存并确认学习需求；Agent 暂不可用，不会自动规划路线'}</CardDescription>
         <CardAction>
         {editing ? (
           <div className="flex gap-2">
@@ -106,7 +107,7 @@ function RequirementCard() {
             </Button>
             <Button
               size="sm"
-              disabled={busy}
+              disabled={busy || !!persistence && !current.goal.trim()}
               onClick={() => void save()}
             >
               {saving ? '保存中…' : '保存'}
@@ -151,14 +152,14 @@ function RequirementCard() {
             {FIELDS.map((f) => (
               <div key={f.key} className="flex flex-col gap-1">
                 <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{f.label}</dt>
-                <dd className="text-sm leading-relaxed">{current[f.key]}</dd>
+                <dd className="text-sm leading-relaxed">{current[f.key] || (persistence ? '待补充' : '')}</dd>
               </div>
             ))}
           </dl>
         )}
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t">
-        <Button size="lg" disabled={editing || busy || persistence?.requirementConfirmed} onClick={confirmRequirement}>
+        <Button size="lg" disabled={editing || busy || persistence?.requirementConfirmed || !!persistence && !req.goal.trim()} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
           {persistence?.requirementConfirmed ? '已确认学习需求' : capabilities.agent ? '确认，开始规划路线' : '确认学习需求'}
         </Button>
@@ -219,12 +220,12 @@ function Chat() {
       {persistence && <div className="flex h-12 shrink-0 items-center border-b"><SessionMenu /></div>}
       <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col gap-6 py-8">
-          <div className="flex gap-3">
+          {(!persistence || messages.length === 0) && <div className="flex gap-3">
             <BrandMark className="shrink-0" />
             <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
               {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
             </p>
-          </div>
+          </div>}
           {messages.map((m) => persistence && m.status === 'thinking' ? null :
             m.role === 'user' ? (
               <div key={m.id} className="flex justify-end">

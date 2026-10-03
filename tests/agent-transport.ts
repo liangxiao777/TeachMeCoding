@@ -50,7 +50,7 @@ export const agentTransport: StreamFn = (_model, context, options) => {
     stream.push({ type: 'start', partial: reply([], 'pending') });
     stream.push({ type: 'text_start', contentIndex: 0, partial: reply([{ type: 'text', text: '' }], 'pending') });
     for (const chunk of chunks) {
-      await new Promise((resolve) => setTimeout(resolve, slow ? 1400 : 200));
+      await new Promise((resolve) => setTimeout(resolve, text.includes('延迟摘要') ? 2000 : slow ? 1400 : 200));
       if (options?.signal?.aborted) { stream.push({ type: 'error', reason: 'aborted', error: reply([{ type: 'text', text: accumulated }], 'aborted') }); return; }
       accumulated += chunk;
       stream.push({ type: 'text_delta', contentIndex: 0, delta: chunk, partial: reply([{ type: 'text', text: accumulated }], 'pending') });

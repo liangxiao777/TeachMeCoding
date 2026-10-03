@@ -18,6 +18,8 @@ import { reply, response, syntheticConfig } from './test-support.js';
 function setup() {
   const db = openDatabase(':memory:'), learning = new Learning(db);
   const a = learning.create({ name: 'A', goal: '独立事实 A' }), b = learning.create({ name: 'B', goal: '独立事实 B' });
+  learning.saveRequirement(a.id, { ...a.requirement, value: { ...a.requirement.value, goal: '独立事实 A' } });
+  learning.saveRequirement(b.id, { ...b.requirement, value: { ...b.requirement.value, goal: '独立事实 B' } });
   return { db, learning, a, b, sa: a.sessions[0]!.id, sb: b.sessions[0]!.id };
 }
 const message = (text: string, draftRevision = 0) => ({ text, quote: null, draftRevision });

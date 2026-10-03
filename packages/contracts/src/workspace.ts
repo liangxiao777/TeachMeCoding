@@ -9,7 +9,8 @@ export const provenanceSchema = z.object({ kind: z.enum(['pasted', 'lesson', 'ed
 }).strict();
 export const quoteSchema = z.object({ source: z.enum(['lesson', 'code', 'terminal', 'advice']), label: title, text, provenance: provenanceSchema.optional() }).strict();
 export const requirementSchema = z.object({ goal: title, background: text, outcome: text, schedule: text }).strict();
-export const createSpaceSchema = z.object({ name: title, goal: title }).strict();
+// The opening request is a user message, not the structured requirement's short goal.
+export const createSpaceSchema = z.object({ name: title, goal: text.trim().min(1) }).strict();
 export const renameSpaceSchema = z.object({ name: title, previousName: z.string().min(1).max(200) }).strict();
 export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean() }).strict();
 export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title }).strict()

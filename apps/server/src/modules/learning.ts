@@ -58,7 +58,7 @@ export class Learning {
     return this.db.transaction(() => {
       const id = randomUUID();
       this.db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(id, v.name, Date.now());
-      this.db.prepare('INSERT INTO requirements(space_id,value) VALUES (?,?)').run(id, JSON.stringify({ goal: v.goal, background: '', outcome: '', schedule: '' }));
+      this.db.prepare('INSERT INTO requirements(space_id,value) VALUES (?,?)').run(id, JSON.stringify({ goal: '', background: '', outcome: '', schedule: '' }));
       this.db.prepare('INSERT INTO routes(space_id) VALUES (?)').run(id);
       for (const scope of ['intake', 'route']) {
         this.db.prepare('INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,?,?)').run(id, randomUUID(), scope, scope === 'intake' ? '学习需求' : '学习路线');
