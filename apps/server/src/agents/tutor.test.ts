@@ -48,7 +48,8 @@ test('a large lesson tool call reaches the final reply and commits the complete 
     assert.deepEqual(parts.filter((part) => part.type === 'reasoning').map((part) => part.status), ['done', 'done']);
     assert.equal(parts.filter((part) => part.type === 'text').map((part) => part.text).join(''), 'Preparing lesson. 课件已整理。');
     assert.equal(new Set(parts.map((part) => part.id)).size, 5);
-    assert.doesNotMatch(JSON.stringify(events), /TASK-PRIVATE-SIGNATURE|greet\.py|arguments|blocks/);
+    assert.deepEqual(parts.find((part) => part.type === 'tool')?.input, lesson);
+    assert.doesNotMatch(JSON.stringify(events), /TASK-PRIVATE-SIGNATURE/);
     assert.equal(db.prepare('SELECT * FROM messages').all().length, 0, 'Tasks publish activity without creating chat messages');
     assert.deepEqual(runtime.events(space.id, task.id, events.at(-1)!.seq).events, []);
   } finally { await runtime.close(); db.close(); }

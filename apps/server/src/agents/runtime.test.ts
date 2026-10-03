@@ -15,7 +15,6 @@ import { createLocalAccess } from '../http/local-access.js';
 import { serverConfig } from '../config/server.js';
 import { TeachingRuntime } from './runtime.js';
 import { providerStream, teachingModel } from './model.js';
-import { budget } from './context.js';
 import { reply, response, syntheticConfig } from './test-support.js';
 
 function setup() {
@@ -117,7 +116,7 @@ test('cancelling a multi-tool turn retains matching native results without commi
     assert.doesNotMatch(JSON.stringify(values), /CANCELLED-SOURCE-BODY/);
     assert.equal(commits, 0); assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
     assert.deepEqual(learning.session(a.id, sa).messages.at(-1)?.parts,
-      [{ type: 'tool', id: `${run.id}:1:tool:first`, name: 'read', status: 'interrupted' }]);
+      [{ type: 'tool', id: `${run.id}:1:tool:first`, name: 'read', status: 'interrupted', input: {} }]);
   } finally { release(); await runtime.close(); db.close(); }
 });
 
@@ -220,7 +219,7 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
     await runtime.idle(run.id);
     assert.equal(runtime.get(a.id, run.id).state, 'failed');
     assert.equal(payload?.model, 'stealth/space-bunny-alpha');
-    assert.equal(payload?.max_tokens, budget.output);
+    assert.ok(payload && !('max_tokens' in payload) && !('max_completion_tokens' in payload));
     assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
     assert.ok(!JSON.stringify(payload).includes(syntheticConfig.apiKey));
     const manifest = db.prepare('SELECT value FROM context_manifests').get() as { value: string };
@@ -235,7 +234,7 @@ test('ordered reasoning/text/tool rounds hydrate identically while native signat
     { type: 'thinking', thinking: 'First reasoning', thinkingSignature: 'PRIVATE-THINKING-SIGNATURE' },
     { type: 'thinking', thinking: 'REDACTED-CONTENT', thinkingSignature: 'ENCRYPTED-SIGNATURE', redacted: true },
     { type: 'text', text: 'Before tool. ', textSignature: 'PRIVATE-TEXT-SIGNATURE' },
-    { type: 'toolCall', id: 'read-1', name: 'read', arguments: { marker: 'PRIVATE-ARGUMENT' } },
+    { type: 'toolCall', id: 'read-1', name: 'read', arguments: { marker: 'VISIBLE-ARGUMENT' } },
   ], 'toolUse');
   const tool: AgentTool = { name: 'read', label: 'Read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
     async execute() { return { content: [{ type: 'text', text: 'PRIVATE-TOOL-BODY' }], details: {} }; } };
@@ -266,7 +265,7 @@ test('ordered reasoning/text/tool rounds hydrate identically while native signat
     assert.deepEqual(parts, [
       { type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'First reasoning', status: 'done' },
       { type: 'text', id: `${run.id}:1:text:2`, text: 'Before tool. ' },
-      { type: 'tool', id: `${run.id}:1:tool:read-1`, name: 'read', status: 'done' },
+      { type: 'tool', id: `${run.id}:1:tool:read-1`, name: 'read', status: 'done', input: { marker: 'VISIBLE-ARGUMENT' } },
       { type: 'reasoning', id: `${run.id}:2:reasoning:0`, text: 'Second reasoning', status: 'done' },
       { type: 'text', id: `${run.id}:2:text:1`, text: 'After tool.' },
     ]);
@@ -375,8 +374,8 @@ test('legacy display events reduce immutably in order and terminal states do not
     [{ type: 'tool', id: 'legacy:legacy-tool:1', name: 'read', status: 'error' }]);
 });
 
-test('real Pi adapter exposes tool phases without argument counters and never executes a failed stream', async () => {
-  for (const mode of ['success', 'failure', 'cancel'] as const) {
+test('real Pi adapter streams tool arguments, replays them exactly, and never executes a failed stream', async () => {
+  for (const mode of ['success', 'failure', 'cancel', 'length'] as const) {
     const { db, learning, a, sa } = setup();
     const adapter = providerStream();
     let requests = 0, executions = 0, commits = 0, chunks = 0;
@@ -402,33 +401,39 @@ test('real Pi adapter exposes tool phases without argument counters and never ex
       assert.ok(wire);
       wire.enqueue(encode(chunk({ reasoning: 'Analyse the request.' })));
       wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, id: 'native-call', type: 'function', function: { name: 'read', arguments: '{"marker":' } }] })));
-      wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, function: { arguments: '"PRIVATE-ARGUMENT"}' } }] })));
+      wire.enqueue(encode(chunk({ tool_calls: [{ index: 0, function: { arguments: '"VISIBLE-ARGUMENT"}' } }] })));
       for (let i = 0; i < 100 && chunks < 3; i++) await new Promise((r) => setTimeout(r, 1));
       assert.equal(chunks, 3);
       const before = learning.session(a.id, sa).messages.at(-1)!;
       assert.deepEqual(before.parts, [
         { type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'Analyse the request.', status: 'streaming' },
-        { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating' },
+        { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating', inputText: '{"marker":"VISIBLE-ARGUMENT"}' },
       ]);
       assert.equal(executions, 0, 'Even complete-looking JSON is not permission to execute before normal stream termination');
       if (mode === 'failure') wire.enqueue(encode({ error: { code: 502, message: 'PRIVATE-PROVIDER-ERROR', metadata: { raw: 'PRIVATE-ERROR-BODY' } } }));
       else if (mode === 'cancel') runtime.stop(a.id, run.id);
-      else wire.enqueue(encode(chunk({}, 'tool_calls')));
+      else wire.enqueue(encode(chunk({}, mode === 'length' ? 'length' : 'tool_calls')));
       wire.close();
       await runtime.idle(run.id);
       const events = runtime.events(a.id, run.id).events;
       const toolEvents = events.flatMap((e) => e.data.type === 'tool' ? [e.data] : []);
-      assert.deepEqual(toolEvents.map((e) => e.phase), mode === 'success' ? ['input', 'ready', 'start', 'end'] : ['input']);
+      assert.deepEqual(toolEvents.slice(0, 3).map((e) => e.phase), ['input', 'input', 'input']);
+      if (mode !== 'length') assert.deepEqual(toolEvents.slice(3).map((e) => e.phase), mode === 'success' ? ['ready', 'start', 'end'] : []);
       assert.ok(toolEvents.every((e) => !('inputCharacters' in e)));
       assert.equal(new Set(toolEvents.map((e) => e.callId)).size, 1);
       assert.equal(executions, mode === 'success' ? 1 : 0);
       assert.equal(commits, mode === 'success' ? 1 : 0);
       assert.equal(requests, mode === 'success' ? 2 : 1, 'No automatic retry on a failed stream');
-      assert.equal(runtime.get(a.id, run.id).state, mode === 'success' ? 'succeeded' : mode === 'failure' ? 'failed' : 'interrupted');
+      assert.equal(runtime.get(a.id, run.id).state, mode === 'success' ? 'succeeded' : mode === 'cancel' ? 'interrupted' : 'failed');
+      if (mode === 'length') assert.match(runtime.get(a.id, run.id).error!, /截断/);
       const hydrated = learning.session(a.id, sa).messages.at(-1)!;
       assert.deepEqual(hydrated.parts, events.reduce<AgentDisplayPart[]>(applyAgentEvent, []));
       const tool = hydrated.parts?.find((p) => p.type === 'tool');
-      assert.equal(tool?.type === 'tool' && tool.status, mode === 'success' ? 'done' : 'interrupted');
+      if (mode !== 'length') assert.equal(tool?.type === 'tool' && tool.status, mode === 'success' ? 'done' : 'interrupted');
+      if (tool?.type === 'tool' && mode !== 'length') {
+        assert.deepEqual(tool.input, mode === 'success' ? { marker: 'VISIBLE-ARGUMENT' } : undefined);
+        assert.equal(tool.inputText, mode === 'success' ? undefined : '{"marker":"VISIBLE-ARGUMENT"}');
+      }
       assert.doesNotMatch(JSON.stringify({ events, hydrated }), /PRIVATE-/);
       const retained = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
       assert.doesNotMatch(retained, /PRIVATE-PROVIDER-ERROR|PRIVATE-ERROR-BODY|PRIVATE-HEADER/);
@@ -438,6 +443,7 @@ test('real Pi adapter exposes tool phases without argument counters and never ex
       assert.ok(manifest.transport.eventCount >= 3);
       assert.ok(manifest.transport.lastEventAt >= manifest.transport.startedAt);
       assert.ok(manifest.transport.elapsedMs >= 0);
+      if (mode === 'length') assert.equal(manifest.transport.rawStopReason, 'length');
       if (mode === 'failure') {
         assert.equal(manifest.actualUsage, null);
         assert.match(manifest.transport.errorFingerprint, /^[a-f0-9]{64}$/);

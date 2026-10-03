@@ -53,11 +53,12 @@ test('exact model and private key reach the stream; text and terminal lifecycle 
   assert.ok(!JSON.stringify(events).includes(config.apiKey));
 });
 
-test('smoke uses the teaching output cap and mandatory high reasoning before transport', async () => {
+test('smoke leaves token limits unset and preserves mandatory high reasoning before transport', async () => {
   let payload: Record<string, unknown> | undefined;
   const agent = createProviderAgent(config);
-  const stream = await providerStream()(agent.state.model, normalizeContext({
-    messages: [{ role: 'user', content: 'Reply with exactly: Hello 42', timestamp: 0 }],
+  const input = 'Preserve this entire input. '.repeat(2000);
+  const stream = await providerStream()({ ...agent.state.model, contextWindow: 8, maxTokens: 2 }, normalizeContext({
+    messages: [{ role: 'user', content: input, timestamp: 0 }],
   }), {
     apiKey: config.apiKey, reasoning: 'high',
     onPayload(value) {
@@ -69,7 +70,8 @@ test('smoke uses the teaching output cap and mandatory high reasoning before tra
   assert.equal(result.stopReason, 'error');
   assert.equal(result.errorMessage, 'Test stops before network transport');
   assert.equal(payload?.model, 'exact/configured-id');
-  assert.equal(payload?.max_tokens, 4096);
+  assert.ok(payload && !('max_tokens' in payload) && !('max_completion_tokens' in payload));
+  assert.ok(JSON.stringify(payload.messages).includes(input));
   assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
 });
 

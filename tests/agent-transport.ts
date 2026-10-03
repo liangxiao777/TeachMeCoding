@@ -1,8 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import { createAssistantMessageEventStream, type AssistantMessage } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
 import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-agent-core/dist/index.js';
-import { reply, response } from '../apps/server/src/agents/test-support.js';
-import { routeContentSchema } from '../packages/contracts/src/workspace.js';
+import { reply, response, routeReply } from '../apps/server/src/agents/test-support.js';
 
 // Deterministic test provider ONLY. Real HTTP, SQLite, Pi loop and UI are not mocked.
 let evaluationFailed = false;
@@ -73,18 +71,23 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     if (has('submit_learning_conclusion')) return response(reply([{ type: 'toolCall', id: 'conclusion-call', name: 'submit_learning_conclusion', arguments: {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
     } }], 'toolUse'));
-    if (has('submit_route_proposal')) {
+    if (!has('submit_route_proposal') && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
+      goal: text.includes('纯推理') ? '纯推理' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
+    } }], 'toolUse'));
+  }
+  if (has('submit_route_proposal')) {
+    if (last?.role === 'toolResult' && last.toolName === 'add_route_stage' && all.includes('PLAN-SLOW')) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    const previous = context.messages.slice(0, context.messages.findLastIndex((m) => m.role === 'user')).some((m) =>
+      m.role === 'assistant' && m.content.some((part) => part.type === 'toolCall' && part.name === 'submit_route_proposal'));
+    if (last?.role !== 'toolResult') {
       await new Promise((resolve) => setTimeout(resolve, all.includes('PLAN-SLOW') ? 4000 : 600));
       if (all.includes('PLAN-FAIL-ONCE') && !planningFailed) { planningFailed = true; return response(reply([], 'error')); }
-      const previous = context.messages.flatMap((m) => m.role === 'assistant' ? m.content : []).find((part) => part.type === 'toolCall' && part.name === 'submit_route_proposal');
-      const stages = previous?.type === 'toolCall' ? routeContentSchema.parse(previous.arguments).stages : [{ id: randomUUID(), title: '工具基础', units: [
-        { id: randomUUID(), title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
-        { id: randomUUID(), title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
-      ] }];
       if (all.includes('PLAN-STREAM-ERROR')) {
         const stream = createAssistantMessageEventStream();
         void (async () => {
-          const tool = { type: 'toolCall' as const, id: 'streamed-route', name: 'submit_route_proposal', arguments: { note: 'PRIVATE-STREAMED-ROUTE', stages } };
+          const tool = { type: 'toolCall' as const, id: 'streamed-route', name: 'add_route_stage', arguments: { title: '工具基础：参数、错误与输出' } };
           const partial = reply([{ type: 'thinking', thinking: '核对需求。'.repeat(121) }, tool], 'pending');
           stream.push({ type: 'start', partial: reply([], 'pending') });
           stream.push({ type: 'thinking_start', contentIndex: 0, partial });
@@ -106,13 +109,12 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         })();
         return stream;
       }
-      return response(reply([{ type: 'toolCall', id: 'route-call', name: 'submit_route_proposal', arguments: {
-        note: previous ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages,
-      } }], 'toolUse'));
     }
-    if (!text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
-      goal: text.includes('纯推理') ? '纯推理' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
-    } }], 'toolUse'));
+    const next = routeReply(context.messages, { note: previous ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages: [{ title: '工具基础', units: [
+      { title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
+      { title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
+    ] }] }, previous);
+    if (next) return response(next);
   }
   const stream = createAssistantMessageEventStream();
   const slow = text.includes('慢速') || has('submit_evaluation');

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import type { RouteContent } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
-import { reply, response, syntheticConfig } from './test-support.js';
+import { reply, response, routeReply, syntheticConfig } from './test-support.js';
 
 test('the opening request starts intake once, and only its tool fills the editable requirement', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
@@ -112,11 +113,12 @@ test('initial roadmap applies on success while adjustments require confirmation 
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const space = learning.create({ name: change, goal: 'learn A not B' }), session = space.sessions[1]!.id;
     learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A not B' }, confirmed: true });
-    const content = { note: 'plan', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
-    let turns = 0;
+    let content: RouteContent = { note: 'plan', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
     const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
       assert.match(JSON.stringify(context), /learn A not B/);
-      if (turns++ % 2 === 0) return response(reply([{ type: 'toolCall', id: 'plan', name: 'submit_route_proposal', arguments: { ...content, note: turns > 1 ? 'adjusted' : 'plan' } }], 'toolUse'));
+      const adjustment = !!learning.space(space.id).route.content;
+      const next = routeReply(context.messages, { ...content, note: adjustment ? 'adjusted' : 'plan' }, adjustment);
+      if (next) return response(next);
       if (change === 'requirement') learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, confirmed: true });
       if (change === 'route') learning.applyProposal(space.id, learning.proposeRoute(space.id, session, content).id);
       return response(reply([{ type: 'text', text: '请确认提案' }]));
@@ -126,7 +128,12 @@ test('initial roadmap applies on success while adjustments require confirmation 
       await runtime.idle(run.id);
       assert.equal(runtime.get(space.id, run.id).state, change === 'none' ? 'succeeded' : 'failed');
       if (change !== 'none') continue;
-      assert.deepEqual(learning.space(space.id).route.content, content);
+      const saved = learning.space(space.id).route.content!;
+      assert.equal(saved.note, 'plan');
+      assert.equal(saved.stages[0]!.title, 'stage');
+      assert.deepEqual(saved.stages[0]!.units.map(({ title, summary, goals }) => ({ title, summary, goals })), [{ title: 'unit', summary: '', goals: ['A'] }]);
+      assert.notEqual(saved.stages[0]!.id, content.stages[0]!.id);
+      content = saved;
       const p = learning.space(space.id).proposals[0]!;
       assert.equal(p.state, 'applied');
       learning.applyProposal(space.id, p.id); learning.applyProposal(space.id, p.id);
@@ -163,8 +170,7 @@ test('confirmation and planning commit atomically, retry once, and persist the i
   let calls = 0;
   const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
     calls++;
-    return context.messages.at(-1)?.role === 'toolResult' ? response(reply([]))
-      : response(reply([{ type: 'toolCall', id: 'initial', name: 'submit_route_proposal', arguments: content }], 'toolUse'));
+    return response(routeReply(context.messages, content) ?? reply([]));
   } });
   try {
     db.exec("CREATE TRIGGER fail_plan BEFORE INSERT ON runs BEGIN SELECT RAISE(ABORT, 'injected planning failure'); END");
@@ -180,10 +186,13 @@ test('confirmation and planning commit atomically, retry once, and persist the i
     await runtime.idle(run.id);
     assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
     assert.equal(runtime.plan(space.id, key, input).run.id, run.id);
-    assert.deepEqual(learning.space(space.id).route.content, content);
+    const saved = learning.space(space.id).route.content!;
+    assert.equal(saved.note, 'A before B');
+    assert.deepEqual(saved.stages.map((s) => ({ title: s.title, units: s.units.map(({ title, summary, goals }) => ({ title, summary, goals })) })),
+      [{ title: 'first', units: [{ title: 'A', summary: 'intro', goals: ['A'] }] }]);
     assert.equal(learning.space(space.id).route.revision, 1);
     assert.equal(learning.session(space.id, run.sessionId!).messages.filter((m) => m.role === 'user').length, 1);
-    assert.equal(calls, 2);
+    assert.equal(calls, 4);
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -195,8 +204,9 @@ test('missing, invalid, truncated and cancelled initial routes cannot be publish
     let retrying = false;
     const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
       if (!retrying && variant === 'missing') return response(reply([{ type: 'text', text: 'I made a plan without submitting it' }]));
-      if (context.messages.at(-1)?.role === 'toolResult') return response(reply([], !retrying && variant === 'truncated' ? 'length' : 'stop'));
-      return response(reply([{ type: 'toolCall', id: 'route', name: 'submit_route_proposal', arguments: !retrying && variant === 'invalid' ? { stages: [] } : content }], 'toolUse'));
+      if (!retrying && variant === 'invalid') return response(context.messages.at(-1)?.role === 'toolResult' ? reply([])
+        : reply([{ type: 'toolCall', id: 'invalid', name: 'submit_route_proposal', arguments: { note: 'empty draft' } }], 'toolUse'));
+      return response(routeReply(context.messages, content) ?? reply([], !retrying && variant === 'truncated' ? 'length' : 'stop'));
     } });
     try {
       const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'A' }, confirmed: true });
@@ -209,7 +219,10 @@ test('missing, invalid, truncated and cancelled initial routes cannot be publish
       const next = runtime.retry(space.id, run.id, randomUUID());
       await runtime.idle(next.run.id);
       assert.equal(runtime.get(space.id, next.run.id).state, 'succeeded');
-      assert.deepEqual(learning.space(space.id).route.content, content);
+      const saved = learning.space(space.id).route.content!;
+      assert.equal(saved.note, 'retry');
+      assert.equal(saved.stages[0]!.title, 'stage');
+      assert.deepEqual(saved.stages[0]!.units.map((u) => u.goals), [['A']]);
       assert.equal(learning.session(space.id, run.sessionId!).messages.filter((m) => m.role === 'user').length, 1);
     } finally { await runtime.close(); db.close(); }
   }

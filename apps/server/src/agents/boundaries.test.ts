@@ -8,7 +8,7 @@ import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
-import { budget, type FrozenContext, systemPrompt } from './context.js';
+import { type FrozenContext, systemPrompt } from './context.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
 import { populated, reply, response, syntheticConfig } from './test-support.js';
@@ -19,7 +19,7 @@ test('real scene and task tool sets never include side effects, cross-scene arti
   const input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
     scenario: 'intake', requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, references: [] };
   try {
-    const expected = { intake: ['submit_requirement_draft'], roadmap: ['submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
+    const expected = { intake: ['submit_requirement_draft'], roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
       lesson: ['submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
       const frozen = { ...input, scenario };
@@ -47,15 +47,18 @@ test('Pi rejects unknown write/execute and cross-scene tool calls without changi
   } finally { await runtime.close(); db.close(); }
 });
 
-test('endless valid tools stop at request budget and a stalled provider times out without a commit', async () => {
+test('endless valid tools and a stalled provider time out without a commit', async () => {
   for (const mode of ['loop', 'timeout'] as const) {
     const db = openDatabase(':memory:'), l = new Learning(db), space = l.create({ name: mode, goal: 'test' });
     let requests = 0, committed = 0;
     const runtime = new TeachingRuntime(l, syntheticConfig, { milliseconds: 100,
       scenario: () => ({ tools: [{ name: 'ping', label: 'ping', description: 'no effect', parameters: Type.Object({}), async execute() { return { content: [], details: {} }; } }], commit() { committed++; } }),
-      stream: (_m, _c, options) => {
+      stream: async (_m, _c, options) => {
         requests++;
-        if (mode === 'loop') return response(reply([{ type: 'toolCall', id: `call-${requests}`, name: 'ping', arguments: {} }], 'toolUse'));
+        if (mode === 'loop') {
+          await new Promise((resolve) => setImmediate(resolve));
+          return response(reply([{ type: 'toolCall', id: `call-${requests}`, name: 'ping', arguments: {} }], 'toolUse'));
+        }
         const stream = createAssistantMessageEventStream();
         options?.signal?.addEventListener('abort', () => stream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }), { once: true });
         return stream;
@@ -65,7 +68,7 @@ test('endless valid tools stop at request budget and a stalled provider times ou
       const { run } = runtime.submit(space.id, space.sessions[0]!.id, randomUUID(), { text: 'test', quote: null, draftRevision: 0 });
       await runtime.idle(run.id); const final = runtime.get(space.id, run.id);
       assert.equal(final.state, 'failed'); assert.equal(committed, 0);
-      assert.equal(requests, mode === 'loop' ? budget.requests : 1); assert.match(final.error!, mode === 'loop' ? /预算/ : /超时/);
+      assert.ok(requests >= 1); assert.match(final.error!, /超时/);
     } finally { await runtime.close(); db.close(); }
   }
 });

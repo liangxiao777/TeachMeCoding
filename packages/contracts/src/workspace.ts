@@ -54,7 +54,7 @@ export interface RequirementState { revision: number; confirmed: boolean; value:
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
 export type AgentDisplayPart = { type: 'text'; id: string; text: string }
   | { type: 'reasoning'; id: string; text: string; status: 'streaming' | 'done' | 'interrupted' }
-  | { type: 'tool'; id: string; name: string; status: 'generating' | 'ready' | 'running' | 'done' | 'error' | 'interrupted' };
+  | { type: 'tool'; id: string; name: string; input?: unknown; inputText?: string; status: 'generating' | 'ready' | 'running' | 'done' | 'error' | 'interrupted' };
 export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
@@ -66,7 +66,7 @@ export interface AgentRun extends WorkStatus { error: string | null; cancelled: 
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
   | { type: 'text'; delta: string; partId?: string }
   | { type: 'reasoning'; partId: string; phase: 'start' | 'delta' | 'end'; delta?: string }
-  | { type: 'tool'; name: string; phase: 'input' | 'ready' | 'start' | 'end'; failed?: boolean; callId?: string };
+  | { type: 'tool'; name: string; phase: 'input' | 'ready' | 'start' | 'end'; input?: unknown; inputDelta?: string; failed?: boolean; callId?: string };
 export interface RunEvent { runId: string; seq: number; data: AgentEventData }
 export interface RunEvents { run: AgentRun; events: RunEvent[] }
 export interface RunSubmission { run: AgentRun; session: SessionDetail }
@@ -98,7 +98,10 @@ export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEv
   const existing = data.callId ? parts.find((part) => part.type === 'tool' && part.id === data.callId)
     : data.phase === 'end' ? parts.findLast((part) => part.type === 'tool' && part.name === data.name && part.status === 'running') : undefined;
   const part: AgentDisplayPart = { ...existing, type: 'tool', id: data.callId ?? existing?.id ?? `${runId}:legacy-tool:${seq}`,
+    ...(data.inputDelta !== undefined ? { inputText: (existing?.type === 'tool' ? existing.inputText ?? '' : '') + data.inputDelta } : {}),
+    ...(data.input !== undefined ? { input: structuredClone(data.input) } : {}),
     name: data.name, status: data.phase === 'input' ? 'generating' : data.phase === 'ready' ? 'ready' : data.phase === 'end' ? data.failed ? 'error' : 'done' : 'running' };
+  if (data.input !== undefined) delete part.inputText;
   return existing ? parts.map((p) => p === existing ? part : p) : [...parts, part];
 }
 

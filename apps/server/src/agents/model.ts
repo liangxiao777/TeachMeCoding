@@ -4,7 +4,7 @@ import type { StreamFn } from '@earendil-works/pi-agent-core';
 import { budget } from './context.js';
 
 // OpenRouter /api/v1/models, checked 2026-10-03. Prices are USD / million tokens.
-// Application budgets below are deliberately much smaller than the provider limits.
+// Capability metadata, not application-enforced request limits.
 export const teachingModel: Model<'openai-completions'> = {
   id: 'stealth/space-bunny-alpha', name: 'Space Bunny Alpha', provider: 'openrouter', api: 'openai-completions',
   baseUrl: 'https://openrouter.ai/api/v1', reasoning: true, input: ['text', 'image'],
@@ -16,7 +16,9 @@ export const teachingModel: Model<'openai-completions'> = {
 export function providerStream(): StreamFn {
   const models = createModels();
   models.setProvider(openrouterProvider());
-  return (model, context, options) => models.streamSimple(model, context, { ...options, maxTokens: Math.min(options?.maxTokens ?? budget.output, budget.output) });
+  // streamSimple estimates remaining context and inserts a maxTokens default.
+  // The provider-native API leaves output length to the provider when omitted.
+  return (model, context, options) => models.stream(model, context, { ...options, reasoningEffort: options?.reasoning });
 }
 export function failureStream(reason: string, aborted = false) {
   const stream = createAssistantMessageEventStream();

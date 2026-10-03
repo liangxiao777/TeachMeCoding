@@ -234,7 +234,12 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await page.reload();
   await expect(title).toBeVisible();
   await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveCount(0);
-  await expect(page.getByTestId('tool-call').getByText('已返回', { exact: true })).toBeVisible({ timeout: 10000 });
+  const stageTool = page.getByTestId('tool-call').first();
+  await expect(stageTool.getByText('已返回', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText('生成路线内容', { exact: true }).locator('../..')).toHaveClass(/text-foreground/);
+  await expect(page.getByText('校验路线结构', { exact: true }).locator('../..')).toHaveClass(/text-muted-foreground\/50/);
+  await stageTool.getByRole('button').click();
+  await expect(stageTool.locator('pre')).toContainText('"title": "工具基础"');
   await page.screenshot({ path: `.amp/in/artifacts/planning-progress-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
   await expect(title).toHaveCount(0);
@@ -342,6 +347,9 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(page.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: /整理学习需求.*已返回/ }).click();
   await expect(page.getByText('submit_requirement_draft', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('tool-call').locator('pre')).toContainText('已有变量基础');
+  await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"schedule": "每周两次"');
+  await page.getByTestId('tool-call').screenshot({ path: `.amp/in/artifacts/tool-arguments-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.locator('button button')).toHaveCount(0);
   const snapshots = await page.evaluate(async () => {
     const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
@@ -411,6 +419,10 @@ test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dar
   await expect(agent.getByTestId('reasoning').first()).toContainText('先核对已有基础。');
   await expect(agent.getByRole('table')).toContainText('每周两次');
   await expect(agent.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
+  const tool = agent.getByTestId('tool-call');
+  await tool.getByRole('button').click();
+  await expect(tool.locator('pre')).toContainText('根据已有基础继续练习。');
+  await tool.screenshot({ path: `.amp/in/artifacts/tool-arguments-dark-${info.project.name}.png`, animations: 'disabled' });
   const composer = await agent.getByLabel('向 Agent 提问', { exact: true }).boundingBox();
   const panel = (await agent.boundingBox())!;
   expect(panel.width).toBe(384);
@@ -433,8 +445,9 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   const tool = page.getByTestId('tool-call');
   await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
   await tool.getByRole('button').click();
-  await expect(tool.locator('code')).toHaveText('submit_route_proposal');
-  await expect(tool).not.toContainText(/已接收|字符|参数|尚未执行|尚未调用/);
+  await expect(tool.getByText('add_route_stage', { exact: true })).toBeVisible();
+  await expect(tool.locator('pre')).toContainText('工具基础：参数、错误与输出');
+  await expect(tool).not.toContainText(/已接收|字符|尚未执行|尚未调用/);
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
   await expect(page.getByText('正在思考…', { exact: true })).toHaveCount(0);
   await expect(page.getByText('生成路线内容', { exact: true })).toBeVisible();
@@ -446,6 +459,8 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   page.on('request', (r) => { if (r.url().includes('/stream?after=')) resumed.push(Number(new URL(r.url()).searchParams.get('after'))); });
   await page.reload();
   await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
+  await tool.getByRole('button').click();
+  await expect(tool.locator('pre')).toContainText('工具基础：参数、错误与输出');
   await expect.poll(() => resumed.some((cursor) => cursor > 500)).toBe(true);
   await expect(page.getByText('正在思考…', { exact: true })).toHaveCount(0);
   await page.clock.fastForward(31_000);

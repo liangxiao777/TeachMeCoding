@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
 import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
@@ -221,10 +221,21 @@ export class TeachingRuntime {
     // Assessment/evaluation reasoning can contain private reference answers.
     // Publish real phase/tool activity, but never their unvalidated model prose.
     const displayModelText = frozen.scenario !== 'assessment' && frozen.scenario !== 'evaluation';
+    const publicInput = (name: string, args: Record<string, unknown>) => {
+      if (name === 'submit_assessment') {
+        const value = args.public && typeof args.public === 'object' ? args.public as Record<string, unknown> : {};
+        return { public: Object.fromEntries(Object.entries(assessmentSpecSchema.shape).flatMap(([key, schema]) =>
+          key in value && schema.safeParse(value[key]).success ? [[key, value[key]]] : [])) };
+      }
+      if (name === 'submit_evaluation') return Object.fromEntries(Object.entries(assessmentResultSchema.shape).flatMap(([key, schema]) =>
+        key in args && schema.safeParse(args[key]).success ? [[key, args[key]]] : []));
+      // Unknown calls from a private-answer task must not expose private data.
+      return displayModelText ? structuredClone(args) : {};
+    };
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
     let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
-    let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
+    let failure = '', toolFailed = false, request = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space)) : createTask(this.learning, frozen));
@@ -234,15 +245,16 @@ export class TeachingRuntime {
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
         getApiKey: () => this.config?.apiKey,
         beforeToolCall: async () => {
-          if (++calls > budget.tools || !active(this.get(space, id))) {
-            failure = '工具调用预算耗尽或运行已停止。';
+          if (failure) return { block: true, reason: failure, terminate: true };
+          if (!active(this.get(space, id))) {
+            failure = '运行已停止。';
             return { block: true, reason: failure, terminate: true };
           }
           return undefined;
         },
         streamFn: async (model, context, options) => {
           try {
-            if (++request > budget.requests || output >= budget.outputTotal) throw new BusinessError(422, '模型轮次或总输出预算已耗尽。');
+            request++;
             if (!active(this.get(space, id))) return failureStream('运行已停止。', true);
             const compiled = compileRequest(frozen, history, context.messages, tools);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
@@ -255,7 +267,7 @@ export class TeachingRuntime {
             }
             transport = { startedAt: Date.now(), httpStatus: null, eventCount: 0, lastEventAt: null };
             return await this.stream(model, normalizeContext({ messages: compiled.messages }), {
-              ...options, maxTokens: Math.min(budget.output, budget.outputTotal - output),
+              ...options,
               onResponse: (response) => { transport.httpStatus = response.status; },
               onProviderStreamEvent: () => { transport.eventCount++; transport.lastEventAt = Date.now(); },
             });
@@ -265,6 +277,9 @@ export class TeachingRuntime {
           }
         },
       });
+      // Abort is cooperative in Pi; finishTurn ends even a just-settled tool
+      // batch without another request or an invented assistant failure message.
+      agent.finishTurn = (_turn, signal) => failure || signal?.aborted ? { action: 'end' } : undefined;
       entry.agent = agent;
       timer = setTimeout(() => { failure = '模型运行超时，请重试或缩小任务。'; agent.abort(); }, this.options.milliseconds ?? budget.milliseconds);
       this.learning.db.prepare(`UPDATE ${tables.work} SET state='running' WHERE space_id=? AND id=?`).run(space, id);
@@ -274,11 +289,11 @@ export class TeachingRuntime {
           const m = event.message;
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
-            output += m.usage.output;
+            if (m.stopReason === 'length') failure = '模型输出被截断，未保存生成产物。';
             // Keep enough transport evidence for diagnosis without retaining provider
             // error bodies, headers, credentials, or an invented zero-token usage.
             const diagnostic = { ...transport, elapsedMs: transport ? Date.now() - transport.startedAt : null,
-              responseId: m.responseId ?? null, stopReason: m.stopReason,
+              responseId: m.responseId ?? null, stopReason: m.stopReason, rawStopReason: m.rawStopReason ?? null,
               errorFingerprint: m.errorMessage ? createHash('sha256').update(m.errorMessage).digest('hex') : null };
             this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?),'$.transport',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
               .run(JSON.stringify(m.stopReason === 'error' && m.usage.totalTokens === 0 ? null : m.usage), JSON.stringify(diagnostic), space, id, request);
@@ -286,7 +301,9 @@ export class TeachingRuntime {
         }
         if (!active(this.get(space, id))) return;
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
-        if (event.type === 'tool_execution_end' && event.isError) failure = '工具调用或结构化产物无效，未保存生成产物。';
+        // Pi returns tool errors to the model so it can correct them. A later
+        // successful call can recover; the scenario still validates its artifact.
+        if (event.type === 'tool_execution_end') toolFailed = event.isError;
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
           if (displayModelText && update.type === 'text_delta') {
@@ -304,18 +321,21 @@ export class TeachingRuntime {
               ...(update.type === 'thinking_delta' ? { delta: update.delta } : {}),
             });
           }
-          if (update.type === 'toolcall_start' || update.type === 'toolcall_end') {
+          if (update.type === 'toolcall_start' || update.type === 'toolcall_delta' || update.type === 'toolcall_end') {
             const native = update.partial.content[update.contentIndex];
             if (native?.type === 'toolCall') {
               const partId = `${id}:${request}:tool-input:${update.contentIndex}`;
               toolParts.set(`${request}:${native.id}`, partId);
               this.emit(space, id, { type: 'tool', callId: partId, name: native.name,
+                ...(update.type === 'toolcall_delta' && displayModelText && !['submit_assessment', 'submit_evaluation'].includes(native.name) ? { inputDelta: update.delta } : {}),
+                ...(update.type === 'toolcall_end' ? { input: publicInput(native.name, update.toolCall.arguments) } : {}),
                 phase: update.type === 'toolcall_end' ? 'ready' : 'input' });
             }
           }
         }
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') this.emit(space, id,
           { type: 'tool', callId: toolParts.get(`${request}:${event.toolCallId}`) ?? `${id}:${request}:tool:${event.toolCallId}`, name: event.toolName,
+            ...(event.type === 'tool_execution_start' ? { input: publicInput(event.toolName, event.args) } : {}),
             phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
       await agent.prompt({ role: 'user', content: frozen.references.length ? [
@@ -324,6 +344,7 @@ export class TeachingRuntime {
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
+      if (toolFailed) throw new BusinessError(422, '工具调用或结构化产物无效，未保存生成产物。');
       if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
         last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
           : '模型响应未正常完成，未保存生成产物。');

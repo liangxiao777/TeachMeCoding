@@ -25,7 +25,7 @@ export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
 export const compilerVersion = '3';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
-export const budget = { output: 4096, reasoning: 'high' as const, requests: 6, tools: 12, outputTotal: 12_288, milliseconds: 300_000 };
+export const budget = { reasoning: 'high' as const, milliseconds: 300_000 };
 
 export function xmlText(text: string) {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udfff]/gu, '�')

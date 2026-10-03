@@ -144,8 +144,9 @@ export function Generating({
 }) {
   const [simulated, setActive] = useState(0)
   const tool = parts?.findLast((p) => p.type === 'tool')
-  const recordedStep = parts === undefined ? undefined : tool?.status === 'done' ? 3
-    : tool?.status === 'running' ? 2 : tool ? 1 : 0
+  const submitting = tool?.name.startsWith('submit_')
+  const recordedStep = parts === undefined ? undefined : submitting && tool?.status === 'done' ? 3
+    : submitting && tool?.status === 'running' ? 2 : tool ? 1 : 0
   const active = recordedStep ?? simulated
   useEffect(() => {
     if (recordedStep !== undefined) return

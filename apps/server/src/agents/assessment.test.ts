@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { Assessments } from '../modules/assessments.js';
@@ -25,7 +26,16 @@ test('private rubric is separated from public unit, tutor context and task event
       assert.match(value, /只给提示/);
       return response(reply([{ type: 'text', text: '先想一想调用者传入什么。' }]));
     }
-    if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'questions', name: 'submit_assessment', arguments: spec }], 'toolUse'));
+    if (context.messages.at(-1)?.role !== 'toolResult') {
+      const tool = { type: 'toolCall' as const, id: 'questions', name: 'submit_assessment', arguments: spec };
+      const partial = reply([tool], 'toolUse'), stream = createAssistantMessageEventStream();
+      stream.push({ type: 'start', partial: reply([], 'pending') });
+      stream.push({ type: 'toolcall_start', contentIndex: 0, partial });
+      stream.push({ type: 'toolcall_delta', contentIndex: 0, delta: JSON.stringify(spec), partial });
+      stream.push({ type: 'toolcall_end', contentIndex: 0, toolCall: tool, partial });
+      stream.push({ type: 'done', reason: 'toolUse', message: partial });
+      return stream;
+    }
     if (late) l.saveLesson(space.id, unit, { title: 'updated', content: '新的课件' });
     return response(reply([
       { type: 'thinking', thinking: 'PRIVATE-RUBRIC reasoning must remain private', thinkingSignature: 'PRIVATE-SIGNATURE' },
@@ -39,6 +49,9 @@ test('private rubric is separated from public unit, tutor context and task event
     assert.doesNotMatch(JSON.stringify(l.unit(space.id, unit)), /PRIVATE-RUBRIC/);
     assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
     assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-SIGNATURE/);
+    const publicTools = runtime.events(space.id, run.id).events.flatMap((e) => e.data.type === 'tool' ? [e.data] : []);
+    assert.ok(publicTools.every((t) => t.inputDelta === undefined));
+    assert.deepEqual(publicTools.find((t) => t.phase === 'ready')?.input, { public: spec.public });
     assert.deepEqual(runtime.events(space.id, run.id).events.flatMap((e) => e.data.type === 'reasoning' ? [e.data.phase] : []), ['start', 'end']);
     assert.match(JSON.stringify(db.prepare('SELECT rubric FROM assessment_versions').all()), /PRIVATE-RUBRIC/);
     tutor = true;

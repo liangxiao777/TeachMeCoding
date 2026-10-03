@@ -1,4 +1,5 @@
-import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, type AssistantMessage, type Message } from '@earendil-works/pi-ai';
+import type { RouteContent } from '@teach-me-coding/contracts';
 import { teachingModel } from './model.js';
 import { randomUUID } from 'node:crypto';
 import type { Learning } from '../modules/learning.js';
@@ -15,6 +16,18 @@ export function populated(learning: Learning, name = 'Rust') {
 }
 
 export const syntheticConfig = { model: teachingModel.id, apiKey: 'synthetic-test-only' };
+// Follow the actual host-generated stage IDs, never manufacture IDs in model arguments.
+export function routeReply(messages: Message[], content: { note: string; stages: { title: string; units: Omit<RouteContent['stages'][number]['units'][number], 'id'>[] }[] }, adjustment = false) {
+  const current = messages.slice(messages.findLastIndex((m) => m.role === 'user') + 1);
+  const calls = current.flatMap((m) => m.role === 'assistant' ? m.content.filter((p) => p.type === 'toolCall') : []);
+  const stages = current.flatMap((m) => m.role === 'toolResult' && m.toolName === 'add_route_stage' && !m.isError ? [JSON.parse(m.content[0]!.type === 'text' ? m.content[0]!.text : '{}').stageId as string] : []);
+  const steps = adjustment ? [] : content.stages.flatMap((stage, i) => [
+    { name: 'add_route_stage', arguments: { title: stage.title } },
+    ...stage.units.map(({ title, summary, goals }) => ({ name: 'add_route_unit', arguments: { stageId: stages[i], title, summary, goals } })),
+  ]);
+  const step = [...steps, { name: 'submit_route_proposal', arguments: { note: content.note } }][calls.length];
+  return step ? reply([{ type: 'toolCall', id: `route-${calls.length}`, ...step }], 'toolUse') : null;
+}
 export function reply(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
   return { role: 'assistant', content, stopReason, timestamp: 1, api: teachingModel.api, provider: teachingModel.provider, model: teachingModel.id,
     usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 18, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };

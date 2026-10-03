@@ -5,11 +5,14 @@ import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning'
 import { Shimmer } from '@/components/ai-elements/shimmer'
-import { Tool, ToolContent, ToolHeader } from '@/components/ai-elements/tool'
+import { Tool, ToolContent, ToolHeader, ToolInput } from '@/components/ai-elements/tool'
 import { Button } from '@/components/ui/button'
 
 const TOOL_NAMES: Record<string, string> = {
   submit_requirement_draft: '整理学习需求', submit_route_proposal: '提交学习路线',
+  add_route_stage: '添加学习阶段', add_route_unit: '添加学习单元',
+  update_route_stage: '调整学习阶段', update_route_unit: '调整学习单元',
+  remove_route_stage: '移除空阶段', remove_route_unit: '移除草稿单元',
   submit_learning_conclusion: '整理学习结论', submit_lesson: '提交课件',
   submit_assessment: '提交测评题目', submit_evaluation: '提交评估结果',
   read: '读取文件', ls: '查看目录', find: '查找文件', grep: '搜索内容',
@@ -64,6 +67,9 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
               statusLabel={part.status === 'generating' ? '准备中' : part.status === 'ready' ? '等待执行' : part.status === 'interrupted' ? '已中断' : undefined} />
             <ToolContent className="text-xs text-muted-foreground">
               <code className="break-all">{part.name}</code>
+              {(part.input !== undefined || part.inputText !== undefined) && (
+                <ToolInput input={part.input} inputText={part.inputText} className="max-h-96 overflow-y-auto overscroll-contain" />
+              )}
             </ToolContent>
           </Tool>
         )
