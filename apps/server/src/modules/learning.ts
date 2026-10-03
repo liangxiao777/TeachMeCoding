@@ -42,8 +42,8 @@ export class Learning {
     const base = this.one<SpaceSummary>('SELECT id,name,created_at AS createdAt FROM spaces WHERE id=?', id);
     const req = this.one<{ revision: number; confirmed: number; value: string }>('SELECT revision,confirmed,value FROM requirements WHERE space_id=?', id);
     const route = this.one<{ revision: number; content: string | null }>('SELECT revision,content FROM routes WHERE space_id=?', id);
-    const proposals = this.all<{ id: string; baseRevision: number; state: 'pending' | 'applied'; content: string }>(
-      'SELECT id,base_revision AS baseRevision,state,content FROM proposals WHERE space_id=? ORDER BY rowid', id);
+    const proposals = this.all<{ id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: string }>(
+      'SELECT id,base_revision AS baseRevision,requirement_revision AS requirementRevision,state,content FROM proposals WHERE space_id=? ORDER BY rowid', id);
     return { ...base, requirement: { ...req, confirmed: !!req.confirmed, value: JSON.parse(req.value) },
       route: { revision: route.revision, content: route.content === null ? null : JSON.parse(route.content) },
       sessions: this.all('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id),
@@ -151,15 +151,17 @@ export class Learning {
   }
 
   // Internal business entrypoints for validated future generation tasks; not browser generation APIs.
-  proposeRoute(space: string, session: string, input: unknown) {
+  proposeRoute(space: string, session: string, input: unknown, baseline?: { requirement: number; route: number }) {
     const content = routeContentSchema.parse(input);
     const current = this.space(space);
     if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, '路线提案需要已确认需求及路线会话。');
+    const base = baseline ?? { requirement: current.requirement.revision, route: current.route.revision };
+    if (base.requirement !== current.requirement.revision || base.route !== current.route.revision) throw conflict();
     const ids = content.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
     if (new Set(ids).size !== ids.length) throw new BusinessError(422, '路线中的阶段和单元标识不能重复。');
     const id = randomUUID();
-    this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,content) VALUES (?,?,?,?,?)')
-      .run(space, id, session, current.route.revision, JSON.stringify(content));
+    this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content) VALUES (?,?,?,?,?,?)')
+      .run(space, id, session, base.route, base.requirement, JSON.stringify(content));
     return this.space(space).proposals.find((p) => p.id === id)!;
   }
   applyProposal(space: string, id: string) {
@@ -169,7 +171,7 @@ export class Learning {
       const p = current.proposals.find((p) => p.id === id);
       if (!p) throw new BusinessError(404, '路线提案不存在。');
       if (p.state === 'applied') return current;
-      if (!current.requirement.confirmed || p.baseRevision !== current.route.revision) throw conflict();
+      if (!current.requirement.confirmed || p.requirementRevision !== current.requirement.revision || p.baseRevision !== current.route.revision) throw conflict();
       const units = p.content.stages.flatMap((s) => s.units);
       const existing = this.all<{ id: string }>('SELECT id FROM units WHERE space_id=?', space);
       if (existing.some((u) => !units.some((v) => v.id === u.id))) throw new BusinessError(409, '提案不能移除已有单元及学习记录。');

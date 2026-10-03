@@ -73,3 +73,42 @@ test('retry reuses the fixed original input, does not duplicate users or clear a
     assert.equal(learning.session(space.id, session).draft.text, 'new draft');
   } finally { await runtime.close(); db.close(); }
 });
+
+test('roadmap binds generation and confirmation to both revisions and preserves learned units', async () => {
+  for (const change of ['none', 'requirement', 'route'] as const) {
+    const db = openDatabase(':memory:'), learning = new Learning(db);
+    const space = learning.create({ name: change, goal: 'learn A not B' }), session = space.sessions[1]!.id;
+    learning.saveRequirement(space.id, { ...space.requirement, confirmed: true });
+    const content = { note: 'plan', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
+    let turns = 0;
+    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+      assert.match(JSON.stringify(context), /learn A not B/);
+      if (turns++ === 0) return response(reply([{ type: 'toolCall', id: 'plan', name: 'submit_route_proposal', arguments: content }], 'toolUse'));
+      if (change === 'requirement') learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, confirmed: true });
+      if (change === 'route') learning.applyProposal(space.id, learning.proposeRoute(space.id, session, content).id);
+      return response(reply([{ type: 'text', text: '请确认提案' }]));
+    } });
+    try {
+      const { run } = runtime.submit(space.id, session, randomUUID(), { text: 'plan', quote: null, draftRevision: 0 });
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, change === 'none' ? 'succeeded' : 'failed');
+      if (change !== 'none') continue;
+      assert.equal(learning.space(space.id).route.content, null);
+      const p = learning.space(space.id).proposals[0]!;
+      const old = learning.proposeRoute(space.id, session, content);
+      learning.applyProposal(space.id, p.id); learning.applyProposal(space.id, p.id);
+      assert.equal(learning.space(space.id).route.revision, 1);
+      assert.throws(() => learning.applyProposal(space.id, old.id), /内容已改变/);
+      const unit = content.stages[0]!.units[0]!.id;
+      learning.saveLesson(space.id, unit, { title: 'keep', content: 'learned' });
+      const next = learning.proposeRoute(space.id, session, { ...content, note: 'adjust' });
+      learning.applyProposal(space.id, next.id);
+      assert.equal(learning.unit(space.id, unit).lesson!.content, 'learned');
+      const late = learning.proposeRoute(space.id, session, content);
+      learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, confirmed: true });
+      assert.throws(() => learning.applyProposal(space.id, late.id), /内容已改变/);
+      const remove = learning.proposeRoute(space.id, session, { ...content, stages: [{ ...content.stages[0]!, units: [{ ...content.stages[0]!.units[0]!, id: randomUUID() }] }] });
+      assert.throws(() => learning.applyProposal(space.id, remove.id), /不能移除/);
+    } finally { await runtime.close(); db.close(); }
+  }
+});

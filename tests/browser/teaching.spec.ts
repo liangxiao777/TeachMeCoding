@@ -31,9 +31,16 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-intake-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
-  await expect(page.getByRole('button', { name: '已确认学习需求', exact: true })).toBeDisabled();
+  await expect(page.getByTestId('route-proposal')).toContainText('参数与输入');
+  await expect(page.getByText('尚无学习路线', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-proposal-${info.project.name}.png`, animations: 'disabled' });
   await page.reload();
+  await expect(page.getByTestId('route-proposal')).toBeVisible();
+  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
+  await expect(page.getByTestId('route-proposal')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-route-${info.project.name}.png`, animations: 'disabled' });
 });
 
 test('stream survives page reload and session switching; stop and model failure remain visible', async ({ page }, info) => {

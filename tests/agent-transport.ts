@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createAssistantMessageEventStream } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
 import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-agent-core/dist/index.js';
 import { reply, response } from '../apps/server/src/agents/test-support.js';
@@ -9,6 +10,12 @@ export const agentTransport: StreamFn = (_model, context, options) => {
   const text = JSON.stringify(user?.content);
   if (last?.role !== 'toolResult') {
     if (text.includes('失败')) return response(reply([], 'error'));
+    if (context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === 'submit_route_proposal'))) return response(reply([{ type: 'toolCall', id: 'route-call', name: 'submit_route_proposal', arguments: {
+      note: '从 Python 经验过渡到命令行工具', stages: [{ id: randomUUID(), title: '工具基础', units: [
+        { id: randomUUID(), title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
+        { id: randomUUID(), title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
+      ] }],
+    } }], 'toolUse'));
     if (!text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
       goal: '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
     } }], 'toolUse'));

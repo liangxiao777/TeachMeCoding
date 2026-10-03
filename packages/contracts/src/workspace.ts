@@ -35,7 +35,7 @@ export interface Message { id: string; role: 'user' | 'agent'; text: string; quo
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number }
-export interface Proposal { id: string; baseRevision: number; state: 'pending' | 'applied'; content: RouteContent }
+export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }

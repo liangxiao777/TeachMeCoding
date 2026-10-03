@@ -321,7 +321,21 @@ export function usePersistentModel(): AppModel {
     onboardSend: (text) => { void saveSession(true, text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
-    confirmRequirement: () => { if (current?.requirement) void saveRequirement(current.requirement, true) },
+    confirmRequirement: () => { if (!current?.requirement) return
+      const space = current.id
+      void saveRequirement(current.requirement, true).then((saved) => {
+        if (!saved || !capabilities.agent) return
+        changeUi(space, (s) => ({ ...s, view: 'route', agentOpen: true }))
+        const entry = cache.current[space]!, route = Object.values(entry.sessions).find((s) => s.scope === 'route')!
+        const input = { text: '请根据已确认需求生成学习路线提案。', quote: null, draftRevision: route.draft.revision }
+        void run(`plan:${space}`, async () => {
+          const submission = await api<RunSubmission>(`/spaces/${space}/sessions/${route.id}/runs`, input)
+          change(space, (s) => ({ ...s, sessions: { ...s.sessions, [route.id]: submission.session }, ui: { ...s.ui,
+            sessions: s.ui.sessions.map((x) => x.id === route.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
+          watchRun(space, submission.run)
+        })
+      })
+    },
     setView: navigate,
     enterUnit: (id) => navigate('unit', id),
     retryGeneration: unavailable,
@@ -435,7 +449,7 @@ export function usePersistentModel(): AppModel {
         void run(`proposal:${id}`, async () => {
           const saved = await api<Workspace>(`/spaces/${space}/proposals/${id}/apply`, {})
           const loaded = await loadSpace(saved)
-          change(space, (s) => ({ ...s, units: { ...loaded.units, ...s.units }, drafts: { ...loaded.drafts, ...s.drafts }, saved: { ...s.saved, route: saved.route, proposals: saved.proposals }, ui: { ...s.ui, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote } }))
+          change(space, (s) => ({ ...s, units: { ...loaded.units, ...s.units }, drafts: { ...loaded.drafts, ...s.drafts }, saved: { ...s.saved, route: saved.route, proposals: saved.proposals }, ui: { ...s.ui, currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote } }))
         })
       },
     },

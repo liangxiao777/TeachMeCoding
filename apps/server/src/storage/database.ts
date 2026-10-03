@@ -44,6 +44,7 @@ export const migrations = [
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,run_id,seq), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
    CREATE TABLE context_manifests (space_id TEXT NOT NULL, run_id TEXT NOT NULL, request INTEGER NOT NULL,
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,run_id,request), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));`,
+  `ALTER TABLE proposals ADD COLUMN requirement_revision INTEGER;`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {
