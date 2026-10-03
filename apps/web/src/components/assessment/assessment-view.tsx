@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowLeft, ClipboardCheck, Play, Save, Send } from 'lucide-react'
-import { Generating, InlineText } from '@/components/shared'
+import { Generating, RichText } from '@/components/shared'
 import { RunContent } from '@/components/agent/run-content'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,8 +20,8 @@ function QuestionHeader({ n, title, prompt }: { n: number; title: string; prompt
         <Badge className="size-6 rounded-full p-0 font-mono">{n}</Badge>
         {title}
       </CardTitle>
-      <CardDescription className="text-sm leading-relaxed text-foreground">
-        <InlineText text={prompt} />
+      <CardDescription className="min-w-0 text-sm leading-relaxed text-foreground">
+        <RichText text={prompt} />
       </CardDescription>
     </CardHeader>
   )

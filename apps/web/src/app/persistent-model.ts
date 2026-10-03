@@ -5,7 +5,7 @@ import { api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
 import { useUnsavedWarning } from './request-state'
-import type { AssessmentDraft, Requirement, Session, Space, SpaceView } from './types'
+import type { AssessmentDraft, LessonBlock, Requirement, Session, Space, SpaceView } from './types'
 
 interface StoredSpace {
   ui: Space
@@ -412,7 +412,17 @@ export function usePersistentModel(): AppModel {
     capabilities,
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
-      return lesson ? { intro: lesson.intro ?? '', blocks: lesson.blocks ?? [{ type: 'markdown', text: lesson.content }] } : null
+      if (!lesson) return null
+      const blocks: LessonBlock[] = lesson.blocks ?? [{ type: 'markdown', text: lesson.content }]
+      // Earlier model output stored entire Markdown sections as h2.text. Split
+      // only the display model, preserving saved content and stable TOC anchors.
+      return { intro: lesson.intro ?? '', blocks: blocks.flatMap((block): LessonBlock[] => {
+        if (block.type !== 'h2') return [block]
+        const [heading = '', ...lines] = block.text.split(/\r\n?|\n/)
+        const body = lines.join('\n')
+        return [{ ...block, text: heading.replace(/^#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim() },
+          ...(body.trim() ? [{ type: 'markdown' as const, text: body }] : [])]
+      }) }
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment

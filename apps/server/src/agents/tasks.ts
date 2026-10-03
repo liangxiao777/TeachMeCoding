@@ -38,8 +38,11 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
     parameters: Type.Unsafe<ReturnType<typeof structuredLessonSchema.parse>>(JSON.parse(JSON.stringify(structuredLessonSchema.toJSONSchema()))),
     async execute(_id, args) {
       const value = structuredLessonSchema.parse(args);
-      const headings = value.blocks.filter((b) => b.type === 'h2').map((b) => b.id);
-      if (new Set(headings).size !== headings.length) throw new Error('Heading IDs must be unique.');
+      const headings = value.blocks.filter((b) => b.type === 'h2');
+      if (new Set(headings.map((b) => b.id)).size !== headings.length) throw new Error('Heading IDs must be unique.');
+      if (headings.some((b) => !b.text.trim() || /[\r\n]|^\s*#{1,6}\s/.test(b.text))) {
+        throw new Error('h2.text must contain only a single heading, without Markdown # markers. Put section body in separate p, markdown or code blocks.');
+      }
       lesson = value;
       return { content: [{ type: 'text', text: '课件已暂存。' }], details: {} };
     },

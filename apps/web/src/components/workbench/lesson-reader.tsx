@@ -66,6 +66,13 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
   )
 }
 
+function LessonText({ text }: { text: string }) {
+  return <RichText text={text} renderCode={(code, language) => {
+    const extensions: Record<string, string> = { rust: 'rs', python: 'py', typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js', json: 'json', bash: 'sh', sh: 'sh' }
+    return <CodeBlock block={{ type: 'code', code, language, file: `example.${extensions[language] ?? 'txt'}` }} />
+  }} />
+}
+
 function MoveDiagram() {
   const Cell = ({ name, valid }: { name: string; valid: boolean }) => (
     <div
@@ -109,19 +116,15 @@ function MoveDiagram() {
 function Block({ block }: { block: LessonBlock }) {
   switch (block.type) {
     case 'markdown':
-      return <RichText text={block.text} renderCode={(code, language) => <CodeBlock block={{ type: 'code', code, language, file: language === 'rust' ? 'example.rs' : language === 'python' ? 'example.py' : 'example.txt' }} />} />
+      return <LessonText text={block.text} />
     case 'h2':
       return (
         <h2 id={block.id} className="scroll-mt-6 pt-4 text-xl font-semibold tracking-tight">
-          {block.text}
+          <InlineText text={block.text} />
         </h2>
       )
     case 'p':
-      return (
-        <p className="leading-relaxed">
-          <InlineText text={block.text} />
-        </p>
-      )
+      return <LessonText text={block.text} />
     case 'list':
       return (
         <ul className="flex list-disc flex-col gap-1.5 pl-5 leading-relaxed marker:text-muted-foreground">
@@ -139,10 +142,8 @@ function Block({ block }: { block: LessonBlock }) {
         <Alert className="border-primary/25 bg-primary/5">
           <Lightbulb className="text-primary" />
           <AlertTitle>{block.title}</AlertTitle>
-          <AlertDescription className="leading-relaxed">
-            <p>
-              <InlineText text={block.text} />
-            </p>
+          <AlertDescription className="min-w-0 leading-relaxed">
+            <LessonText text={block.text} />
           </AlertDescription>
         </Alert>
       )

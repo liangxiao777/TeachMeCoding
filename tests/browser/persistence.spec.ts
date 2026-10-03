@@ -378,6 +378,70 @@ test('original lesson quotation and bring-to-IDE actions retain real data throug
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example-1.rs'), 'utf8')).toBe('');
 });
 
+test('stored Markdown sections and assessment prompts render headings, tables and code without rewriting artifacts', async ({ page }, info) => {
+  const data = seed(info), unit = data.unitIds[1]!;
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const code = 'const name: string = "learner";\nconsole.log(`你好，${name}`);';
+  const body = '编译配置保留**类型检查**与 `strict`。\n\n| 选项 | 含义 |\n| --- | --- |\n| target | ES2022 |\n| strict | 开启检查 |\n\n### 示例代码\n\n```ts\n' + code + '\n```\n\n1. 检查类型\n2. 编译运行';
+  const assessment = '修复**工具链**，保留文件结构。\n\n```text\nreport-tool/\n  src/index.ts\n```\n\n```ts\n' + code + '\n```\n\n| 命令 | 作用 |\n| --- | --- |\n| tsc | 编译 |\n\n1. 启用 strict\n2. 解释输出';
+  const rawHeading = `## 编译配置\r\n\r\n${body.replaceAll('\n', '\r\n')}`;
+  await page.route(`**/api/spaces/${data.spaceId}/units/${unit}`, async (route) => {
+    const response = await route.fetch(), detail = await response.json() as UnitDetail;
+    await route.fulfill({ json: { ...detail, lesson: { title: '错误处理', content: '', intro: '学习配置，不把正文当标题。', blocks: [
+      { type: 'h2', id: 'compiler-options', text: rawHeading },
+      { type: 'callout', title: '检查结果', text: '保留换行。\n\n```text\nline one\n  line two\n```' },
+      { type: 'p', text: '### 补充说明\n\n这段正文也支持 Markdown。' },
+      { type: 'h2', id: 'review', text: '复习' },
+    ] }, assessment: { ...detail.assessment, q1: '解释 `tsc`。\n\n- 编译\n- 执行', q2: assessment, starter: '' } } });
+  });
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${unit}`);
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const article = page.locator('.lesson-prose'), heading = article.locator('#compiler-options');
+  await expect(heading).toHaveText('编译配置');
+  await expect(article.getByRole('heading', { name: '示例代码', exact: true })).toBeVisible();
+  await expect(article.getByRole('heading', { name: '补充说明', exact: true })).toHaveCount(1);
+  await expect(article.locator('table tbody tr')).toHaveCount(2);
+  await expect(article.locator('table')).toContainText('ES2022');
+  expect(await article.locator('pre').first().textContent()).toBe(code);
+  await expect(article.locator('pre').nth(1)).toHaveText('line one\n  line two');
+  await expect(article.locator('ol > li')).toHaveText(['检查类型', '编译运行']);
+  const toc = page.getByRole('complementary', { name: '单元材料' });
+  await expect(toc.getByRole('link')).toHaveText(['编译配置', '复习']);
+  await toc.getByRole('link', { name: '复习', exact: true }).click();
+  await expect.poll(() => article.locator('..').evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+  await toc.getByRole('link', { name: '编译配置', exact: true }).click();
+  await expect(heading).toBeInViewport();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.screenshot({ path: `.amp/in/artifacts/markdown-lesson-light-${info.project.name}.png`, animations: 'disabled' });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.screenshot({ path: `.amp/in/artifacts/markdown-lesson-dark-${info.project.name}.png`, animations: 'disabled' });
+  // Render-only compatibility must not modify the source heading or lose code when copied into the IDE.
+  expect((await page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    return (await fetch(`/api/spaces/${space}/units/${unit}`, { headers: { 'X-TMC-Token': token } })).json();
+  }, { space: data.spaceId, unit })).lesson.blocks[0].text).toBe(rawHeading);
+  await article.getByRole('button', { name: '带入 IDE', exact: true }).first().click();
+  await expect(visible(page, '编辑 example.ts')).toHaveValue(code);
+  await page.goto(`/?space=${data.spaceId}&tab=assessment&unit=${unit}`);
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const questions = page.locator('[data-slot="card-description"]');
+  await expect(questions.first().locator('ul > li')).toHaveText(['编译', '执行']);
+  const question = questions.nth(1);
+  await expect(question.locator('pre')).toHaveCount(2);
+  expect(await question.locator('pre').nth(1).textContent()).toBe(`${code}\n`);
+  await expect(question.locator('table')).toContainText('编译');
+  await expect(question.locator('ol > li')).toHaveText(['启用 strict', '解释输出']);
+  await expect(page.locator('p pre, h2 pre, h2 table')).toHaveCount(0);
+  // The existing application shell has a 1100px minimum width.
+  await page.setViewportSize({ width: 1100, height: 1000 });
+  await question.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+  await expect(question.locator('ol > li').last()).toBeInViewport();
+  await page.screenshot({ path: `.amp/in/artifacts/markdown-assessment-dark-${info.project.name}.png`, animations: 'disabled' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
 test('a late requirement save does not close or discard a newer edit', async ({ page }, info) => {
   await page.goto('/');
   await visible(page, '你想学什么').fill(`需求草稿竞争 ${info.project.name}`);
