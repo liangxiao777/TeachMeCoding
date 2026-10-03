@@ -4,11 +4,40 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import type { JsonObject } from '@earendil-works/pi-ai';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
 import { populated, reply, response, syntheticConfig } from './test-support.js';
 import { readTools } from './read-tools.js';
+
+test('a large lesson tool call reaches the final reply and commits the complete lesson', async () => {
+  const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
+  const lesson: JsonObject = { title: '长课件', intro: '独立生成检查', blocks: [
+    { type: 'p', text: `开始-${'理解参数与返回值。'.repeat(5000)}-结束` },
+    { type: 'code', file: 'greet.py', language: 'python', code: 'def greet(name="Ada"):\n    return "Hi " + name' },
+  ] };
+  let requests = 0;
+  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+    requests++;
+    if (requests === 1) return response(reply([{ type: 'toolCall', id: 'large-lesson', name: 'submit_lesson', arguments: lesson }], 'toolUse'));
+    const call = context.messages.flatMap((m) => m.role === 'assistant' ? m.content : []).find((part) => part.type === 'toolCall');
+    assert.ok(call?.type === 'toolCall'); assert.deepEqual(call.arguments, lesson);
+    const result = context.messages.at(-1);
+    assert.ok(result?.role === 'toolResult'); assert.equal(result.isError, false);
+    assert.equal(l.unit(space.id, unit).lesson, null, 'Keep the existing commit-after-success contract');
+    return response(reply([{ type: 'text', text: '课件已整理。' }]));
+  } });
+  try {
+    const task = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 });
+    await runtime.idle(task.id);
+    assert.equal(runtime.get(space.id, task.id).state, 'succeeded'); assert.equal(requests, 2);
+    const saved = l.unit(space.id, unit).lesson!;
+    assert.equal(saved.revision, 1); assert.equal(saved.title, lesson.title); assert.equal(saved.intro, lesson.intro);
+    assert.deepEqual(saved.blocks, lesson.blocks);
+    assert.equal(db.prepare('SELECT * FROM task_manifests').all().length, 2);
+  } finally { await runtime.close(); db.close(); }
+});
 
 test('independent lesson tasks are idempotent, preserve old versions and reject late writes', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;

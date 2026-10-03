@@ -23,12 +23,9 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '1';
+export const compilerVersion = '2';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
-// Conservative byte upper estimate, not a model tokenizer or provider usage report.
-export const estimateTokens = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
-export const budget = { total: 32_768, output: 4096, reasoning: 0, requests: 6, tools: 12, outputTotal: 12_288, milliseconds: 120_000 };
-export class ContextLimit extends Error {}
+export const budget = { output: 4096, reasoning: 0, requests: 6, tools: 12, outputTotal: 12_288, milliseconds: 120_000 };
 
 export function xmlText(text: string) {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udfff]/gu, '�')
@@ -59,7 +56,7 @@ export function compileContext(input: FrozenContext) {
   return { xml, sources: sources.map(({ value, ...s }) => ({ ...s, hash: hash(value) })) };
 }
 
-export function compileRequest(input: FrozenContext, history: HistoryGroup[], current: Message[], tools: Tool[], limit = budget.total) {
+export function compileRequest(input: FrozenContext, history: HistoryGroup[], current: Message[], tools: Tool[]) {
   const { xml, sources } = compileContext(input);
   const prompt = systemPrompt(input.scenario);
   const prefix: Message[] = [
@@ -67,21 +64,12 @@ export function compileRequest(input: FrozenContext, history: HistoryGroup[], cu
     { role: 'user', content: xml, timestamp: 0 },
   ];
   // System messages are rebuilt once. Never allow a saved system/tool patch to win.
-  const active = structuredClone(current.filter((m) => m.role !== 'system'));
-  const selected: HistoryGroup[] = [];
-  const omitted: { id: string; reason: string }[] = [];
-  const count = (groups: HistoryGroup[]) => estimateTokens([...prefix, ...groups.flatMap((g) => g.messages), ...active]) + budget.output + 1024;
-  if (count([]) > limit) throw new ContextLimit('当前问题、引用或工具结果超出上下文预算；请缩小材料范围后重试。');
-  for (const group of [...history].reverse()) {
-    const clean = { ...group, messages: group.messages.filter((m) => m.role !== 'system') };
-    if (count([clean, ...selected]) <= limit) selected.unshift(clean);
-    else omitted.push({ id: group.id, reason: 'whole-turn-budget' });
-  }
-  return { messages: structuredClone([...prefix, ...selected.flatMap((g) => g.messages), ...active]),
+  const active = current.filter((m) => m.role !== 'system');
+  const previous = history.map((group) => ({ ...group, messages: group.messages.filter((m) => m.role !== 'system') }));
+  return { messages: structuredClone([...prefix, ...previous.flatMap((g) => g.messages), ...active]),
     manifest: { schemaVersion: contextVersion, compilerVersion, promptHash: hash(prompt), contextHash: hash(xml),
-      sources, selectedHistory: selected.map((g) => ({ id: g.id, hash: hash(g.messages) })), omitted,
-      estimatedTokens: count(selected) - budget.output, estimation: 'utf8-bytes-upper-estimate',
-      budget: { ...budget, total: limit }, retention: 'tool bodies omitted; explicit references retained' },
+      sources, selectedHistory: previous.map((g) => ({ id: g.id, hash: hash(g.messages) })),
+      budget: { ...budget }, retention: 'tool bodies omitted; explicit references retained' },
   };
 }
 
@@ -89,7 +77,7 @@ export function retainedMessage(message: Message): Message {
   const copy = structuredClone(message);
   if (copy.role === 'toolResult') {
     return { role: 'toolResult', toolCallId: copy.toolCallId, toolName: copy.toolName, timestamp: copy.timestamp,
-      isError: copy.isError, content: [{ type: 'text', text: `[tool body omitted by retention policy; hash=${hash(copy.content)}; bytes=${estimateTokens(copy.content)}]` }] };
+      isError: copy.isError, content: [{ type: 'text', text: `[tool body omitted by retention policy; hash=${hash(copy.content)}; bytes=${Buffer.byteLength(JSON.stringify(copy.content), 'utf8')}]` }] };
   }
   if (copy.role === 'assistant') {
     copy.content = copy.content.filter((part) => part.type !== 'thinking');

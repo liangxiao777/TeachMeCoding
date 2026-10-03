@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { budget, compileContext, compileRequest, retainedMessage, systemPrompt, type FrozenContext } from './context.js';
+import { compileContext, compileRequest, retainedMessage, systemPrompt, type FrozenContext, type HistoryGroup } from './context.js';
 import { providerStream, teachingModel } from './model.js';
 import { reply } from './test-support.js';
 
@@ -44,18 +44,29 @@ test('real provider adapter sends the scene prompt as instructions and business 
   }
 });
 
-test('budget boundary includes tools, system and output reserve; current references cannot be dropped', () => {
-  const current: Message[] = [{ role: 'user', content: 'current', timestamp: 1 }];
-  const base = compileRequest(input, [], current, []);
-  const boundary = base.manifest.estimatedTokens + budget.output;
-  assert.doesNotThrow(() => compileRequest(input, [], current, [], boundary));
-  assert.throws(() => compileRequest(input, [], current, [], boundary - 1), /预算/);
-  const history = [{ id: 'old', messages: [{ role: 'user', content: 'old'.repeat(100), timestamp: 0 } as Message, reply([{ type: 'text', text: 'old answer' }])] }];
-  const snapshot = structuredClone(history);
-  const selected = compileRequest(input, history, current, [], boundary);
-  assert.deepEqual(selected.manifest.omitted, [{ id: 'old', reason: 'whole-turn-budget' }]);
-  assert.deepEqual(history, snapshot);
-  assert.throws(() => compileRequest({ ...input, references: [{ source: 'code', label: 'explicit', text: 'x'.repeat(40_000) }] }, [], current, []), /预算/);
+test('large history, current input and references remain complete and ordered without size-based pruning', () => {
+  const current: Message[] = [{ role: 'system', content: 'stale current instructions', timestamp: 0 },
+    { role: 'user', content: `current-${'问题'.repeat(20_000)}-end`, timestamp: 3 }];
+  const history: HistoryGroup[] = [
+    { id: 'old', messages: [{ role: 'system', content: 'stale history instructions', timestamp: 0 },
+      { role: 'user', content: `old-${'历史'.repeat(20_000)}-end`, timestamp: 1 }, reply([{ type: 'text', text: 'old answer' }])] },
+    { id: 'recent', messages: [{ role: 'user', content: 'recent', timestamp: 2 }, reply([{ type: 'text', text: 'recent answer' }])] },
+  ];
+  const snapshot = structuredClone({ history, current });
+  const reference = { source: 'code' as const, label: 'explicit', text: `reference-${'引用'.repeat(20_000)}-end` };
+  const compiled = compileRequest({ ...input, references: [reference] }, history, current, []);
+  assert.deepEqual(compiled.messages.slice(2), [...history[0]!.messages.slice(1), ...history[1]!.messages, current[1]]);
+  assert.deepEqual(compiled.manifest.selectedHistory.map((g) => g.id), ['old', 'recent']);
+  assert.equal(compiled.messages.filter((m) => m.role === 'system').length, 1);
+  const context = compiled.messages[1]!;
+  assert.equal(context.role, 'user');
+  const parsed = new XMLParser({ ignoreAttributes: false }).parse(context.content as string);
+  assert.deepEqual(JSON.parse(parsed.context.source[1]['#text']), reference);
+  assert.ok(!('estimatedTokens' in compiled.manifest));
+  assert.ok(!('total' in compiled.manifest.budget));
+  const old = compiled.messages[2]!;
+  assert.ok(old.role === 'user'); old.content = 'changed projection';
+  assert.deepEqual({ history, current }, snapshot);
 });
 
 test('native call/result relationships survive retention without copying tool source', () => {

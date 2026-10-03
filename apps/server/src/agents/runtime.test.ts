@@ -70,25 +70,26 @@ test('cancel before commit wins even if transport finishes; pending shutdown nev
   } finally { db.close(); }
 });
 
-test('tool-result second request is budgeted; persisted messages omit source body', async () => {
+test('large tool results reach the second request intact; persisted messages omit source body', async () => {
   for (const size of [24, 40_000]) {
     const { db, learning, a, sa } = setup(); let requests = 0;
+    const source = `SOURCE-MARKER-${'x'.repeat(size)}-END`;
     const tool: AgentTool = { name: 'read', label: 'Read', description: 'Synthetic only', parameters: Type.Object({}),
-      async execute() { return { content: [{ type: 'text', text: `SOURCE-MARKER-${'x'.repeat(size)}` }], details: {} }; } };
+      async execute() { return { content: [{ type: 'text', text: source }], details: {} }; } };
     const runtime = new TeachingRuntime(learning, syntheticConfig, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_m, context) => {
       requests++;
       if (requests === 1) return response(reply([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse'));
-      assert.match(JSON.stringify(context), /SOURCE-MARKER/);
+      assert.deepEqual(context.messages.find((m) => m.role === 'toolResult')?.content, [{ type: 'text', text: source }]);
       return response(reply([{ type: 'text', text: 'finished' }]));
     } });
     try {
       const { run } = runtime.submit(a.id, sa, randomUUID(), message('read'));
       await runtime.idle(run.id);
-      assert.equal(runtime.get(a.id, run.id).state, size === 24 ? 'succeeded' : 'failed');
-      assert.equal(requests, size === 24 ? 2 : 1);
+      assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+      assert.equal(requests, 2);
       const stored = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
       assert.ok(!stored.includes('SOURCE-MARKER')); assert.match(stored, /call-1/); assert.match(stored, /omitted/);
-      if (size === 24) assert.equal(db.prepare('SELECT * FROM context_manifests').all().length, 2);
+      assert.equal(db.prepare('SELECT * FROM context_manifests').all().length, 2);
     } finally { await runtime.close(); db.close(); }
   }
 });

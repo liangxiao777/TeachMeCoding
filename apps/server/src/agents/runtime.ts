@@ -6,7 +6,7 @@ import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 import { createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
-import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
+import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
 import { failureStream, providerStream, teachingModel } from './model.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
@@ -237,7 +237,7 @@ export class TeachingRuntime {
         },
         streamFn: async (model, context, options) => {
           try {
-            if (++request > budget.requests || output >= budget.outputTotal) throw new ContextLimit('模型轮次或总输出预算已耗尽。');
+            if (++request > budget.requests || output >= budget.outputTotal) throw new BusinessError(422, '模型轮次或总输出预算已耗尽。');
             if (!active(this.get(space, id))) return failureStream('运行已停止。', true);
             const compiled = compileRequest(frozen, history, context.messages, tools);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
@@ -250,7 +250,7 @@ export class TeachingRuntime {
             }
             return await this.stream(model, normalizeContext({ messages: compiled.messages }), { ...options, maxTokens: Math.min(budget.output, budget.outputTotal - output) });
           } catch (error) {
-            failure = error instanceof ContextLimit ? error.message : '无法准备模型请求。';
+            failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
             return failureStream(failure);
           }
         },

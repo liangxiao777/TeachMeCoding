@@ -82,7 +82,7 @@ Pi Core 与 AI 包固定为 `@earendil-works/pi-agent-core@1.0.0`、`@earendil-w
 
 真实测试使用 `pnpm test:provider`，会发送两次短请求（正常流式响应、收到文字后取消），可能产生 Provider 费用。在根目录 `.env` 配置 `OPENROUTER_API_KEY` 与准确的 `OPENROUTER_MODEL`；没有 `.env` 时可参考 `.env.example` 新建，权限设为 `600`，不要覆盖已有配置或把密钥写进命令行。服务端环境变量优先于文件；缺失配置或 Provider 错误会返回失败，不切换模型。`.env` 路径相对代码定位，不依赖启动目录；读取不会把凭据注入全局环境或终端子进程。
 
-兼容性冒烟使用 256 输出 token 上限和 8192 测试上下文元数据。教学运行独立使用 `deepseek/deepseek-v4.1-flash` 的能力元数据，关闭推理；每请求按 UTF-8 字节上界估算输入，含工具 schema、上下文及输出预留共 32768，输出上限 4096；每次运行最多 6 个请求、12 次顺序工具调用、12288 输出 token 和 120 秒。超限或 `length` 截断返回失败，不静默裁剪当前问题、引用或提交答案。实际 usage 与预算估算分别保存在请求清单。
+兼容性冒烟使用 256 输出 token 上限和 8192 测试上下文元数据。教学运行独立使用 `deepseek/deepseek-v4.1-flash` 的能力元数据，关闭推理。应用不设置输入上下文大小上限，不估算输入 token，也不因长度裁剪同会话历史、当前问题、引用或工具调用/结果；模型自身的上下文窗口仍由 Provider 限制。每请求输出上限 4096；每次运行最多 6 个请求、12 次顺序工具调用、12288 输出 token 和 120 秒。这些运行限制、Provider 错误或 `length` 截断仍返回失败。请求清单保留实际 usage 和运行限制，不记录输入预算估算。
 
 教学确定性测试使用 `pnpm exec playwright test -c tests/agents.config.ts --project=production --workers=1`（开发模式换为 `development`），需先构建，占用与普通浏览器测试相同端口，不同时运行。`pnpm exec tsx tests/teaching-provider-smoke.ts` 是显式收费真实模型检查：只使用可丢弃数据库和合成文件，串联需求→路线→课件→只读辅导→出题→评估；不上传用户项目，不执行提交的代码。Provider 失败会使脚本失败；真实和确定性结果见 ROADMAP，不保证模型每次输出相同。
 
