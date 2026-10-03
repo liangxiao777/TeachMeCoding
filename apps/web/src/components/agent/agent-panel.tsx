@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowUp,
   Check,
   ChevronDown,
   Code2,
@@ -19,13 +18,17 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { BrandMark, RichText, isComposing } from '@/components/shared'
+import { BrandMark, isComposing } from '@/components/shared'
+import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
+import { Message as ChatMessage, MessageContent } from '@/components/ai-elements/message'
+import { PromptInput, PromptInputFooter, PromptInputHeader, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
+import { Suggestion } from '@/components/ai-elements/suggestion'
+import { RunContent } from './run-content'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -83,34 +86,11 @@ export function AgentMessage({ msg }: { msg: Message }) {
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
 
-  if (msg.status === 'thinking')
-    return (
-      <div role="status" className="text-sm text-muted-foreground">
-        <span className={capabilities.agent ? 'shimmer' : undefined}>{capabilities.agent ? 'Thinking...' : 'Agent 暂不可用'}</span>
-      </div>
-    )
-
   return (
-    <div className="flex flex-col gap-3">
-      {msg.text && (
-        <RichText
-          text={msg.text}
-          streaming={capabilities.agent && msg.status === 'streaming'}
-          renderCode={(code) => (
-            <figure className="flex flex-col overflow-hidden rounded-lg bg-ide text-ide-foreground ring-1 ring-foreground/10">
-              <pre className="overflow-x-auto p-3 font-mono text-xs leading-relaxed">{code}</pre>
-              {msg.status !== 'streaming' && (
-                <div className="flex justify-end border-t border-white/10 px-2 py-1.5">
-                  <Button size="xs" onClick={() => bringToIde(code, lang === 'rust' ? 'agent_example.rs' : 'agent_example.py')}>
-                    <SquareTerminal data-icon="inline-start" />
-                    带入 IDE
-                  </Button>
-                </div>
-              )}
-            </figure>
-          )}
-        />
-      )}
+    <ChatMessage from="assistant" className="max-w-full">
+      <MessageContent className="w-full gap-3 leading-relaxed">
+      <RunContent parts={msg.parts} text={msg.text} streaming={capabilities.agent && (msg.status === 'thinking' || msg.status === 'streaming')}
+        onCode={(code, language) => bringToIde(code, `agent_example.${({ python: 'py', rust: 'rs', javascript: 'js', typescript: 'ts', json: 'json', bash: 'sh' } as Record<string, string>)[language || lang] ?? 'txt'}`)} />
       {msg.status === 'stopped' && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Square className="size-3" aria-hidden />
@@ -164,7 +144,8 @@ export function AgentMessage({ msg }: { msg: Message }) {
           </CardFooter>
         </Card>
       )}
-    </div>
+      </MessageContent>
+    </ChatMessage>
   )
 }
 
@@ -242,24 +223,18 @@ function Composer() {
 
   return (
     <div className="p-3">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          void send()
-        }}
-      >
-        <InputGroup className="rounded-xl bg-background shadow-sm">
+      <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send()} className="[&>[data-slot=input-group]]:bg-background">
           {quote && (
-            <InputGroupAddon align="block-start" className="pb-0">
+            <PromptInputHeader className="pb-0">
               <div className="w-full">
                 <QuoteCard quote={quote} onRemove={() => setQuote(null)} />
               </div>
-            </InputGroupAddon>
+            </PromptInputHeader>
           )}
           <label htmlFor="agent-input" className="sr-only">
             向 Agent 提问
           </label>
-          <InputGroupTextarea
+          <PromptInputTextarea
             id="agent-input"
             ref={ref}
             rows={3}
@@ -275,27 +250,11 @@ function Composer() {
             placeholder={quote ? '针对引用的内容，你想问什么？' : '说说你的想法…'}
             className="min-h-16 leading-relaxed"
           />
-          <InputGroupAddon align="block-end">
-            {replying ? (
-              <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
-                <Square data-icon="inline-start" />
-                停止
-              </InputGroupButton>
-            ) : (
-              <InputGroupButton
-                type="submit"
-                size="icon-sm"
-                variant="default"
-                className="ml-auto rounded-full"
-                disabled={!canSend}
-                aria-label={capabilities.agent ? '发送' : '保存问题'}
-              >
-                <ArrowUp />
-              </InputGroupButton>
-            )}
-          </InputGroupAddon>
-        </InputGroup>
-      </form>
+          <PromptInputFooter>
+            <PromptInputSubmit className="ml-auto" status={replying ? 'streaming' : 'ready'} onStop={stopReply}
+              disabled={!replying && !canSend} aria-label={replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
+          </PromptInputFooter>
+      </PromptInput>
       {sendError && <p role="alert" className="mt-2 text-xs text-destructive">{sendError}</p>}
     </div>
   )
@@ -328,10 +287,10 @@ function EmptyChat() {
       </EmptyHeader>
       <EmptyContent className="max-w-none items-stretch gap-1.5">
         {prompts.map((p) => (
-          <Button key={p} variant="outline" className="h-auto justify-start whitespace-normal py-2 text-left font-normal" onClick={() => setComposerText(p)}>
+          <Suggestion key={p} suggestion={p} className="h-auto justify-start whitespace-normal rounded-lg py-2 text-left font-normal" onClick={setComposerText}>
             <Sparkles data-icon="inline-start" className="text-primary" />
             {p}
-          </Button>
+          </Suggestion>
         ))}
       </EmptyContent>
     </Empty>
@@ -341,12 +300,6 @@ function EmptyChat() {
 export function AgentPanel() {
   const space = useSpace()
   const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
-  const endRef = useRef<HTMLDivElement>(null)
-  const last = session?.messages[session.messages.length - 1]
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' })
-  }, [session?.id, session?.messages.length, last?.text.length])
 
   return (
     <aside aria-label="Agent" className="flex w-96 shrink-0 flex-col border-l bg-sidebar">
@@ -385,15 +338,18 @@ export function AgentPanel() {
       {!session || session.messages.length === 0 ? (
         <EmptyChat />
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <ol className="flex flex-col gap-5 p-4">
+        <Conversation key={session.id} className="min-h-0" initial="instant" resize="instant" aria-label="Agent 会话">
+          <ConversationContent>
+            <ol className="flex flex-col gap-5">
             {session.messages.map((m) => (
-              <li key={m.id} className="flex flex-col gap-2">
+              <li key={m.id} className="min-w-0">
                 {m.role === 'user' ? (
-                  <div className="flex max-w-[90%] flex-col gap-2 self-end rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm">
-                    {m.quote && <QuoteCard quote={m.quote} compact />}
+                  <ChatMessage from="user">
+                    <MessageContent>
+                    {m.quote && <QuoteCard quote={m.quote} />}
                     <p className="whitespace-pre-wrap">{m.text}</p>
-                  </div>
+                    </MessageContent>
+                  </ChatMessage>
                 ) : (
                   <div className="text-sm leading-relaxed">
                     <AgentMessage msg={m} />
@@ -401,9 +357,10 @@ export function AgentPanel() {
                 )}
               </li>
             ))}
-          </ol>
-          <div ref={endRef} />
-        </div>
+            </ol>
+          </ConversationContent>
+          <ConversationScrollButton aria-label="滚动到最新消息" />
+        </Conversation>
       )}
       <Composer />
     </aside>

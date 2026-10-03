@@ -28,6 +28,11 @@ export function response(message: AssistantMessage) {
       stream.push({ type: 'text_delta', contentIndex, delta: part.text, partial: message });
       stream.push({ type: 'text_end', contentIndex, content: part.text, partial: message });
     }
+    if (part.type === 'thinking') {
+      stream.push({ type: 'thinking_start', contentIndex, partial: message });
+      stream.push({ type: 'thinking_delta', contentIndex, delta: part.thinking, partial: message });
+      stream.push({ type: 'thinking_end', contentIndex, content: part.thinking, partial: message });
+    }
   });
   if (message.stopReason === 'error' || message.stopReason === 'aborted') stream.push({ type: 'error', reason: message.stopReason, error: message });
   else stream.push({ type: 'done', reason: message.stopReason as 'stop' | 'toolUse', message });

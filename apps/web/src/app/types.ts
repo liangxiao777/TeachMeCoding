@@ -40,6 +40,7 @@ export interface Message {
   id: string
   role: 'user' | 'agent'
   text: string
+  parts?: import('@teach-me-coding/contracts').AgentDisplayPart[]
   full?: string
   quote?: Quote
   status?: MessageStatus
@@ -118,6 +119,7 @@ export interface OnboardMsg {
   id: string
   role: 'user' | 'agent'
   text: string
+  parts?: import('@teach-me-coding/contracts').AgentDisplayPart[]
   status?: MessageStatus
 }
 

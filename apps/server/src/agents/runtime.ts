@@ -218,6 +218,9 @@ export class TeachingRuntime {
     const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
     const frozen = JSON.parse(input) as FrozenContext;
     const history = frozen.sessionId ? this.history(space, frozen.sessionId, id) : [];
+    // Assessment/evaluation reasoning can contain private reference answers.
+    // Publish real phase/tool activity, but never their unvalidated model prose.
+    const displayModelText = frozen.scenario !== 'assessment' && frozen.scenario !== 'evaluation';
     const toolSources: unknown[] = [];
     let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -225,7 +228,7 @@ export class TeachingRuntime {
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space)) : createTask(this.learning, frozen));
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({
-        initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: 'off' },
+        initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: budget.reasoning },
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
         getApiKey: () => this.config?.apiKey,
         beforeToolCall: async () => {
@@ -272,15 +275,27 @@ export class TeachingRuntime {
         if (!active(this.get(space, id))) return;
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
         if (event.type === 'tool_execution_end' && event.isError) failure = '工具调用或结构化产物无效，未保存生成产物。';
-        if (frozen.sessionId && event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-          const delta = event.assistantMessageEvent.delta;
-          this.learning.db.transaction(() => {
-            this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(delta, space, id);
-            this.emit(space, id, { type: 'text', delta });
-          })();
+        if (event.type === 'message_update') {
+          const update = event.assistantMessageEvent;
+          if (displayModelText && update.type === 'text_delta') {
+            this.learning.db.transaction(() => {
+              if (frozen.sessionId) this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(update.delta, space, id);
+              this.emit(space, id, { type: 'text', delta: update.delta, partId: `${id}:${request}:text:${update.contentIndex}` });
+            })();
+          }
+          if (update.type === 'thinking_start' || update.type === 'thinking_delta' || update.type === 'thinking_end') {
+            const native = update.partial.content[update.contentIndex];
+            // Never publish opaque/redacted provider state or signatures.
+            if (native?.type === 'thinking' && !native.redacted && (displayModelText || update.type !== 'thinking_delta')) this.emit(space, id, {
+              type: 'reasoning', partId: `${id}:${request}:reasoning:${update.contentIndex}`,
+              phase: update.type === 'thinking_start' ? 'start' : update.type === 'thinking_end' ? 'end' : 'delta',
+              ...(update.type === 'thinking_delta' ? { delta: update.delta } : {}),
+            });
+          }
         }
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') this.emit(space, id,
-          { type: 'tool', name: event.toolName, phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
+          { type: 'tool', callId: `${id}:${request}:tool:${event.toolCallId}`, name: event.toolName,
+            phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
       await agent.prompt({ role: 'user', content: frozen.references.length ? [
         { type: 'text', text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },

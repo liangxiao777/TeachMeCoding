@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
+import type { AgentDisplayPart, LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 
 type Action = () => void
@@ -65,7 +65,7 @@ export interface AppModel {
     connection?: string
     retry: Action
     requirementConfirmed: boolean
-    planning: { run?: WorkStatus; step: number; error: string | null }
+    planning: { run?: WorkStatus; error: string | null }
     requirementDraft: Requirement | null
     setRequirementDraft: (value: Requirement | null) => void
     saveName: Action
@@ -82,6 +82,7 @@ export interface AppModel {
     conclusions: LearningConclusion[]
     decideConclusion: (id: string, adopted: boolean) => void
     tasks: WorkStatus[]
+    taskParts: Record<string, AgentDisplayPart[]>
     generateAssessment: Action
     retryTask: (id: string) => void
     stopTask: (id: string) => void

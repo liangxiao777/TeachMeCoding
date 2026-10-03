@@ -80,3 +80,35 @@ test('native call/result relationships survive retention without copying tool so
   assert.match(JSON.stringify(projected), /tool body omitted/);
   assert.equal(projected.messages.filter((m) => m.role === 'system').length, 1);
 });
+
+test('retained native reasoning details and opaque signatures serialize unchanged for OpenRouter continuation', async () => {
+  const details = [
+    { type: 'reasoning.text', text: 'Displayable reasoning', signature: 'SIGNED-REASONING', index: 0 },
+    { type: 'reasoning.encrypted', data: 'OPAQUE-CONTINUATION', id: 'reasoning-1', index: 1 },
+  ];
+  const native = reply([
+    { type: 'thinking', thinking: 'Displayable reasoning', thinkingSignature: JSON.stringify(details) },
+    { type: 'thinking', thinking: '', thinkingSignature: 'OTHER-OPAQUE-STATE', redacted: true },
+    { type: 'toolCall', name: 'read', id: 'read-1', arguments: {} },
+  ], 'toolUse');
+  native.errorMessage = 'PRIVATE-DIAGNOSTICS';
+  const retained = retainedMessage(native);
+  assert.deepEqual(retained.content, native.content);
+  assert.notEqual(retained.content, native.content);
+  assert.equal(retained.role === 'assistant' && retained.errorMessage, undefined);
+  assert.equal(native.errorMessage, 'PRIVATE-DIAGNOSTICS');
+  const compiled = compileRequest(input, [{ id: 'history', messages: [retained,
+    retainedMessage({ role: 'toolResult', toolCallId: 'read-1', toolName: 'read', timestamp: 2, isError: false,
+      content: [{ type: 'text', text: 'PRIVATE-TOOL-BODY' }] }),
+  ] }], [{ role: 'user', content: 'continue', timestamp: 3 }], []);
+  let payload: { messages: { role: string; reasoning_details?: unknown }[] } | undefined;
+  const stream = await providerStream()(teachingModel, normalizeContext({ messages: compiled.messages }), {
+    apiKey: 'synthetic-test-only', reasoning: 'high', onPayload(value) {
+      payload = value as typeof payload;
+      throw new Error('Stop before network transport');
+    },
+  });
+  assert.equal((await stream.result()).stopReason, 'error');
+  assert.deepEqual(payload?.messages.find((m) => m.role === 'assistant')?.reasoning_details, details);
+  assert.doesNotMatch(JSON.stringify(payload), /PRIVATE-DIAGNOSTICS|PRIVATE-TOOL-BODY/);
+});

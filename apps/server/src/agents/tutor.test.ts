@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import type { JsonObject } from '@earendil-works/pi-ai';
+import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
@@ -18,15 +19,20 @@ test('a large lesson tool call reaches the final reply and commits the complete 
     { type: 'code', file: 'greet.py', language: 'python', code: 'def greet(name="Ada"):\n    return "Hi " + name' },
   ] };
   let requests = 0;
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context, options) => {
+    assert.equal(options?.reasoning, 'high');
     requests++;
-    if (requests === 1) return response(reply([{ type: 'toolCall', id: 'large-lesson', name: 'submit_lesson', arguments: lesson }], 'toolUse'));
+    if (requests === 1) return response(reply([
+      { type: 'thinking', thinking: 'Plan the lesson', thinkingSignature: 'TASK-PRIVATE-SIGNATURE' },
+      { type: 'text', text: 'Preparing lesson. ' },
+      { type: 'toolCall', id: 'large-lesson', name: 'submit_lesson', arguments: lesson },
+    ], 'toolUse'));
     const call = context.messages.flatMap((m) => m.role === 'assistant' ? m.content : []).find((part) => part.type === 'toolCall');
     assert.ok(call?.type === 'toolCall'); assert.deepEqual(call.arguments, lesson);
     const result = context.messages.at(-1);
     assert.ok(result?.role === 'toolResult'); assert.equal(result.isError, false);
     assert.equal(l.unit(space.id, unit).lesson, null, 'Keep the existing commit-after-success contract');
-    return response(reply([{ type: 'text', text: '课件已整理。' }]));
+    return response(reply([{ type: 'thinking', thinking: 'Check the lesson' }, { type: 'text', text: '课件已整理。' }]));
   } });
   try {
     const task = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 });
@@ -36,6 +42,15 @@ test('a large lesson tool call reaches the final reply and commits the complete 
     assert.equal(saved.revision, 1); assert.equal(saved.title, lesson.title); assert.equal(saved.intro, lesson.intro);
     assert.deepEqual(saved.blocks, lesson.blocks);
     assert.equal(db.prepare('SELECT * FROM task_manifests').all().length, 2);
+    const events = runtime.events(space.id, task.id).events;
+    const parts = events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
+    assert.deepEqual(parts.map((part) => part.type), ['reasoning', 'text', 'tool', 'reasoning', 'text']);
+    assert.deepEqual(parts.filter((part) => part.type === 'reasoning').map((part) => part.status), ['done', 'done']);
+    assert.equal(parts.filter((part) => part.type === 'text').map((part) => part.text).join(''), 'Preparing lesson. 课件已整理。');
+    assert.equal(new Set(parts.map((part) => part.id)).size, 5);
+    assert.doesNotMatch(JSON.stringify(events), /TASK-PRIVATE-SIGNATURE|greet\.py|arguments|blocks/);
+    assert.equal(db.prepare('SELECT * FROM messages').all().length, 0, 'Tasks publish activity without creating chat messages');
+    assert.deepEqual(runtime.events(space.id, task.id, events.at(-1)!.seq).events, []);
   } finally { await runtime.close(); db.close(); }
 });
 

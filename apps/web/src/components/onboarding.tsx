@@ -1,16 +1,20 @@
 'use client'
 
-import { ArrowLeft, ArrowUp, Check, ClipboardList, Pencil, Square } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Pencil } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
+import { RunContent } from '@/components/agent/run-content'
+import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
+import { Message, MessageContent } from '@/components/ai-elements/message'
+import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
+import { Shimmer } from '@/components/ai-elements/shimmer'
+import { Suggestion } from '@/components/ai-elements/suggestion'
 import { BrandMark, Generating, isComposing } from '@/components/shared'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group'
 import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -183,15 +187,9 @@ function Chat() {
   const sendingRef = useRef(false)
   const text = persistence ? session?.composerText ?? '' : previewText
   const setText = persistence ? setComposerText : setPreviewText
-  const endRef = useRef<HTMLDivElement>(null)
   const { messages, step } = space.onboarding
   const replying = capabilities.agent && space.onboarding.agentTyping
-  const agentTyping = replying && (!persistence || !messages.some((m) => m.status === 'streaming'))
   const busy = replying || sending || !!persistence && (persistence.busy || !persistence.ready)
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [session?.id, messages.length, agentTyping])
 
   useEffect(() => setSendError(''), [session?.id, messages.length])
 
@@ -220,69 +218,42 @@ function Chat() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {persistence && <div className="flex h-12 shrink-0 items-center border-b"><SessionMenu /></div>}
-      <div className="flex-1 overflow-y-auto">
-        <div className="flex flex-col gap-6 py-8">
-          {(!persistence || messages.length === 0) && <div className="flex gap-3">
-            <BrandMark className="shrink-0" />
-            <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
+      <Conversation key={session?.id ?? space.id} className="min-h-0" initial="instant" resize="instant" aria-label="学习需求会话">
+        <ConversationContent className="gap-6 px-0 py-8">
+          {(!persistence || messages.length === 0) && <Message from="assistant">
+            <MessageContent>
               {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
-            </p>
-          </div>}
-          {messages.map((m) => persistence && m.status === 'thinking' ? null :
+            </MessageContent>
+          </Message>}
+          {messages.map((m) =>
             m.role === 'user' ? (
-              <div key={m.id} className="flex justify-end">
-                <p className="max-w-lg rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm leading-relaxed text-primary-foreground">
-                  {m.text}
-                </p>
-              </div>
+              <Message key={m.id} from="user"><MessageContent><p className="whitespace-pre-wrap">{m.text}</p></MessageContent></Message>
             ) : (
-              <div key={m.id} className="flex gap-3">
-                <BrandMark className="shrink-0" />
-                {persistence ? (
-                  <div className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
-                    <AgentMessage msg={{ ...m, createdAt: 0 }} />
-                  </div>
-                ) : (
-                  <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">{m.text}</p>
-                )}
-              </div>
+              <AgentMessage key={m.id} msg={{ ...m, createdAt: 0 }} />
             ),
           )}
-          {agentTyping && (
-            <div role="status" className="flex items-center gap-3 text-sm text-muted-foreground">
-              <Avatar aria-hidden className="size-7 rounded-lg after:rounded-lg">
-                <AvatarFallback className="rounded-lg bg-primary font-mono text-xs font-bold text-primary-foreground shadow-sm">
-                  {'>_'}
-                </AvatarFallback>
-              </Avatar>
-              <span className="shimmer">Thinking...</span>
+          {!persistence && replying && (
+            <div role="status" className="text-sm text-muted-foreground">
+              <Shimmer>等待模型响应…</Shimmer>
             </div>
           )}
-          <div ref={endRef} />
-        </div>
-      </div>
+        </ConversationContent>
+        <ConversationScrollButton aria-label="滚动到最新消息" />
+      </Conversation>
 
       <div className="flex flex-col gap-3 pb-6">
         {!replying && (
           <div className="flex flex-wrap gap-2">
             {suggestions.map((s) => (
-              <Button key={s} variant="outline" size="sm" className="rounded-full font-normal" disabled={busy} onClick={() => void send(s)}>
-                {s}
-              </Button>
+              <Suggestion key={s} suggestion={s} className="font-normal" disabled={busy} onClick={(value) => void send(value)} />
             ))}
           </div>
         )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            void send(text, true)
-          }}
-        >
-          <InputGroup className="rounded-xl bg-card shadow-sm">
+        <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send(text, true)}>
             <label htmlFor="ob-input" className="sr-only">
               回复 Agent
             </label>
-            <InputGroupTextarea
+            <PromptInputTextarea
               id="ob-input"
               rows={2}
               autoFocus
@@ -297,27 +268,14 @@ function Chat() {
               placeholder={step === 0 ? '比如：我想学习 Rust，最后能写一个命令行工具' : '回复 Agent…'}
               className="leading-relaxed"
             />
-            <InputGroupAddon align="block-end">
+            <PromptInputFooter>
               <span className="text-xs text-muted-foreground">
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
-              {persistence && replying ? (
-                <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
-                  <Square data-icon="inline-start" />停止
-                </InputGroupButton>
-              ) : <InputGroupButton
-                type="submit"
-                variant="default"
-                size="icon-sm"
-                className="ml-auto rounded-full"
-                disabled={!text.trim() || busy}
-                aria-label={capabilities.agent ? '发送' : '保存问题'}
-              >
-                <ArrowUp />
-              </InputGroupButton>}
-            </InputGroupAddon>
-          </InputGroup>
-        </form>
+              <PromptInputSubmit className="ml-auto" status={persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
+                disabled={!(persistence && replying) && (!text.trim() || busy)} aria-label={persistence && replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
+            </PromptInputFooter>
+        </PromptInput>
         {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}
       </div>
     </div>
@@ -329,22 +287,24 @@ export function Onboarding() {
   const { goSpaces, renameSpace, setView, retryReply, stopReply, capabilities, persistence } = useApp()
   const planning = persistence?.planning
   const planningStopped = planning?.run && ['failed', 'interrupted'].includes(planning.run.state)
+  const planningParts = space.sessions.flatMap((s) => s.messages).find((m) => m.id === planning?.run?.id)?.parts ?? []
 
   if (space.view === 'planning') {
     return (
-      <div className="flex min-h-dvh items-center justify-center px-6">
-        <Card className="w-full max-w-md shadow-lg">
+      <div className="flex min-h-dvh items-center justify-center px-6 py-8">
+        <Card className="w-full max-w-xl shadow-lg">
           <CardContent>
             {planningStopped || persistence && (!capabilities.agent || persistence.error) ? (
               <div className="flex flex-col gap-3">
                 <h1 className="text-base font-semibold">{planning?.run?.state === 'interrupted' ? '路线规划已停止' : '路线规划未完成'}</h1>
                 <p role="alert" className="text-sm text-muted-foreground">{planning?.error || persistence?.error || '完整路线尚未保存。请重新规划，或返回修改学习需求。'}</p>
+                <RunContent parts={planningParts} />
               </div>
             ) : <Generating
               title={`正在为「${space.name}」规划学习路线`}
-              steps={['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
+              steps={persistence ? ['模型规划学习路线', '校验路线结构', '保存完整路线'] : ['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
               note="这一步只生成路线和单元概要。每个单元的课件，会在你进入该单元时结合你当时的学习情况再生成。"
-              activeStep={planning?.step}
+              parts={persistence ? planningParts : undefined}
             />}
             {persistence && <div className="mt-6 flex flex-wrap gap-2">
               {planning?.run && ['failed', 'interrupted'].includes(planning.run.state) ? (

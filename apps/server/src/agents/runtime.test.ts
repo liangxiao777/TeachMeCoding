@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { applyAgentEvent, type AgentDisplayPart, type AgentEventData } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { openDataDirectory } from '../storage/data-directory.js';
@@ -13,6 +14,8 @@ import { createApp } from '../http/app.js';
 import { createLocalAccess } from '../http/local-access.js';
 import { serverConfig } from '../config/server.js';
 import { TeachingRuntime } from './runtime.js';
+import { providerStream, teachingModel } from './model.js';
+import { budget } from './context.js';
 import { reply, response, syntheticConfig } from './test-support.js';
 
 function setup() {
@@ -113,6 +116,8 @@ test('cancelling a multi-tool turn retains matching native results without commi
     assert.equal(results[1].isError, true); assert.match(JSON.stringify(results[1]), /host recovery marker/);
     assert.doesNotMatch(JSON.stringify(values), /CANCELLED-SOURCE-BODY/);
     assert.equal(commits, 0); assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
+    assert.deepEqual(learning.session(a.id, sa).messages.at(-1)?.parts,
+      [{ type: 'tool', id: `${run.id}:1:tool:first`, name: 'read', status: 'interrupted' }]);
   } finally { release(); await runtime.close(); db.close(); }
 });
 
@@ -156,18 +161,207 @@ test('startup appends an interrupted event once and does not replay a pending re
     const call = JSON.stringify(reply([{ type: 'toolCall', id: 'unfinished', name: 'read', arguments: { path: 'synthetic.txt' } }], 'toolUse'));
     data.db.prepare('INSERT INTO agent_messages VALUES (?,?,1,1,?)').run(a.id, id, call);
     data.db.prepare('INSERT INTO task_messages VALUES (?,?,1,1,?)').run(a.id, task, call);
+    data.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,0)").run(a.id, a.sessions[0]!.id, id);
+    for (const [table, runId] of [['agent_events', id], ['task_events', task]]) {
+      const events: AgentEventData[] = [
+        { type: 'reasoning', partId: `${runId}:1:reasoning:0`, phase: 'start' },
+        { type: 'reasoning', partId: `${runId}:1:reasoning:0`, phase: 'delta', delta: 'Unfinished at shutdown' },
+        { type: 'tool', callId: `${runId}:1:tool:unfinished`, name: 'read', phase: 'start' },
+      ];
+      events.forEach((event, index) => data.db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?)`).run(a.id, runId, index + 1, JSON.stringify(event)));
+    }
     data.close(); data = openDataDirectory(root);
     let runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
     assert.equal(runtime.get(a.id, id).state, 'interrupted');
-    assert.equal(runtime.events(a.id, id).events[0]?.data.type, 'state');
+    assert.equal(runtime.events(a.id, id).events.at(-1)?.data.type, 'state');
     assert.equal(runtime.get(a.id, task).state, 'interrupted');
-    assert.equal(runtime.events(a.id, task).events[0]?.data.type, 'state');
+    assert.equal(runtime.events(a.id, task).events.at(-1)?.data.type, 'state');
     data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
-    assert.equal(runtime.events(a.id, id).events.length, 1);
-    assert.equal(runtime.events(a.id, task).events.length, 1);
+    for (const runId of [id, task]) {
+      const events = runtime.events(a.id, runId).events;
+      assert.equal(events.length, 4);
+      const parts = events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
+      assert.deepEqual(parts, [
+        { type: 'reasoning', id: `${runId}:1:reasoning:0`, text: 'Unfinished at shutdown', status: 'interrupted' },
+        { type: 'tool', id: `${runId}:1:tool:unfinished`, name: 'read', status: 'interrupted' },
+      ]);
+      if (runId === id) assert.deepEqual(new Learning(data.db).session(a.id, a.sessions[0]!.id).messages.at(-1)?.parts, parts);
+    }
     for (const table of ['agent_messages', 'task_messages']) {
       const rows = data.db.prepare(`SELECT value FROM ${table} ORDER BY seq`).all();
       assert.equal(rows.length, 2); assert.match(JSON.stringify(rows), /host recovery marker/);
     }
   } finally { data.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('teaching runtime sends high reasoning and the exact model/key through the real OpenRouter serializer', async () => {
+  const { db, learning, a, sa } = setup();
+  const adapter = providerStream();
+  let payload: Record<string, unknown> | undefined;
+  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (model, context, options) => {
+    assert.equal(options?.reasoning, 'high');
+    assert.equal(options?.apiKey, syntheticConfig.apiKey);
+    return adapter(model, context, { ...options, onPayload(value) {
+      payload = value as Record<string, unknown>;
+      throw new Error('Deterministic stop before network transport');
+    } });
+  } });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('serialize, do not send'));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'failed');
+    assert.equal(payload?.model, teachingModel.id);
+    assert.equal(payload?.max_tokens, budget.output);
+    assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
+    assert.ok(!JSON.stringify(payload).includes(syntheticConfig.apiKey));
+    const manifest = db.prepare('SELECT value FROM context_manifests').get() as { value: string };
+    assert.equal(JSON.parse(manifest.value).budget.reasoning, 'high');
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('ordered reasoning/text/tool rounds hydrate identically while native signatures stay private and survive continuation', async () => {
+  const { db, learning, a, sa } = setup();
+  let requests = 0;
+  const first = reply([
+    { type: 'thinking', thinking: 'First reasoning', thinkingSignature: 'PRIVATE-THINKING-SIGNATURE' },
+    { type: 'thinking', thinking: 'REDACTED-CONTENT', thinkingSignature: 'ENCRYPTED-SIGNATURE', redacted: true },
+    { type: 'text', text: 'Before tool. ', textSignature: 'PRIVATE-TEXT-SIGNATURE' },
+    { type: 'toolCall', id: 'read-1', name: 'read', arguments: { marker: 'PRIVATE-ARGUMENT' } },
+  ], 'toolUse');
+  const tool: AgentTool = { name: 'read', label: 'Read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
+    async execute() { return { content: [{ type: 'text', text: 'PRIVATE-TOOL-BODY' }], details: {} }; } };
+  const runtime = new TeachingRuntime(learning, syntheticConfig, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_model, context) => {
+    requests++;
+    if (requests === 1) return response(first);
+    const saved = context.messages.find((m) => m.role === 'assistant');
+    assert.deepEqual(saved?.content, first.content);
+    if (requests === 2) return response(reply([
+      { type: 'thinking', thinking: 'Second reasoning', thinkingSignature: 'SECOND-SIGNATURE' }, { type: 'text', text: 'After tool.' },
+    ]));
+    assert.doesNotMatch(JSON.stringify(context), /PRIVATE-TOOL-BODY/);
+    return response(reply([{ type: 'text', text: 'Continued.' }]));
+  } });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('two rounds'));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+    const events = runtime.events(a.id, run.id).events;
+    let parts: AgentDisplayPart[] = [];
+    for (const event of events) {
+      const previous = structuredClone(parts);
+      Object.freeze(parts); parts.forEach(Object.freeze);
+      const next = applyAgentEvent(parts, event);
+      assert.deepEqual(parts, previous, 'Reducer must not mutate prior render state');
+      parts = next;
+    }
+    assert.deepEqual(parts, [
+      { type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'First reasoning', status: 'done' },
+      { type: 'text', id: `${run.id}:1:text:2`, text: 'Before tool. ' },
+      { type: 'tool', id: `${run.id}:1:tool:read-1`, name: 'read', status: 'done' },
+      { type: 'reasoning', id: `${run.id}:2:reasoning:0`, text: 'Second reasoning', status: 'done' },
+      { type: 'text', id: `${run.id}:2:text:1`, text: 'After tool.' },
+    ]);
+    assert.equal(new Set(parts.map((part) => part.id)).size, parts.length);
+    const hydrated = new Learning(db).session(a.id, sa).messages.at(-1)!;
+    assert.deepEqual(hydrated.parts, parts);
+    assert.equal(hydrated.text, 'Before tool. After tool.');
+    assert.equal(hydrated.sequence, events.at(-1)?.seq);
+    assert.doesNotMatch(JSON.stringify({ events, hydrated }), /SIGNATURE|REDACTED-CONTENT|PRIVATE-ARGUMENT|PRIVATE-TOOL-BODY/);
+    const native = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
+    assert.match(native, /PRIVATE-THINKING-SIGNATURE/); assert.match(native, /ENCRYPTED-SIGNATURE/);
+    assert.doesNotMatch(native, /PRIVATE-TOOL-BODY/);
+    const followup = runtime.submit(a.id, sa, randomUUID(), message('continue saved history', 1));
+    await runtime.idle(followup.run.id);
+    assert.equal(runtime.get(a.id, followup.run.id).state, 'succeeded');
+    assert.equal(requests, 3);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('hydrating unfinished reasoning and replaying from the saved cursor never duplicates text or reasoning', async () => {
+  const { db, learning, a, sa } = setup();
+  const stream = createAssistantMessageEventStream();
+  const partial = reply([{ type: 'text', text: 'Preface. ' }, { type: 'thinking', thinking: 'Consider ' }], 'pending');
+  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => stream });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('reconnect'));
+    stream.push({ type: 'start', partial });
+    stream.push({ type: 'text_delta', contentIndex: 0, delta: 'Preface. ', partial });
+    stream.push({ type: 'thinking_start', contentIndex: 1, partial });
+    stream.push({ type: 'thinking_delta', contentIndex: 1, delta: 'Consider ', partial });
+    for (let i = 0; i < 100 && runtime.events(a.id, run.id).events.length < 5; i++) await new Promise((r) => setTimeout(r, 1));
+    const saved = new Learning(db).session(a.id, sa).messages.at(-1)!;
+    assert.deepEqual(saved.parts?.at(-1), { type: 'reasoning', id: `${run.id}:1:reasoning:1`, text: 'Consider ', status: 'streaming' });
+    assert.equal(saved.text, 'Preface. ');
+    assert.equal(saved.sequence, 5);
+    stream.push({ type: 'thinking_delta', contentIndex: 1, delta: 'the result.', partial });
+    stream.push({ type: 'thinking_end', contentIndex: 1, content: 'Consider the result.', partial });
+    stream.push({ type: 'text_delta', contentIndex: 2, delta: 'Answer.', partial });
+    stream.push({ type: 'done', reason: 'stop', message: reply([
+      { type: 'text', text: 'Preface. ' }, { type: 'thinking', thinking: 'Consider the result.' }, { type: 'text', text: 'Answer.' },
+    ]) });
+    await runtime.idle(run.id);
+    const missing = runtime.events(a.id, run.id, saved.sequence).events;
+    let parts = saved.parts!, text = saved.text, sequence = saved.sequence!;
+    // Simulate duplicate SSE delivery around a reconnect; the cursor owns dedup.
+    for (const event of [...runtime.events(a.id, run.id).events, ...missing]) {
+      if (event.seq <= sequence) continue;
+      parts = applyAgentEvent(parts, event);
+      if (event.data.type === 'text') text += event.data.delta;
+      sequence = event.seq;
+    }
+    const hydrated = new Learning(db).session(a.id, sa).messages.at(-1)!;
+    assert.deepEqual(parts, hydrated.parts);
+    assert.equal(text, 'Preface. Answer.'); assert.equal(text, hydrated.text);
+    assert.equal(sequence, hydrated.sequence);
+    assert.equal(parts[1]?.type === 'reasoning' && parts[1].text, 'Consider the result.');
+    assert.equal(parts[1]?.type === 'reasoning' && parts[1].status, 'done');
+    assert.deepEqual(runtime.events(a.id, run.id, sequence).events, []);
+  } finally { stream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }); await runtime.close(); db.close(); }
+});
+
+test('stop or provider failure before reasoning_end preserves unfinished display state, never marks it done', async () => {
+  for (const mode of ['stop', 'failure'] as const) {
+    const { db, learning, a, sa } = setup();
+    const stream = createAssistantMessageEventStream();
+    const partial = reply([{ type: 'thinking', thinking: 'Unfinished', thinkingSignature: 'PRIVATE-SIGNATURE' }], 'pending');
+    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => stream });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(mode));
+      stream.push({ type: 'start', partial });
+      stream.push({ type: 'thinking_start', contentIndex: 0, partial });
+      stream.push({ type: 'thinking_delta', contentIndex: 0, delta: 'Unfinished', partial });
+      for (let i = 0; i < 100 && runtime.events(a.id, run.id).events.length < 4; i++) await new Promise((r) => setTimeout(r, 1));
+      assert.equal(learning.session(a.id, sa).messages.at(-1)?.parts?.[0]?.type, 'reasoning');
+      if (mode === 'stop') {
+        runtime.stop(a.id, run.id);
+        stream.push({ type: 'thinking_end', contentIndex: 0, content: 'Unfinished', partial });
+      }
+      const reason = mode === 'stop' ? 'aborted' : 'error';
+      stream.push({ type: 'error', reason, error: { ...partial, stopReason: reason } });
+      await runtime.idle(run.id);
+      const hydrated = learning.session(a.id, sa).messages.at(-1)!;
+      assert.deepEqual(hydrated.parts, [{ type: 'reasoning', id: `${run.id}:1:reasoning:0`, text: 'Unfinished', status: 'interrupted' }]);
+      assert.equal(hydrated.status, mode === 'stop' ? 'stopped' : 'error');
+      assert.ok(!runtime.events(a.id, run.id).events.some((e) => e.data.type === 'reasoning' && e.data.phase === 'end'));
+      assert.doesNotMatch(JSON.stringify(hydrated), /PRIVATE-SIGNATURE/);
+    } finally { stream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }); await runtime.close(); db.close(); }
+  }
+});
+
+test('legacy display events reduce immutably in order and terminal states do not invent tool success', () => {
+  const data: AgentEventData[] = [
+    { type: 'text', delta: 'Old ' }, { type: 'text', delta: 'reply' },
+    { type: 'tool', name: 'read', phase: 'start' }, { type: 'tool', name: 'read', phase: 'end' },
+    { type: 'text', delta: ' then ' }, { type: 'tool', name: 'read', phase: 'start' },
+    { type: 'state', state: 'failed', error: 'Failed before tool end' },
+  ];
+  const parts = data.reduce<AgentDisplayPart[]>((p, d, index) => applyAgentEvent(p, { runId: 'legacy', seq: index + 1, data: d }), []);
+  assert.deepEqual(parts, [
+    { type: 'text', id: 'legacy:legacy-text:1', text: 'Old reply' },
+    { type: 'tool', id: 'legacy:legacy-tool:3', name: 'read', status: 'done' },
+    { type: 'text', id: 'legacy:legacy-text:5', text: ' then ' },
+    { type: 'tool', id: 'legacy:legacy-tool:6', name: 'read', status: 'interrupted' },
+  ]);
+  assert.deepEqual(applyAgentEvent([], { runId: 'legacy', seq: 1, data: { type: 'tool', name: 'read', phase: 'end', failed: true } }),
+    [{ type: 'tool', id: 'legacy:legacy-tool:1', name: 'read', status: 'error' }]);
 });

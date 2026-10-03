@@ -2,6 +2,7 @@
 
 import { ArrowLeft, ClipboardCheck, Play, Save, Send } from 'lucide-react'
 import { Generating, InlineText } from '@/components/shared'
+import { RunContent } from '@/components/agent/run-content'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -114,11 +115,13 @@ export function AssessmentView() {
         {draft.state === 'generating' && capabilities.assessment ? (
           <Card>
             <CardContent>
-              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['读取本单元目标', '固定课件版本', '生成题目与独立评分标准'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']} />
+              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['模型生成题目', '校验题目与独立评分标准', '保存题目'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']}
+                parts={persistence ? persistence.taskParts[task?.id ?? ''] ?? [] : undefined} />
             </CardContent>
           </Card>
         ) : (
           <>
+            {persistence && task?.kind === 'evaluation' && <RunContent parts={persistence.taskParts[task.id]} streaming={activeTask} />}
             <Card>
               {spec ? <QuestionHeader n={1} title={spec.q1.title} prompt={spec.q1.prompt} /> : (
                 <CardHeader>

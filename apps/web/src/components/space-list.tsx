@@ -7,7 +7,8 @@ import { Brand, isComposing } from '@/components/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '@/components/ui/input-group'
+import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
+import { Suggestion } from '@/components/ai-elements/suggestion'
 import { allUnits, findUnit, relativeTime } from '@/app/selectors'
 import { useApp } from '@/app/context'
 import { cn } from '@/lib/utils'
@@ -25,21 +26,11 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
   }
   return (
     <div className="flex flex-col gap-3">
-      <form
-        className="rounded-xl bg-background"
-        onSubmit={(e) => {
-          e.preventDefault()
-          start(text)
-        }}
-      >
-        <InputGroup className="h-14 rounded-xl bg-card shadow-sm">
-          <InputGroupAddon>
-            <Sparkles className="text-primary" />
-          </InputGroupAddon>
+      <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => start(text)}>
           <label htmlFor="goal-input" className="sr-only">
             你想学什么
           </label>
-          <InputGroupInput
+          <PromptInputTextarea
             id="goal-input"
             autoFocus={autoFocus}
             value={text}
@@ -50,20 +41,18 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
             placeholder="说说你想学什么，比如：我想学习 Rust，最后能写一个命令行工具"
             className="text-base"
           />
-          <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" variant="default" size="sm" disabled={!text.trim() || busy}>
+          <PromptInputFooter>
+            <Sparkles className="size-4 text-muted-foreground" aria-hidden />
+            <PromptInputSubmit aria-label="开始" size="sm" disabled={!text.trim() || busy}>
               开始
               <ArrowRight data-icon="inline-end" />
-            </InputGroupButton>
-          </InputGroupAddon>
-        </InputGroup>
-      </form>
+            </PromptInputSubmit>
+          </PromptInputFooter>
+      </PromptInput>
       <div className="flex flex-wrap items-center justify-center gap-2">
         <span className="text-xs text-muted-foreground">试试：</span>
         {EXAMPLES.map((ex) => (
-          <Button key={ex} variant="outline" size="sm" className="rounded-full" disabled={busy} onClick={() => start(ex)}>
-            {ex}
-          </Button>
+          <Suggestion key={ex} suggestion={ex} disabled={busy} onClick={start} />
         ))}
       </div>
     </div>

@@ -27,7 +27,10 @@ test('private rubric is separated from public unit, tutor context and task event
     }
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'questions', name: 'submit_assessment', arguments: spec }], 'toolUse'));
     if (late) l.saveLesson(space.id, unit, { title: 'updated', content: '新的课件' });
-    return response(reply([{ type: 'text', text: 'PRIVATE-RUBRIC must never stream to browser' }]));
+    return response(reply([
+      { type: 'thinking', thinking: 'PRIVATE-RUBRIC reasoning must remain private', thinkingSignature: 'PRIVATE-SIGNATURE' },
+      { type: 'text', text: 'PRIVATE-RUBRIC must never stream to browser' },
+    ]));
   } });
   try {
     const run = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 0 });
@@ -35,6 +38,8 @@ test('private rubric is separated from public unit, tutor context and task event
     assert.equal(l.unit(space.id, unit).assessment?.revision, 1);
     assert.doesNotMatch(JSON.stringify(l.unit(space.id, unit)), /PRIVATE-RUBRIC/);
     assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
+    assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-SIGNATURE/);
+    assert.deepEqual(runtime.events(space.id, run.id).events.flatMap((e) => e.data.type === 'reasoning' ? [e.data.phase] : []), ['start', 'end']);
     assert.match(JSON.stringify(db.prepare('SELECT rubric FROM assessment_versions').all()), /PRIVATE-RUBRIC/);
     tutor = true;
     const session = l.createSession(space.id, { scope: 'unit', unitId: unit, title: '辅导' });
@@ -92,7 +97,10 @@ test('evaluation failures create no result; retries keep one fixed submission an
     assert.match(value, /PRIVATE-RUBRIC-ONE/); assert.match(value, /FIXED-ANSWER/); assert.doesNotMatch(value, /NEW-DRAFT|学习 Rust|公开课件/);
     if (fail) return response(reply([], 'error'));
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'grade', name: 'submit_evaluation', arguments: grade }], 'toolUse'));
-    return response(reply([]));
+    return response(reply([
+      { type: 'thinking', thinking: 'PRIVATE-RUBRIC reference answer' },
+      { type: 'text', text: 'PRIVATE-RUBRIC must not appear in task activity' },
+    ]));
   } });
   try {
     const input = { kind: 'evaluation', revision: 0, specRevision: 1, q1: 'FIXED-ANSWER', q2: 'print(3)' }, key = randomUUID();
@@ -103,6 +111,8 @@ test('evaluation failures create no result; retries keep one fixed submission an
     fail = false; const retryKey = randomUUID(), retry = runtime.retryTask(space.id, run.id, retryKey);
     assert.equal(runtime.retryTask(space.id, run.id, retryKey).id, retry.id);
     await runtime.idle(retry.id); assert.equal(runtime.get(space.id, retry.id).state, 'succeeded');
+    assert.doesNotMatch(JSON.stringify(runtime.events(space.id, retry.id)), /PRIVATE-RUBRIC/);
+    assert.deepEqual(runtime.events(space.id, retry.id).events.flatMap((e) => e.data.type === 'reasoning' ? [e.data.phase] : []), ['start', 'end']);
     assert.equal(l.unit(space.id, unit).records.length, 1); assert.equal(l.unit(space.id, unit).records[0]!.attempt, 1);
     assert.equal(l.unit(space.id, unit).draft.q1, 'NEW-DRAFT'); assert.equal(l.unit(space.id, unit).nextAttempt, 2);
     assert.equal((db.prepare('SELECT COUNT(*) n FROM submissions').get() as { n: number }).n, 1);

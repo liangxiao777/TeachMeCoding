@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createAssistantMessageEventStream } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
+import { createAssistantMessageEventStream, type AssistantMessage } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
 import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-agent-core/dist/index.js';
 import { reply, response } from '../apps/server/src/agents/test-support.js';
 import { routeContentSchema } from '../packages/contracts/src/workspace.js';
@@ -13,6 +13,46 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
   const text = JSON.stringify(user?.content);
   const all = JSON.stringify(context);
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
+  if (text.includes('推理验收')) {
+    if (options?.reasoning !== 'high') throw new Error('Expected high reasoning');
+    const message = last?.role === 'toolResult'
+      ? reply([{ type: 'thinking', thinking: '工具已返回。核对学习时间与目标。', thinkingSignature: 'PRIVATE-SIGNATURE' },
+        { type: 'text', text: '## 学习建议\n\n目标已经整理。\n\n| 项目 | 安排 |\n| --- | --- |\n| 练习 | 每周两次 |\n\n```python\nprint("hello")\n```\n\n使用 `print` 输出文字。' }])
+      : reply([{ type: 'thinking', thinking: '先核对已有基础。再区分目标与时间。最后整理需求。', thinkingSignature: 'PRIVATE-SIGNATURE' },
+        { type: 'text', text: '我会先整理目标。' },
+        has('submit_learning_conclusion') ? { type: 'toolCall', id: 'reasoning-conclusion', name: 'submit_learning_conclusion', arguments: { text: '根据已有基础继续练习。' } }
+        : { type: 'toolCall', id: 'reasoning-draft', name: 'submit_requirement_draft', arguments: {
+          goal: '学习 Python', background: '已有变量基础', outcome: '编写小程序', schedule: '每周两次',
+        } }], 'toolUse');
+    const stream = createAssistantMessageEventStream();
+    void (async () => {
+      const partial: AssistantMessage = { ...message, content: [], stopReason: 'pending' };
+      stream.push({ type: 'start', partial: structuredClone(partial) });
+      for (const [contentIndex, part] of message.content.entries()) {
+        if (part.type === 'thinking') {
+          partial.content.push({ ...part, thinking: '' });
+          stream.push({ type: 'thinking_start', contentIndex, partial: structuredClone(partial) });
+          for (const delta of part.thinking.match(/[^。]+。?/g) ?? []) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            if (options.signal?.aborted) { stream.push({ type: 'error', reason: 'aborted', error: { ...partial, stopReason: 'aborted' } }); return; }
+            const current = partial.content[contentIndex];
+            if (current?.type === 'thinking') current.thinking += delta;
+            stream.push({ type: 'thinking_delta', contentIndex, delta, partial: structuredClone(partial) });
+          }
+          stream.push({ type: 'thinking_end', contentIndex, content: part.thinking, partial: structuredClone(partial) });
+        } else {
+          partial.content.push(part);
+          if (part.type === 'text') {
+            stream.push({ type: 'text_start', contentIndex, partial: structuredClone(partial) });
+            stream.push({ type: 'text_delta', contentIndex, delta: part.text, partial: structuredClone(partial) });
+            stream.push({ type: 'text_end', contentIndex, content: part.text, partial: structuredClone(partial) });
+          }
+        }
+      }
+      stream.push({ type: 'done', reason: message.stopReason as 'stop' | 'toolUse', message });
+    })();
+    return stream;
+  }
   if (last?.role !== 'toolResult') {
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }

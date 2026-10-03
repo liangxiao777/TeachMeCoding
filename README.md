@@ -4,6 +4,8 @@
 
 正式入口与 `/preview` 复用原型迁入的同一套页面和组件树；`AppModel` 分别连接真实持久化数据和隔离内存夹具，不维护另一套仿制页面。保留 Tailwind 样式、空间卡片、需求摘要、路线、会话菜单、项目树、课件、普通／全屏 IDE 和测评组件；正式入口增加手动保存、磁盘冲突处理和未接通能力提示，不以模拟内容填补真实数据。
 
+所有 Agent 会话及学习需求入口使用通过 shadcn 官方 registry 导入的 AI Elements：Conversation、Message、PromptInput、Reasoning、Tool 和 ChainOfThought。源码在 `apps/web/src/components/ai-elements`，配置在 `apps/web/components.json`；仅对新组件做 Base UI 组合、事件及状态适配，不覆盖已有基础组件。模型与传输仍使用 Pi 和现有 SSE，不使用 Vercel AI SDK 的 `useChat` 或服务端协议。流式 Markdown 支持表格、代码、数学公式；代码块保留「带入 IDE」，行内代码没有该操作。
+
 Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsource 包随构建分发，中文优先使用原型已有的系统字体；Lucide 图标编入应用，站点图标随静态资源提供。不需要 Next.js，也不请求在线字体或 Analytics。
 
 ## 界面演示与开发夹具
@@ -75,7 +77,7 @@ TMC_DATA_DIR="$HOME/teach-me-coding-data" pnpm start
 
 Base UI 仍固定为 1.5.0。其 React 19 生产模式存在菜单可见但 `aria-expanded=false` 的[已知问题 #4956](https://github.com/mui/base-ui/issues/4956)；`patches/@base-ui__utils@0.2.9.patch` 仅回移[上游 #4866 的 store selector 修复](https://github.com/mui/base-ui/pull/4866)，通过 pnpm 自动应用，不升级组件或修改样式。浏览器回归检查异步保存期间新建会话、菜单重新打开时的无障碍状态及 Escape 关闭。将来升级包含该修复的版本时，应删除补丁并重跑这些检查。
 
-有意调整视觉后，先运行 `pnpm test:browser tests/browser/visual.spec.ts --project=production --update-snapshots`，**实际打开基线并与原型/旧截图对照**，再运行不带更新参数的 `pnpm test:browser`。不能用自动更新截图来掩盖失败。迁移允许的差异为本地字体替换和独立 24px 夹具页脚；课件抽屉维持原型的左侧深色样式。截图不证明真实教学或执行已接通。
+有意调整视觉后，先运行 `pnpm test:browser tests/browser/visual.spec.ts --project=production --update-snapshots`，**实际打开基线并与原型/旧截图对照**，再运行不带更新参数的 `pnpm test:browser`。不能用自动更新截图来掩盖失败。最初迁移允许的差异为本地字体替换和独立 24px 夹具页脚；随后用户授权用 AI Elements 替换会话、输入和思考/执行过程展示，这些区域不再与旧原型逐像素相同。其他布局及课件抽屉的左侧深色样式仍保留。截图不证明真实教学或执行已接通。
 
 ## 原生依赖检查
 
@@ -93,7 +95,7 @@ Pi Core 与 AI 包固定为 `@earendil-works/pi-agent-core@1.0.0`、`@earendil-w
 
 真实测试使用 `pnpm test:provider`，会发送两次短请求（正常流式响应、收到文字后取消），可能产生 Provider 费用。在根目录 `.env` 配置 `OPENROUTER_API_KEY` 与准确的 `OPENROUTER_MODEL`；没有 `.env` 时可参考 `.env.example` 新建，权限设为 `600`，不要覆盖已有配置或把密钥写进命令行。服务端环境变量优先于文件；缺失配置或 Provider 错误会返回失败，不切换模型。`.env` 路径相对代码定位，不依赖启动目录；读取不会把凭据注入全局环境或终端子进程。
 
-兼容性冒烟使用 256 输出 token 上限和 8192 测试上下文元数据。教学运行独立使用 `deepseek/deepseek-v4.1-flash` 的能力元数据，关闭推理。应用不设置输入上下文大小上限，不估算输入 token，也不因长度裁剪同会话历史、当前问题、引用或工具调用/结果；模型自身的上下文窗口仍由 Provider 限制。每请求输出上限 4096；每次运行最多 6 个请求、12 次顺序工具调用、12288 输出 token 和 120 秒。这些运行限制、Provider 错误或 `length` 截断仍返回失败。请求清单保留实际 usage 和运行限制，不记录输入预算估算。
+兼容性冒烟使用 256 输出 token 上限和 8192 测试上下文元数据。教学运行独立使用 `deepseek/deepseek-v4.1-flash` 的能力元数据，开启 `high` 推理；测试检查实际发出的 OpenRouter 参数。应用不设置输入上下文大小上限，不估算输入 token，也不因长度裁剪同会话历史、当前问题、引用或工具调用/结果；模型自身的上下文窗口仍由 Provider 限制。每请求输出上限 4096（包含推理）；每次运行最多 6 个请求、12 次顺序工具调用、12288 输出 token 和 300 秒。高推理可能增加延迟和费用；这些运行限制、Provider 错误或 `length` 截断仍返回失败。请求清单保留实际 usage 和运行限制，不记录输入预算估算。
 
 教学确定性测试使用 `pnpm exec playwright test -c tests/agents.config.ts --project=production --workers=1`（开发模式换为 `development`），需先构建，占用与普通浏览器测试相同端口，不同时运行。`pnpm exec tsx tests/teaching-provider-smoke.ts` 是显式收费真实模型检查：只使用可丢弃数据库和合成文件，串联需求→路线→课件→只读辅导→出题→评估；不上传用户项目，不执行提交的代码。Provider 失败会使脚本失败；真实和确定性结果见 ROADMAP，不保证模型每次输出相同。
 
@@ -104,6 +106,8 @@ Pi Core 与 AI 包固定为 `@earendil-works/pi-agent-core@1.0.0`、`@earendil-w
 辅导 Agent 提供 `read/ls/find/grep`，没有 write/edit/bash 或命令执行工具。**读取无需逐次授权，没有敏感文件名过滤或项目围栏；cwd 不是沙箱。**绝对路径、父目录、home 和链接目标按服务账号 OS 权限访问。因此 Agent 可能读取凭据等私人文件并将其发送给 Provider；XML/提示词不是安全边界。浏览器项目文件 API 仍使用上文的项目边界。服务端配置不会主动加入上下文或日志。
 
 默认保留用户主动消息、引用、可展示模型回复和合法产物；自动读取的 toolResult 正文仅用于当前运行，持久化时省略正文、保留调用/结果关系及 hash，不额外永久复制源码。模型可能在可展示回复中引用材料；该策略不是内容防泄漏器。仅凭清单和 hash 不能逐字重放历史请求。公开题目与私有 rubric 分离，后者不进入浏览器 API、任务文字事件或 tutor 默认上下文；自主 OS 读取不构成数据库隔离。
+
+真实推理、正文和工具状态按模型轮次/内容段/调用 ID 保存为有序事件，刷新或重连不会重复追加；停止会保留已返回的内容并标记未完成步骤。Pi 原生 thinking/signature 留在内部消息中供后续请求使用，浏览器仅接收可展示推理文字，不接收签名或被 Provider 隐去的内容。出题/评分任务会接触私有答案，故仅展示推理阶段与工具状态，不发送推理正文。规划和课件页的正式执行进度由真实事件推进，定时演示仅存在于 `/preview`。
 
 必要时显式设置 `TMC_AGENT_DEBUG_SNAPSHOTS=1`，服务会在所选数据目录的 `agent-debug/` 写入完整请求快照（新目录 700、文件 600）。**快照可能含源码、路径、引用和私有评分标准**；不要提交、上传或公开它们。取消该环境变量并重启即停止新增；停止服务后，可检查并删除该目录中的快照文件，不要删除 `app.db` 或项目文件。关闭快照不自动删除已有文件。
 

@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
-  type AssessmentRecord, type LearningConclusion, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  applyAgentEvent, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
+  type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 
 export class BusinessError extends Error {
@@ -83,19 +83,30 @@ export class Learning {
   }
   session(space: string, id: string): SessionDetail {
     idSchema.parse(space); idSchema.parse(id);
-    const row = this.one<SessionSummary & { revision: number; draft: string }>(
-      'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
-    const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
-      `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
-       COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=m.space_id AND e.run_id=m.id),0) AS sequence,
-       CASE r.state WHEN 'pending' THEN 'thinking' WHEN 'running' THEN CASE WHEN m.text='' THEN 'thinking' ELSE 'streaming' END
-         WHEN 'interrupted' THEN 'stopped' WHEN 'failed' THEN 'error' ELSE 'done' END AS status
-       FROM messages m LEFT JOIN runs r ON r.space_id=m.space_id AND r.id=m.id
-       WHERE m.space_id=? AND m.session_id=? ORDER BY m.rowid`, space, id);
-    return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
-      draft: { ...JSON.parse(row.draft), revision: row.revision },
-      messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote) })),
-    };
+    // Text, event projection and resume cursor must come from the same snapshot.
+    return this.db.transaction(() => {
+      const row = this.one<SessionSummary & { revision: number; draft: string }>(
+        'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
+      const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
+        `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
+         COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=m.space_id AND e.run_id=m.id),0) AS sequence,
+         CASE r.state WHEN 'pending' THEN 'thinking' WHEN 'running' THEN CASE WHEN m.text='' THEN 'thinking' ELSE 'streaming' END
+           WHEN 'interrupted' THEN 'stopped' WHEN 'failed' THEN 'error' ELSE 'done' END AS status
+         FROM messages m LEFT JOIN runs r ON r.space_id=m.space_id AND r.id=m.id
+         WHERE m.space_id=? AND m.session_id=? ORDER BY m.rowid`, space, id);
+      const events = this.all<{ runId: string; seq: number; value: string }>(
+        `SELECT e.run_id AS runId,e.seq,e.value FROM agent_events e JOIN messages m ON m.space_id=e.space_id AND m.id=e.run_id
+         WHERE m.space_id=? AND m.session_id=? ORDER BY e.run_id,e.seq`, space, id);
+      const parts = new Map<string, AgentDisplayPart[]>();
+      for (const event of events) parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [],
+        { runId: event.runId, seq: event.seq, data: JSON.parse(event.value) as AgentEventData }));
+      return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
+        draft: { ...JSON.parse(row.draft), revision: row.revision },
+        messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
+          ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
+        })),
+      };
+    })();
   }
   createSession(space: string, input: unknown) {
     this.space(space);

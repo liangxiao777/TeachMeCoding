@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowRight, ArrowUp, Lightbulb, Route, Sparkles, Trophy } from 'lucide-react'
+import { ArrowRight, Lightbulb, Route, Sparkles, Trophy } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { StatusIcon, StatusPill, isComposing } from '@/components/shared'
@@ -8,7 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from '@/components/ui/input-group'
+import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
 import { Progress } from '@/components/ui/progress'
 import { allUnits, findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
@@ -262,9 +262,8 @@ export function RouteView() {
               aria-hidden={space.agentOpen}
             >
               <div className="min-h-0 overflow-hidden">
-                <form className="p-1" onSubmit={(e) => { e.preventDefault(); void submitSuggestion() }}>
-                  <InputGroup className="rounded-xl bg-background has-disabled:bg-background has-disabled:opacity-100">
-                    <InputGroupTextarea
+                <PromptInput className="p-1" onReset={(event) => event.preventDefault()} onSubmit={() => submitSuggestion()}>
+                    <PromptInputTextarea
                       aria-label="路线调整想法"
                       placeholder="说说你想怎么调整，例如：基础语法我已经会了，想先做项目…"
                       rows={2}
@@ -277,14 +276,11 @@ export function RouteView() {
                         }
                       }}
                     />
-                    <InputGroupAddon align="block-end">
+                    <PromptInputFooter>
                       <span className="text-xs font-normal">{busy ? persistence ? '正在读取或保存…' : 'Agent 正在回复…' : capabilities.agent ? 'Enter 发送 · Shift + Enter 换行' : 'Enter 保存想法 · Shift + Enter 换行'}</span>
-                      <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto rounded-full" disabled={busy || !suggestion.trim()} aria-label={capabilities.agent ? '发送路线调整想法' : '保存路线调整想法'}>
-                        <ArrowUp />
-                      </InputGroupButton>
-                    </InputGroupAddon>
-                  </InputGroup>
-                </form>
+                      <PromptInputSubmit className="ml-auto" disabled={busy || !suggestion.trim()} aria-label={capabilities.agent ? '发送路线调整想法' : '保存路线调整想法'} />
+                    </PromptInputFooter>
+                </PromptInput>
                 {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}
               </div>
             </motion.div>

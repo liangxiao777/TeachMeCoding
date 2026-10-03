@@ -2,8 +2,10 @@
 
 import { Check, CircleDashed, CircleDot, RotateCcw, SkipForward } from 'lucide-react'
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import type { AgentDisplayPart } from '@teach-me-coding/contracts'
+import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from '@/components/ai-elements/chain-of-thought'
+import { RunContent } from '@/components/agent/run-content'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
@@ -132,22 +134,24 @@ export function Generating({
   steps,
   note,
   className,
-  activeStep,
+  parts,
 }: {
   title: string
   steps: string[]
   note?: string
   className?: string
   /** Omit only for the simulated preview; real work advances on durable events. */
-  activeStep?: number
+  parts?: AgentDisplayPart[]
 }) {
   const [simulated, setActive] = useState(0)
-  const active = activeStep ?? simulated
+  const recordedStep = parts === undefined ? undefined : parts.some((p) => p.type === 'tool' && p.status === 'done') ? 2
+    : parts.some((p) => p.type === 'tool') ? 1 : 0
+  const active = recordedStep ?? simulated
   useEffect(() => {
-    if (activeStep !== undefined) return
+    if (recordedStep !== undefined) return
     const t = setInterval(() => setActive((a) => Math.min(a + 1, steps.length - 1)), 750)
     return () => clearInterval(t)
-  }, [steps.length, activeStep])
+  }, [steps.length, recordedStep])
   return (
     <div role="status" aria-live="polite" className={cn('flex flex-col gap-5', className)}>
       <div className="flex items-center gap-3">
@@ -156,27 +160,16 @@ export function Generating({
         </span>
         <p className="text-base font-semibold tracking-tight">{title}</p>
       </div>
-      <Progress value={((active + (activeStep === undefined ? 1 : 0)) / steps.length) * 100} aria-label="生成进度" />
-      <ol className="flex flex-col gap-2.5 pl-1">
+      <ChainOfThought defaultOpen>
+        <ChainOfThoughtHeader>执行进度</ChainOfThoughtHeader>
+        <ChainOfThoughtContent>
         {steps.map((s, i) => (
-          <li
-            key={s}
-            className={cn(
-              'flex items-center gap-2.5 text-sm transition-colors',
-              i < active ? 'text-foreground' : i === active ? 'text-foreground' : 'text-muted-foreground/60',
-            )}
-          >
-            {i < active ? (
-              <Check className="size-4 text-primary" aria-hidden />
-            ) : i === active ? (
-              <CircleDot className="size-4 animate-pulse text-primary" aria-hidden />
-            ) : (
-              <CircleDashed className="size-4" aria-hidden />
-            )}
-            {s}
-          </li>
+          <ChainOfThoughtStep key={s} label={s} status={i < active ? 'complete' : i === active ? 'active' : 'pending'}
+            icon={i < active ? Check : i === active ? CircleDot : CircleDashed} />
         ))}
-      </ol>
+        </ChainOfThoughtContent>
+      </ChainOfThought>
+      {parts !== undefined && <RunContent parts={parts} streaming />}
       {note && <p className="text-sm leading-relaxed text-muted-foreground">{note}</p>}
       <div className="flex flex-col gap-2" aria-hidden>
         {[92, 78, 85, 60].map((w, i) => (

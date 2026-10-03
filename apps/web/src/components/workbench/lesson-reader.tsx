@@ -278,7 +278,8 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           <Generating
             className="py-6"
             title="正在为你生成课件"
-            steps={['回顾你的学习目标与背景', persistence ? '参考已采纳结论与有效测评' : '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
+            steps={persistence ? ['模型生成课件内容', '校验课件结构', '保存课件'] : ['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
+            parts={persistence ? persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? [] : undefined}
             note="课件会结合你此刻的学习情况生成，所以和别人看到的可能不一样。"
           />
         )}

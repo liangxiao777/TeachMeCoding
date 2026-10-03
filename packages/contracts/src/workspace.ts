@@ -52,7 +52,10 @@ export type AssessmentSpec = z.infer<typeof assessmentSpecSchema> & { revision?:
 export interface SpaceSummary { id: string; name: string; createdAt: number }
 export interface RequirementState { revision: number; confirmed: boolean; value: Requirement }
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
+export type AgentDisplayPart = { type: 'text'; id: string; text: string }
+  | { type: 'reasoning'; id: string; text: string; status: 'streaming' | 'done' | 'interrupted' }
+  | { type: 'tool'; id: string; name: string; status: 'running' | 'done' | 'error' | 'interrupted' };
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
@@ -61,10 +64,44 @@ export interface Proposal { id: string; baseRevision: number; requirementRevisio
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
-  | { type: 'text'; delta: string } | { type: 'tool'; name: string; phase: 'start' | 'end'; failed?: boolean };
+  | { type: 'text'; delta: string; partId?: string }
+  | { type: 'reasoning'; partId: string; phase: 'start' | 'delta' | 'end'; delta?: string }
+  | { type: 'tool'; name: string; phase: 'start' | 'end'; failed?: boolean; callId?: string };
 export interface RunEvent { runId: string; seq: number; data: AgentEventData }
 export interface RunEvents { run: AgentRun; events: RunEvent[] }
 export interface RunSubmission { run: AgentRun; session: SessionDetail }
+
+// One run's ordered display projection. Callers discard seq <= their saved cursor
+// before applying events; hydration starts empty, never from Message.text.
+export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEvent): AgentDisplayPart[] {
+  const { data, runId, seq } = event;
+  if (data.type === 'state') {
+    return parts.map((part) => ['succeeded', 'failed', 'interrupted'].includes(data.state)
+      && ((part.type === 'reasoning' && part.status === 'streaming') || (part.type === 'tool' && part.status === 'running'))
+      ? { ...part, status: 'interrupted' } : part);
+  }
+  const last = parts.at(-1);
+  if (data.type === 'text') {
+    const id = data.partId ?? (last?.type === 'text' && last.id.startsWith(`${runId}:legacy-text:`) ? last.id : `${runId}:legacy-text:${seq}`);
+    const existing = parts.find((part) => part.type === 'text' && part.id === id);
+    return existing?.type === 'text' ? parts.map((part) => part === existing ? { ...existing, text: existing.text + data.delta } : part)
+      : [...parts, { type: 'text', id, text: data.delta }];
+  }
+  if (data.type === 'reasoning') {
+    const existing = parts.find((part) => part.type === 'reasoning' && part.id === data.partId);
+    const part: AgentDisplayPart = { type: 'reasoning', id: data.partId,
+      text: (existing?.type === 'reasoning' ? existing.text : '') + (data.phase === 'delta' ? data.delta ?? '' : ''),
+      status: data.phase === 'end' ? 'done' : existing?.type === 'reasoning' ? existing.status : 'streaming' };
+    return existing ? parts.map((p) => p === existing ? part : p) : [...parts, part];
+  }
+  // Legacy events lack call IDs; match the most recent unfinished call by name.
+  const existing = data.callId ? parts.find((part) => part.type === 'tool' && part.id === data.callId)
+    : data.phase === 'end' ? parts.findLast((part) => part.type === 'tool' && part.name === data.name && part.status === 'running') : undefined;
+  const part: AgentDisplayPart = { type: 'tool', id: data.callId ?? existing?.id ?? `${runId}:legacy-tool:${seq}`,
+    name: data.name, status: data.phase === 'end' ? data.failed ? 'error' : 'done' : 'running' };
+  return existing ? parts.map((p) => p === existing ? part : p) : [...parts, part];
+}
+
 export interface LearningConclusion { id: string; unitId: string; runId: string; text: string; revision: number; adopted: boolean; valid: boolean; sources: { requirement: number; route: number; lesson: number } }
 export interface Workspace extends SpaceSummary {
   requirement: RequirementState;

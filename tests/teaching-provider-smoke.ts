@@ -17,8 +17,11 @@ const ask = async (session: string, text: string) => {
   const { run } = runtime.submit(space.id, session, randomUUID(), { text, quote: null, draftRevision: learning.session(space.id, session).draft.revision });
   await runtime.idle(run.id);
   const final = runtime.get(space.id, run.id);
+  const display = learning.session(space.id, session).messages.find((message) => message.id === run.id)!;
+  const reasoningCharacters = display.parts?.reduce((sum, part) => sum + (part.type === 'reasoning' ? part.text.length : 0), 0) ?? 0;
+  assert.ok(reasoningCharacters > 0, 'High reasoning must actually reach durable display parts');
   console.log(JSON.stringify({ scenario: run.kind, state: final.state, error: final.error,
-    reply: learning.session(space.id, session).messages.find((message) => message.id === run.id)?.text }));
+    reasoningCharacters, reply: display.text }));
   assert.equal(final.state, 'succeeded');
 };
 try {

@@ -23,9 +23,9 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '2';
+export const compilerVersion = '3';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
-export const budget = { output: 4096, reasoning: 0, requests: 6, tools: 12, outputTotal: 12_288, milliseconds: 120_000 };
+export const budget = { output: 4096, reasoning: 'high' as const, requests: 6, tools: 12, outputTotal: 12_288, milliseconds: 300_000 };
 
 export function xmlText(text: string) {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udfff]/gu, '�')
@@ -80,7 +80,8 @@ export function retainedMessage(message: Message): Message {
       isError: copy.isError, content: [{ type: 'text', text: `[tool body omitted by retention policy; hash=${hash(copy.content)}; bytes=${Buffer.byteLength(JSON.stringify(copy.content), 'utf8')}]` }] };
   }
   if (copy.role === 'assistant') {
-    copy.content = copy.content.filter((part) => part.type !== 'thinking');
+    // Native thinking (including opaque signatures/redaction markers) is needed
+    // for provider continuation. It is not the browser display projection.
     delete copy.errorMessage; // Provider diagnostics can contain request data; show a product error instead.
   }
   return copy;

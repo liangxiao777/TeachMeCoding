@@ -11,7 +11,7 @@ export const teachingModel: Model<'openai-completions'> = {
   contextWindow: 1_048_576, maxTokens: 943_718,
   cost: { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0.3 },
   compat: { thinkingFormat: 'openrouter', maxTokensField: 'max_tokens' },
-  samplingParams: { reasoning: { enabled: false } },
+  samplingParams: { reasoning: { enabled: true, effort: budget.reasoning } },
 };
 export function providerStream(): StreamFn {
   const models = createModels();

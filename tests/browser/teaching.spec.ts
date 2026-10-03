@@ -227,12 +227,14 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   const title = page.getByText(`正在为「${goal}」规划学习路线`, { exact: true });
   await expect(title).toBeVisible();
-  await expect(page.getByRole('progressbar', { name: '生成进度' })).toHaveAttribute('aria-valuenow', '0');
+  await expect(page.getByRole('button', { name: '执行进度', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByText('模型规划学习路线', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('tool-call')).toHaveCount(0);
   await page.screenshot({ path: `.amp/in/artifacts/planning-initial-${info.project.name}.png`, animations: 'disabled' });
   await page.reload();
   await expect(title).toBeVisible();
   await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('progressbar', { name: '生成进度' })).toHaveAttribute('aria-valuenow', '75', { timeout: 10000 });
+  await expect(page.getByTestId('tool-call').getByText('已返回', { exact: true })).toBeVisible({ timeout: 10000 });
   await page.screenshot({ path: `.amp/in/artifacts/planning-progress-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
   await expect(title).toHaveCount(0);
@@ -315,6 +317,107 @@ test('planning response loss, provider failure and cancellation remain recoverab
   expect(completed.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(3);
   expect(completed.requirement.revision).toBe(failed.requirement.revision);
   expect(completed.route.revision).toBe(1);
+});
+
+test('AI Elements renders ordered reasoning, tools and Markdown after stream replay', async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await create(page, `推理验收 ${info.project.name}`);
+  const reasoning = page.getByTestId('reasoning');
+  await reasoning.first().getByRole('button').click();
+  await expect(reasoning.first()).toContainText('先核对已有基础。');
+  await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-stream-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '学习建议', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  await expect(reasoning).toHaveCount(2);
+  const sequence = await page.getByTestId('run-content').locator(':scope > *').evaluateAll((elements) => elements.map((el) => (el as HTMLElement).dataset.testid ?? 'text'));
+  expect(sequence).toEqual(['reasoning', 'text', 'tool-call', 'reasoning', 'text']);
+  await reasoning.first().getByRole('button').click();
+  await expect(reasoning.first()).toContainText('先核对已有基础。再区分目标与时间。最后整理需求。');
+  await reasoning.last().getByRole('button').click();
+  await expect(reasoning.last()).toContainText('工具已返回。核对学习时间与目标。');
+  await expect(page.getByRole('table')).toContainText('每周两次');
+  await expect(page.getByText('我会先整理目标。', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
+  await page.getByRole('button', { name: /整理学习需求.*已返回/ }).click();
+  await expect(page.getByText('submit_requirement_draft', { exact: true })).toBeVisible();
+  await expect(page.locator('button button')).toHaveCount(0);
+  const snapshots = await page.evaluate(async () => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token }, space = new URL(location.href).searchParams.get('space');
+    const work = await (await fetch(`/api/spaces/${space}`, { headers })).json();
+    const session = await (await fetch(`/api/spaces/${space}/sessions/${work.sessions[0].id}`, { headers })).text();
+    return session;
+  });
+  expect(snapshots).not.toContain('PRIVATE-SIGNATURE');
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-complete-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
+  await expect(page.getByLabel('编辑 agent_example.py', { exact: true })).toHaveValue('print("hello")');
+  await page.getByRole('button', { name: '保存文件', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
+  const code = await page.evaluate(async () => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const space = new URL(location.href).searchParams.get('space');
+    const response = await fetch(`/api/spaces/${space}/project/file?path=agent_example.py`, { headers: { 'X-TMC-Token': token } });
+    return response.json();
+  });
+  expect(code.content).toBe('print("hello")');
+  expect(errors).toEqual([]);
+});
+
+test('reasoning cancellation retains partial thought and new input; IME does not submit', async ({ page }, info) => {
+  await create(page, `推理验收 停止 ${info.project.name}`);
+  await page.getByTestId('reasoning').getByRole('button').click();
+  await expect(page.getByTestId('reasoning')).toContainText('先核对已有基础。');
+  const input = page.getByLabel('回复 Agent', { exact: true });
+  await input.fill('下一条未发送输入');
+  await input.press('Enter'); // The generating form has a stop button, not a submit button.
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await expect(page.getByText('已停止生成', { exact: false })).toBeVisible();
+  await expect(input).toHaveValue('下一条未发送输入');
+  await expect(page.getByRole('button', { name: '思考已中断', exact: true })).toBeVisible();
+  let sends = 0;
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/runs$/.test(new URL(request.url()).pathname)) sends++; });
+  await input.dispatchEvent('compositionstart');
+  await input.dispatchEvent('keydown', { key: 'Enter', isComposing: true, keyCode: 229 });
+  await input.dispatchEvent('compositionend');
+  await input.press('Shift+Enter');
+  await expect(input).toHaveValue('下一条未发送输入\n');
+  expect(sends).toBe(0);
+  await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-stopped-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(input).toHaveValue('');
+  await page.getByRole('button', { name: '思考已中断', exact: true }).click();
+  await expect(page.getByTestId('reasoning')).toContainText('先核对已有基础。');
+  await expect(page.getByTestId('tool-call')).toHaveCount(0);
+});
+
+test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dark Agent panel', async ({ page }, info) => {
+  await create(page, `深色辅导 ${info.project.name}`);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await page.getByLabel('向 Agent 提问', { exact: true }).fill('推理验收：继续练习');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '采纳结论', exact: true })).toBeVisible({ timeout: 10000 });
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  await expect(agent.getByTestId('reasoning')).toHaveCount(2);
+  await agent.getByTestId('reasoning').first().getByRole('button').click();
+  await expect(agent.getByTestId('reasoning').first()).toContainText('先核对已有基础。');
+  await expect(agent.getByRole('table')).toContainText('每周两次');
+  await expect(agent.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
+  const composer = await agent.getByLabel('向 Agent 提问', { exact: true }).boundingBox();
+  const panel = (await agent.boundingBox())!;
+  expect(panel.width).toBe(384);
+  expect(composer!.x).toBeGreaterThanOrEqual(panel.x);
+  expect(composer!.x + composer!.width).toBeLessThanOrEqual(panel.x + panel.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-dark-${info.project.name}.png`, animations: 'disabled' });
 });
 
 async function workspace(page: Page, name: string) {

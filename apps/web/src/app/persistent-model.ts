@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AgentRun, AssessmentDraft as SavedAssessmentDraft, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
+import type { AgentRun, AssessmentDraft as SavedAssessmentDraft, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
@@ -16,8 +17,8 @@ interface StoredSpace {
   files: Record<string, ProjectFile>
   disk: ProjectFile | null
   requirementDraft: Requirement | null
-  planningStep: number
   planningError: string | null
+  taskParts: Record<string, AgentDisplayPart[]>
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
@@ -39,10 +40,24 @@ function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
 
 async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   const metadata = saved.route.content?.stages.flatMap((stage) => stage.units) ?? []
-  const [sessions, units, tree] = await Promise.all([
+  const completedTasks = [...new Map(saved.tasks.map((task) => [`${task.unitId}:${task.kind}`, task])).values()]
+    .filter((task) => !['pending', 'running'].includes(task.state))
+  const [sessions, units, tree, taskEntries] = await Promise.all([
     Promise.all(saved.sessions.map((s) => api<SessionDetail>(`/spaces/${saved.id}/sessions/${s.id}`))),
     Promise.all(metadata.map((unit) => api<UnitDetail>(`/spaces/${saved.id}/units/${unit.id}`))),
     api<ProjectEntry[]>(`/spaces/${saved.id}/project/tree`),
+    Promise.all(completedTasks.map(async (task): Promise<[string, AgentDisplayPart[]]> => {
+      let cursor = 0, parts: AgentDisplayPart[] = []
+      while (true) {
+        const page = await api<RunEvents>(`/spaces/${saved.id}/runs/${task.id}/events?after=${cursor}`).catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) return null // Pre-Agent task records have no event stream.
+          throw error
+        })
+        if (!page?.events.length) break
+        for (const event of page.events) { parts = applyAgentEvent(parts, event); cursor = event.seq }
+      }
+      return [task.id, parts]
+    })),
   ])
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
@@ -62,7 +77,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
     selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
   }
-  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningStep: 0, planningError: null,
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries),
     ui: {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
@@ -208,7 +223,7 @@ export function usePersistentModel(): AppModel {
       }
       const drafts = { ...s.drafts }
       for (const [id, fresh] of Object.entries(loaded.drafts)) drafts[id] = { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }
-      return { ...s, saved: { ...loaded.saved, requirement, runs }, units, drafts,
+      return { ...s, saved: { ...loaded.saved, requirement, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
           ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
           currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
@@ -229,28 +244,28 @@ export function usePersistentModel(): AppModel {
     const controller = new AbortController()
     subscriptions.current.set(work.id, controller)
     let cursor = 0, text = '', terminal = false
+    let parts: AgentDisplayPart[] = []
     const receive = (event: RunEvent) => {
       if (event.runId !== work.id || event.seq <= cursor) return
       cursor = event.seq
+      parts = applyAgentEvent(parts, event)
       if (event.data.type === 'text') text += event.data.delta
       if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
       const state = event.data.type === 'state' ? event.data.state : 'running'
       if (work.sessionId) change(space, (s) => ({ ...s, saved: { ...s.saved, runs: s.saved.runs.map((r) => r.id === work.id ? { ...r, state } : r) },
         ...(work.id === latestPlan(s.saved)?.id ? {
           planningError: event.data.type === 'state' ? event.data.error : s.planningError,
-          planningStep: event.data.type === 'tool' && event.data.name === 'submit_route_proposal' && !event.data.failed
-            ? Math.max(s.planningStep, event.data.phase === 'end' ? 3 : 2) : s.planningStep,
         } : {}),
       }))
-      if (!work.sessionId && event.data.type === 'state') {
-        change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: s.saved.tasks.map((t) => t.id === work.id ? { ...t, state } : t) } }))
-        if (event.data.error) {
+      if (!work.sessionId) {
+        change(space, (s) => ({ ...s, taskParts: { ...s.taskParts, [work.id]: parts }, saved: { ...s.saved, tasks: s.saved.tasks.map((t) => t.id === work.id ? { ...t, state } : t) } }))
+        if (event.data.type === 'state' && event.data.error) {
           setError(event.data.error)
           retry.current = () => retryTask(space, work.id)
         }
       }
       changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
-        messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, sequence: event.seq,
+        messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, parts, sequence: event.seq,
           status: state === 'succeeded' ? 'done' : state === 'failed' ? 'error' : state === 'interrupted' ? 'stopped' : text ? 'streaming' : 'thinking' }),
       }) }))
     }
@@ -409,7 +424,7 @@ export function usePersistentModel(): AppModel {
     confirmRequirement: () => { if (!current?.requirement || !selected) return
       if (!capabilities.agent) { void saveRequirement(current.requirement, true); return }
       const space = current.id, input = { revision: selected.saved.requirement.revision, value: current.requirement, confirmed: true }
-      change(space, (s) => ({ ...s, planningStep: 0, planningError: null, ui: { ...s.ui, view: s.saved.route.content ? 'route' : 'planning', agentOpen: !!s.saved.route.content } }))
+      change(space, (s) => ({ ...s, planningError: null, ui: { ...s.ui, view: s.saved.route.content ? 'route' : 'planning', agentOpen: !!s.saved.route.content } }))
       let submission: RunSubmission | undefined
       void run(`plan:${space}`, async () => {
         submission ??= await api<RunSubmission>(`/spaces/${space}/plan`, input)
@@ -449,7 +464,7 @@ export function usePersistentModel(): AppModel {
     retryReply: (id) => { if (!current) return; const space = current.id
       void run(`retry:${id}`, async () => {
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
-        change(space, (s) => ({ ...s, planningStep: 0, planningError: null,
+        change(space, (s) => ({ ...s, planningError: null,
           saved: { ...s.saved, runs: [...s.saved.runs.filter((r) => r.id !== submission.run.id), submission.run] },
           sessions: { ...s.sessions, [submission.session.id]: submission.session }, ui: { ...s.ui,
           sessions: s.ui.sessions.map((x) => x.id === submission.session.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
@@ -520,9 +535,10 @@ export function usePersistentModel(): AppModel {
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
-      planning: { run: selected ? latestPlan(selected.saved) : undefined, step: selected?.planningStep ?? 0, error: selected?.planningError ?? null },
+      planning: { run: selected ? latestPlan(selected.saved) : undefined, error: selected?.planningError ?? null },
       conclusions: selected?.saved.conclusions ?? [],
       tasks: selected?.saved.tasks ?? [],
+      taskParts: selected?.taskParts ?? {},
       generateAssessment: () => { if (current && recordUnit) assessmentTask(current.id, recordUnit, 'assessment') },
       stopTask: (id) => { if (current) void run(`stop:${id}`, () => api(`/spaces/${current.id}/runs/${id}/stop`, {})) },
       retryTask: (id) => { if (current) retryTask(current.id, id) },

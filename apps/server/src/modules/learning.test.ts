@@ -70,3 +70,25 @@ test('idempotency, stale revisions and transaction failures do not duplicate or 
     assert.equal(l.session(space.id, s.id).messages.length, 1);
   } finally { db.close(); }
 });
+
+test('legacy flat history and legacy text events hydrate without doubling the saved text, including long event histories', () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db);
+  try {
+    const space = learning.create({ name: 'Legacy', goal: 'Legacy history' }), session = space.sessions[0]!.id;
+    const flat = randomUUID(), run = randomUUID();
+    db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','Imported text',NULL,0)").run(space.id, session, flat);
+    db.prepare("INSERT INTO runs VALUES (?,?,NULL,?,'intake','succeeded')").run(space.id, run, session);
+    db.prepare("INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,'{}',0)").run(space.id, run);
+    db.prepare("INSERT INTO messages VALUES (?,?,?,'agent',?,NULL,0)").run(space.id, session, run, 'x'.repeat(600));
+    const append = db.prepare('INSERT INTO agent_events VALUES (?,?,?,?)');
+    db.transaction(() => {
+      for (let seq = 1; seq <= 600; seq++) append.run(space.id, run, seq, JSON.stringify({ type: 'text', delta: 'x' }));
+      append.run(space.id, run, 601, JSON.stringify({ type: 'state', state: 'succeeded', error: null }));
+    })();
+    const [imported, streamed] = learning.session(space.id, session).messages;
+    assert.equal(imported?.text, 'Imported text'); assert.equal(imported?.parts, undefined);
+    assert.equal(streamed?.text, 'x'.repeat(600)); assert.equal(streamed?.sequence, 601);
+    assert.deepEqual(streamed?.parts, [{ type: 'text', id: `${run}:legacy-text:1`, text: 'x'.repeat(600) }]);
+    assert.deepEqual(new Learning(db).session(space.id, session).messages, [imported, streamed]);
+  } finally { db.close(); }
+});
