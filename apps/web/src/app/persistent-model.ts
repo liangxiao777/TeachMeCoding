@@ -21,14 +21,13 @@ interface StoredSpace {
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
-const composer = (s: Session) => ({ text: s.composerText, quote: s.composerQuote, routeSuggestion: s.routeSuggestion })
-const savedComposer = (s: SessionDetail) => ({ text: s.draft.text, quote: s.draft.quote, routeSuggestion: s.draft.routeSuggestion })
 const answers = (d: { q1: string; q2: string }) => ({ q1: d.q1, q2: d.q2 })
 type SessionEdit = Partial<Pick<Session, 'composerText' | 'composerQuote' | 'routeSuggestion'>>
 const sessionKey = (space: Space) => sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
 const uiSession = (s: SessionDetail): Session => ({ ...s, updatedAt: s.messages.at(-1)?.createdAt ?? 0,
   messages: s.messages.map((m) => ({ ...m, quote: m.quote ?? undefined })),
-  composerText: s.draft.text, composerQuote: s.draft.quote, routeSuggestion: s.draft.routeSuggestion })
+  // Unsent input belongs to this page, not to persisted session history.
+  composerText: '', composerQuote: null, routeSuggestion: '' })
 
 function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
   const entries = tree.map((e) => ({ id: e.path, name: e.path.split('/').at(-1)!, parentId: e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : null, kind: e.kind }))
@@ -161,8 +160,7 @@ export function usePersistentModel(): AppModel {
     history.replaceState(null, '', params.size ? `/?${params}` : '/')
   }, [ready, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
 
-  const dirty = pendingEdits.current.size > 0 || Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || !!s.requirementDraft && !same(s.requirementDraft, s.saved.requirement.value)
-    || s.ui.sessions.some((session) => !same(composer(session), savedComposer(s.sessions[session.id]!)))
+  const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || !!s.requirementDraft && !same(s.requirementDraft, s.saved.requirement.value)
     || Object.values(s.drafts).some((draft) => !same(answers(draft), answers(s.units[draft.unitId]!.draft)))
     || s.ui.files.some((file) => !!s.files[file.id] && file.content !== s.files[file.id]!.content))
   useUnsavedWarning(dirty)
@@ -281,15 +279,15 @@ export function usePersistentModel(): AppModel {
       } finally { subscriptions.current.delete(work.id) }
     })()
   }
-  const saveSession = (send: boolean, text?: string): Promise<boolean> => {
+  const sendMessage = (text?: string): Promise<boolean> => {
     if (!current || !session) return Promise.resolve(false)
-    const space = current.id, id = session.id, snapshot = composer(session)
+    const space = current.id, id = session.id, snapshot = { text: session.composerText, quote: session.composerQuote }
     const stored = cache.current[space]!.sessions[id]!
-    const input = send ? { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision } : { ...snapshot, revision: stored.draft.revision }
-    if (send && !input.text.trim() && !input.quote) return Promise.resolve(false)
+    const input = { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision }
+    if (!input.text.trim() && !input.quote) return Promise.resolve(false)
     return run(`session:${id}`, async () => {
-      const submission = send && capabilities.agent ? await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input) : undefined
-      const saved = submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/${send ? 'messages' : 'draft'}`, input)
+      const submission = capabilities.agent ? await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input) : undefined
+      const saved = submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
       change(space, (s) => ({ ...s, sessions: { ...s.sessions, [id]: saved }, ui: { ...s.ui,
         sessions: s.ui.sessions.map((x) => {
           if (x.id !== id) return x
@@ -298,7 +296,7 @@ export function usePersistentModel(): AppModel {
           return { ...next,
             composerText: text !== undefined || x.composerText !== snapshot.text ? x.composerText : next.composerText,
             composerQuote: text !== undefined || !same(x.composerQuote, snapshot.quote) ? x.composerQuote : next.composerQuote,
-            routeSuggestion: x.routeSuggestion === snapshot.routeSuggestion && !send ? next.routeSuggestion : x.routeSuggestion,
+            routeSuggestion: x.routeSuggestion,
           }
         }),
       } }))
@@ -405,7 +403,7 @@ export function usePersistentModel(): AppModel {
       // if it finished before the response arrived so its business result refreshes.
       for (const work of saved.runs) watchRun(saved.id, work)
     }) },
-    onboardSend: (text) => { void saveSession(true, text) },
+    onboardSend: (text) => { void sendMessage(text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
     confirmRequirement: () => { if (!current?.requirement || !selected) return
@@ -442,7 +440,7 @@ export function usePersistentModel(): AppModel {
     },
     sendMessage: (text) => {
       if (current && text !== undefined && sessionScope(current) === 'route') changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
-      return saveSession(true, text)
+      return sendMessage(text)
     },
     stopReply: () => { if (!current) return
       const running = current.view === 'planning' ? latestPlan(selected!.saved) : session?.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
@@ -540,10 +538,8 @@ export function usePersistentModel(): AppModel {
       saveName: () => { if (!current || !selected || current.name === selected.saved.name) return; const id = current.id, name = current.name, previousName = selected.saved.name
         void run(`name:${id}`, async () => { const saved = await api<SpaceSummary>(`/spaces/${id}/name`, { name, previousName }); change(id, (s) => ({ ...s, saved: { ...s.saved, name: saved.name }, ui: { ...s.ui, name: s.ui.name === name ? saved.name : s.ui.name } })) })
       },
-      sessionDirty: !!session && !same(composer(session), savedComposer(selected!.sessions[session.id]!)),
       assessmentDirty: !!current?.draft && !same(answers(current.draft), answers(selected!.units[current.draft.unitId]!.draft)),
       fileDirty: !!activeFile && !!selected?.files[activeFile.id] && activeFile.content !== selected.files[activeFile.id]!.content,
-      saveSession: () => { void saveSession(false) },
       saveAssessment: () => { if (!current?.draft || !selected) return; const id = current.id, draft = current.draft, revision = selected.units[draft.unitId]!.draft.revision
         void run(`assessment:${id}:${draft.unitId}`, async () => {
           const saved = await api<SavedAssessmentDraft>(`/spaces/${id}/units/${draft.unitId}/draft`, { revision, ...answers(draft) })

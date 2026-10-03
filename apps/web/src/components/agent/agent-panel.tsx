@@ -206,21 +206,6 @@ export function SessionMenu() {
   )
 }
 
-export function SessionSaveControls({ disabled = false }: { disabled?: boolean }) {
-  const { persistence } = useApp()
-  if (!persistence) return null
-  return (
-    <>
-      <span aria-label="会话草稿状态" className="text-xs text-muted-foreground">
-        {persistence.sessionDirty ? '会话草稿未保存' : '会话草稿已保存'}
-      </span>
-      <InputGroupButton type="button" size="sm" variant="outline" disabled={disabled || persistence.busy || !persistence.ready || !persistence.sessionDirty} onClick={persistence.saveSession}>
-        保存会话
-      </InputGroupButton>
-    </>
-  )
-}
-
 function Composer() {
   const { session, setComposerText, setQuote, sendMessage, stopReply, capabilities, persistence } = useApp()
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -291,7 +276,6 @@ function Composer() {
             className="min-h-16 leading-relaxed"
           />
           <InputGroupAddon align="block-end">
-            <SessionSaveControls disabled={sending} />
             {replying ? (
               <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
                 <Square data-icon="inline-start" />
@@ -336,7 +320,7 @@ function EmptyChat() {
         <EmptyTitle>有什么想问的？</EmptyTitle>
         <EmptyDescription className="text-left">
           {!capabilities.agent
-            ? 'Agent 暂不可用。你可以记录问题并手动保存会话，不会生成回复或调整路线。'
+            ? 'Agent 暂不可用。你仍可提交问题，但不会生成回复或调整路线。'
             : space.view === 'route'
             ? '告诉我你想怎样调整学习安排，我会结合你的目标和基础给出建议，确认后再更新路线。'
             : '围绕这节课继续讨论。在课件、代码或终端里选中内容，也可以直接引用过来提问。'}

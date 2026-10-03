@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ArrowUp, Check, ClipboardList, Pencil, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { AgentMessage, SessionMenu, SessionSaveControls } from '@/components/agent/agent-panel'
+import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { BrandMark, Generating, isComposing } from '@/components/shared'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -301,7 +301,6 @@ function Chat() {
               <span className="text-xs text-muted-foreground">
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
-              <SessionSaveControls disabled={sending} />
               {persistence && replying ? (
                 <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
                   <Square data-icon="inline-start" />停止

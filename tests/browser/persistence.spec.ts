@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
-import type { UnitDetail, Workspace } from '../../packages/contracts/src/workspace';
+import type { SessionDetail, UnitDetail, Workspace } from '../../packages/contracts/src/workspace';
 import type { seedWorkspaces } from '../seed-workspaces';
 
 test.use({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light' });
@@ -12,12 +13,9 @@ const spaceCard = (page: Page, name: string) => page.locator('[data-slot="card"]
 const composer = (page: Page) => page.getByRole('complementary', { name: 'Agent', exact: true }).locator('form');
 const sessionMenu = (page: Page) => page.getByRole('button', { name: '切换会话', exact: true });
 
-async function saveSession(page: Page) {
-  const save = page.getByRole('button', { name: '保存会话', exact: true }).filter({ visible: true });
-  await expect(save).toBeEnabled();
-  await save.click();
-  await expect(page.getByText('会话草稿已保存', { exact: true }).filter({ visible: true })).toBeVisible();
-  await expect(save).toBeDisabled();
+async function expectTemporaryComposer(page: Page) {
+  await expect(page.getByRole('button', { name: '保存会话', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('会话草稿状态', { exact: true })).toHaveCount(0);
 }
 
 async function enterUnit(page: Page, title: string) {
@@ -38,7 +36,7 @@ async function saveAssessment(page: Page) {
   await expect(save).toBeDisabled();
 }
 
-test('new spaces, requirements, session drafts and message retries persist without fixture fallback', async ({ page }, info) => {
+test('spaces and sent messages persist while unsent input is temporary and retries preserve newer edits', async ({ page }, info) => {
   await page.goto('/');
   const goal = `学习持久化 ${info.project.name}`;
   await visible(page, '你想学什么').fill(goal);
@@ -78,7 +76,7 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await page.getByRole('button', { name: '确认学习需求', exact: true }).click();
   await expect(page.getByRole('button', { name: '已确认学习需求', exact: true })).toBeDisabled();
   await visible(page, '回复 Agent').fill('独立保存的需求问题');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await shot(page, info, 'requirements');
   await page.reload();
   await expect(visible(page, '学习空间名称')).toHaveValue(name);
@@ -86,7 +84,8 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await expect(visible(page, '已有基础')).toHaveValue('Python 基础，尚未学习 Rust');
   await page.getByRole('button', { name: '取消', exact: true }).click();
-  await expect(visible(page, '回复 Agent')).toHaveValue('独立保存的需求问题');
+  await expect(visible(page, '回复 Agent')).toHaveValue('');
+  await visible(page, '回复 Agent').fill('独立保存的需求问题');
   let messageDropped = false;
   await page.route('**/sessions/*/messages', async (route) => {
     if (!messageDropped) { messageDropped = true; await route.fetch(); await route.abort(); } else await route.continue();
@@ -98,7 +97,7 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByText('独立保存的需求问题', { exact: true })).toHaveCount(1);
   await expect(visible(page, '回复 Agent')).toHaveValue('重试期间的新草稿');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await page.getByRole('button', { name: '查看学习路线', exact: true }).click();
   await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible();
   await expect(page.getByText('尚无学习路线', { exact: true })).toBeVisible();
@@ -111,7 +110,7 @@ test('new spaces, requirements, session drafts and message retries persist witho
   await expect(visible(page, '回复 Agent')).toHaveValue('');
   await page.goto(url);
   await expect(page.getByText('独立保存的需求问题', { exact: true })).toHaveCount(1);
-  await expect(visible(page, '回复 Agent')).toHaveValue('重试期间的新草稿');
+  await expect(visible(page, '回复 Agent')).toHaveValue('');
   await expect(page.getByTestId('fixture-notice')).toHaveCount(0);
 });
 
@@ -152,10 +151,10 @@ test('a delayed requirement response preserves sessions created while saving', a
     await expect(page.getByRole('button', { name: '已确认学习需求', exact: true })).toBeDisabled();
     await expect(sessionMenu(page)).toHaveText('新会话');
     await expect(visible(page, '回复 Agent')).toHaveValue('响应返回前新会话的草稿');
-    await saveSession(page);
+    await expectTemporaryComposer(page);
     await page.reload();
     await expect(sessionMenu(page)).toHaveText('新会话');
-    await expect(visible(page, '回复 Agent')).toHaveValue('响应返回前新会话的草稿');
+    await expect(visible(page, '回复 Agent')).toHaveValue('');
     await sessionMenu(page).click();
     await expect(page.getByRole('menuitem')).toHaveCount(3);
     await shot(page, info, 'session-menu');
@@ -179,7 +178,7 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await expect(composer(page)).toContainText('所有权与借用 · 课件');
   await expect(composer(page)).toContainText('这是 所有权与借用 的验收课件。');
   await visible(page, '向 Agent 提问').fill('借用的问题');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await page.getByRole('button', { name: /^(开始单元测评|继续测评)$/ }).click();
   await visible(page, '你的回答').fill('单元一解释');
   await visible(page, '编辑 代码答案').fill('// 单元一代码');
@@ -191,6 +190,12 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await enterUnit(page, '错误处理');
   await expect(visible(page, '向 Agent 提问')).toHaveValue('');
   await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
+  await goRoute(page);
+  await enterUnit(page, '所有权与借用');
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('借用的问题');
+  await expect(composer(page)).toContainText('所有权与借用 · 课件');
+  await goRoute(page);
+  await enterUnit(page, '错误处理');
   await page.getByRole('button', { name: /^(开始单元测评|继续测评)$/ }).click();
   await expect(visible(page, '你的回答')).toHaveValue('');
   await visible(page, '你的回答').fill('单元二解释');
@@ -202,8 +207,9 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await page.getByRole('button', { name: '返回单元（答案会保留）', exact: true }).click();
   await goRoute(page);
   await enterUnit(page, '所有权与借用');
-  await expect(visible(page, '向 Agent 提问')).toHaveValue('借用的问题');
-  await expect(composer(page)).toContainText('所有权与借用 · 课件');
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+  await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
+  await visible(page, '向 Agent 提问').fill('借用的问题');
   await page.getByRole('button', { name: /^(开始单元测评|继续测评)$/ }).click();
   await expect(visible(page, '你的回答')).toHaveValue('单元一解释');
   await expect(visible(page, '编辑 代码答案')).toHaveValue('// 单元一代码');
@@ -220,31 +226,38 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await page.getByRole('main').locator('li').filter({ hasText: '补充借用示例' }).getByRole('button', { name: '就此提问', exact: true }).click();
   await expect(composer(page)).toContainText('所有权与借用 · 测评');
   await expect(composer(page)).toContainText('补充借用示例');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await shot(page, info, 'record');
   await sessionMenu(page).click();
   await page.getByRole('menuitem', { name: '新建会话', exact: true }).click();
   await expect(visible(page, '向 Agent 提问')).toHaveValue('');
   await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
   await visible(page, '向 Agent 提问').fill('第二个会话的草稿');
-  await saveSession(page);
-  await page.reload();
-  await expect(page.getByText('验收记录：需要更多证据', { exact: true })).toBeVisible();
-  await expect(visible(page, '向 Agent 提问')).toHaveValue('第二个会话的草稿');
+  await expectTemporaryComposer(page);
   await sessionMenu(page).click();
   await page.getByRole('menuitem', { name: /^所有权与借用/ }).click();
   await expect(visible(page, '向 Agent 提问')).toHaveValue('借用的问题');
   await expect(composer(page)).toContainText('补充借用示例');
+  await sessionMenu(page).click();
+  await page.getByRole('menuitem', { name: /^新会话/ }).click();
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('第二个会话的草稿');
+  await page.reload();
+  await expect(page.getByText('验收记录：需要更多证据', { exact: true })).toBeVisible();
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+  await sessionMenu(page).click();
+  await page.getByRole('menuitem', { name: /^所有权与借用/ }).click();
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+  await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
   await goRoute(page);
   await expect(visible(page, '向 Agent 提问')).toHaveValue('');
   await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
   await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
   await expect(visible(page, '路线调整想法')).toHaveValue('');
   await visible(page, '路线调整想法').fill('路线会话的独立草稿');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await page.reload();
   await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
-  await expect(visible(page, '路线调整想法')).toHaveValue('路线会话的独立草稿');
+  await expect(visible(page, '路线调整想法')).toHaveValue('');
   await expect(page.getByText('验收数据：两个独立单元。', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
   await expect(page.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
@@ -299,13 +312,13 @@ test('disk editing preserves local changes on failure, compares external content
   await tree.getByRole('treeitem', { name: 'renamed.rs', exact: true }).click();
   await expect(visible(page, '编辑 renamed.rs')).toHaveValue('local editing survives');
   await page.getByRole('button', { name: '询问这个文件', exact: true }).click();
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await expect(composer(page)).toContainText('src/renamed.rs');
   await expect(composer(page)).toContainText('local editing survives');
   await shot(page, info, 'ide');
   await page.reload();
-  await expect(composer(page)).toContainText('src/renamed.rs');
-  await expect(composer(page)).toContainText('local editing survives');
+  await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
 });
 
 test('unavailable business API displays a retryable failure, never demo spaces', async ({ page }, info) => {
@@ -352,7 +365,7 @@ test('original lesson quotation and bring-to-IDE actions retain real data throug
   await expect(page.getByRole('alert').filter({ has: page.getByRole('button', { name: '重试', exact: true }) })).toBeVisible();
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(composer(page)).toContainText('保留第一条课件引用。');
-  await saveSession(page);
+  await expectTemporaryComposer(page);
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   const code = 'fn main() { println!("example"); }';
   await expect(visible(page, '编辑 example.rs')).toHaveValue(code);
@@ -391,4 +404,43 @@ test('a late requirement save does not close or discard a newer edit', async ({ 
     await page.reload();
     await expect(page.locator('dd').filter({ hasText: /^响应返回前的新内容$/ })).toBeVisible();
   } finally { release(); }
+});
+
+test('composer edits never save drafts or restore legacy draft bodies; sending still uses the saved revision', async ({ page, request }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const { token } = await (await request.get('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+  const headers = { 'X-TMC-Token': token };
+  const created = await request.post('/api/spaces', { headers: { ...headers, 'Idempotency-Key': randomUUID() }, data: { name: '临时输入检查', goal: '验证临时输入与已发送消息的区别' } });
+  expect(created.ok()).toBe(true);
+  const space = await created.json() as Workspace;
+  const session = space.sessions.find((s) => s.scope === 'route')!;
+  const path = `/api/spaces/${space.id}/sessions/${session.id}`;
+  const legacy = { text: '旧版保存的输入', quote: { source: 'code', label: '旧版引用', text: 'legacy source' }, routeSuggestion: '旧版路线草稿' };
+  const stored = await request.post(`${path}/draft`, { headers: { ...headers, 'Idempotency-Key': randomUUID() }, data: { ...legacy, revision: 0 } });
+  expect(stored.ok()).toBe(true);
+  const draftWrites: string[] = [];
+  page.on('request', (req) => { if (req.method() === 'POST' && /\/sessions\/[^/]+\/draft$/.test(req.url())) draftWrites.push(req.url()); });
+  await page.goto(`/?space=${space.id}&tab=route`);
+  await expectTemporaryComposer(page);
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+  await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
+  await visible(page, '向 Agent 提问').fill('尚未发送的另一个问题');
+  expect(await page.evaluate(() => window.dispatchEvent(new Event('beforeunload', { cancelable: true })))).toBe(true);
+  await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
+  await expect(visible(page, '路线调整想法')).toHaveValue('');
+  await visible(page, '路线调整想法').fill('我想先做项目');
+  const unchanged = await (await request.get(path, { headers })).json() as SessionDetail;
+  expect(unchanged.draft).toEqual({ ...legacy, revision: 1 });
+  await shot(page, info, 'temporary-route-input');
+  await page.getByRole('button', { name: '保存路线调整想法', exact: true }).click();
+  await expect(page.getByText('我想先做项目', { exact: true })).toHaveCount(1);
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('尚未发送的另一个问题');
+  await page.reload();
+  await expect(page.getByText('我想先做项目', { exact: true })).toHaveCount(1);
+  await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+  await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
+  await expect(visible(page, '路线调整想法')).toHaveValue('');
+  expect(draftWrites).toEqual([]);
+  const saved = await (await request.get(path, { headers })).json() as SessionDetail;
+  expect(saved.messages.map((m) => ({ text: m.text, quote: m.quote }))).toEqual([{ text: '我想先做项目', quote: null }]);
 });

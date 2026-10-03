@@ -3,7 +3,6 @@
 import { ArrowRight, ArrowUp, Lightbulb, Route, Sparkles, Trophy } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
-import { SessionSaveControls } from '@/components/agent/agent-panel'
 import { StatusIcon, StatusPill, isComposing } from '@/components/shared'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -280,7 +279,6 @@ export function RouteView() {
                     />
                     <InputGroupAddon align="block-end">
                       <span className="text-xs font-normal">{busy ? persistence ? '正在读取或保存…' : 'Agent 正在回复…' : capabilities.agent ? 'Enter 发送 · Shift + Enter 换行' : 'Enter 保存想法 · Shift + Enter 换行'}</span>
-                      <SessionSaveControls disabled={sending} />
                       <InputGroupButton type="submit" variant="default" size="icon-sm" className="ml-auto rounded-full" disabled={busy || !suggestion.trim()} aria-label={capabilities.agent ? '发送路线调整想法' : '保存路线调整想法'}>
                         <ArrowUp />
                       </InputGroupButton>

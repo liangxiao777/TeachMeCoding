@@ -69,10 +69,8 @@ export interface AppModel {
     requirementDraft: Requirement | null
     setRequirementDraft: (value: Requirement | null) => void
     saveName: Action
-    sessionDirty: boolean
     assessmentDirty: boolean
     fileDirty: boolean
-    saveSession: Action
     saveAssessment: Action
     saveFile: Action
     compareFile: Action

@@ -133,6 +133,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await expect(code).toHaveValue('// unsaved local edit');
   await expect(draft).toHaveValue('保留本单元草稿');
   await expect(ide.getByRole('status').filter({ hasText: /^未保存$/ })).toBeVisible();
-  await expect(page.getByText('会话草稿未保存', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('会话草稿状态', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存会话', exact: true })).toHaveCount(0);
   await expect.poll(async () => (await box(ide)).height).toBeCloseTo(normalHeight, 0);
 });

@@ -63,7 +63,7 @@ export function AppShell() {
           )}
           <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
             {persistence ? (
-              <span data-testid="workspace-notice">真实工作区 · 手动保存 · {capabilities.agent ? '教学 Agent 已接入 · 终端暂不可用' : 'Agent 与终端暂不可用'}</span>
+              <span data-testid="workspace-notice">真实工作区 · {capabilities.agent ? '教学 Agent 已接入 · 终端暂不可用' : 'Agent 与终端暂不可用'}</span>
             ) : (
               <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
             )}
