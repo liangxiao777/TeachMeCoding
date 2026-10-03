@@ -24,6 +24,7 @@ export interface Quote {
   source: QuoteSource
   text: string
   label: string
+  provenance?: import('@teach-me-coding/contracts').Quote['provenance']
 }
 
 export type RouteActionKind = 'skip-basics' | 'project-first'

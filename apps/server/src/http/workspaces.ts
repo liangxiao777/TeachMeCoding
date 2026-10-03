@@ -20,6 +20,8 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   api.get('/spaces/:space/records/:record', (c) => c.json(learning.record(c.req.param('space'), c.req.param('record'))));
   api.get('/capabilities', (c) => c.json({ agent: agents?.available ?? false, terminal: false, assessment: false }));
   if (agents) {
+    api.post('/spaces/:space/units/:unit/tasks', async (c) => c.json(agents.generate(
+      c.req.param('space'), c.req.param('unit'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/sessions/:session/runs', async (c) => c.json(agents.submit(
       c.req.param('space'), c.req.param('session'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.get('/spaces/:space/runs/:run', (c) => c.json(agents.get(c.req.param('space'), c.req.param('run'))));
@@ -70,6 +72,10 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   });
   api.post('/spaces/:space/proposals/:proposal/apply', (c) => c.json(learning.once(
     c.req.header('Idempotency-Key') ?? '', c.req.path, null, () => learning.applyProposal(c.req.param('space'), c.req.param('proposal')))));
+  api.post('/spaces/:space/conclusions/:conclusion', async (c) => {
+    const input: unknown = await c.req.json();
+    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.decideConclusion(c.req.param('space'), c.req.param('conclusion'), input)));
+  });
   if (projects) {
     api.use('/spaces/:space/project/*', async (c, next) => { learning.space(c.req.param('space')); await next(); });
     api.get('/spaces/:space/project/tree', (c) => c.json(projects.tree(c.req.param('space'))));

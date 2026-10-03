@@ -41,6 +41,18 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-route-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await expect(page.getByText('本示例尚未在本机执行。', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByPlaceholder('说说你的想法…', { exact: true }).fill('参数读取和验证有什么区别？');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.getByRole('button', { name: '采纳结论', exact: true }).click();
+  await expect(page.getByText('学习结论 · 已采纳', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-tutor-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '撤销采纳', exact: true }).click();
+  await expect(page.getByText('学习结论 · 待采纳', { exact: true })).toBeVisible();
 });
 
 test('stream survives page reload and session switching; stop and model failure remain visible', async ({ page }, info) => {

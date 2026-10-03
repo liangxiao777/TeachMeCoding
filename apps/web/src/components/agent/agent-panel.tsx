@@ -132,6 +132,15 @@ export function AgentMessage({ msg }: { msg: Message }) {
           </AlertAction>
         </Alert>
       )}
+      {persistence?.conclusions.filter((c) => c.runId === msg.id).map((c) => (
+        <Card key={c.id} size="sm" className="ring-primary/30">
+          <CardHeader><CardTitle className="text-sm">学习结论 · {c.valid ? c.adopted ? '已采纳' : '待采纳' : '来源已变化'}</CardTitle>
+            <CardDescription>{c.text}</CardDescription></CardHeader>
+          <CardFooter><Button size="xs" variant="outline" disabled={persistence.busy || !c.valid && !c.adopted} onClick={() => persistence.decideConclusion(c.id, !c.adopted)}>
+            {c.adopted ? '撤销采纳' : '采纳结论'}
+          </Button></CardFooter>
+        </Card>
+      ))}
       {!persistence && msg.action && msg.status === 'done' && (
         <Card size="sm" className="ring-primary/30">
           <CardHeader>

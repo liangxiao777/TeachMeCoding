@@ -8,9 +8,20 @@ export const agentTransport: StreamFn = (_model, context, options) => {
   const last = context.messages.at(-1);
   const user = [...context.messages].reverse().find((m) => m.role === 'user');
   const text = JSON.stringify(user?.content);
+  const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
   if (last?.role !== 'toolResult') {
     if (text.includes('失败')) return response(reply([], 'error'));
-    if (context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === 'submit_route_proposal'))) return response(reply([{ type: 'toolCall', id: 'route-call', name: 'submit_route_proposal', arguments: {
+    if (has('submit_lesson')) return response(reply([{ type: 'toolCall', id: 'lesson-call', name: 'submit_lesson', arguments: {
+      title: '参数与输入', intro: '从一个小工具开始理解命令行参数。', blocks: [
+        { type: 'h2', id: 'arguments', text: '参数从哪里来' }, { type: 'p', text: '命令行参数是启动程序时由调用者提供的字符串。' },
+        { type: 'code', file: 'args.py', language: 'python', code: 'import sys\nprint(sys.argv[1:])', caption: '本示例尚未在本机执行。' },
+        { type: 'practice', items: ['比较传入零个参数与两个参数时的差异。'] },
+      ],
+    } }], 'toolUse'));
+    if (has('submit_learning_conclusion')) return response(reply([{ type: 'toolCall', id: 'conclusion-call', name: 'submit_learning_conclusion', arguments: {
+      text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
+    } }], 'toolUse'));
+    if (has('submit_route_proposal')) return response(reply([{ type: 'toolCall', id: 'route-call', name: 'submit_route_proposal', arguments: {
       note: '从 Python 经验过渡到命令行工具', stages: [{ id: randomUUID(), title: '工具基础', units: [
         { id: randomUUID(), title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
         { id: randomUUID(), title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
@@ -22,7 +33,8 @@ export const agentTransport: StreamFn = (_model, context, options) => {
   }
   const stream = createAssistantMessageEventStream();
   const slow = text.includes('慢速');
-  const chunks = slow ? ['正在逐步整理。', '先明确目标。', '再核对基础。', '最后确认时间。'] : ['我已整理你的基础。', '需求草稿已更新，请检查右侧摘要。'];
+  const chunks = slow ? ['正在逐步整理。', '先明确目标。', '再核对基础。', '最后确认时间。'] : has('submit_route_proposal') ? ['路线提案已整理，', '请确认后再开始学习。']
+    : has('submit_lesson') ? ['课件已整理。'] : has('submit_learning_conclusion') ? ['参数来自调用者。', '可采纳下方结论，或继续讨论边界情况。'] : ['我已整理你的基础。', '需求草稿已更新，请检查右侧摘要。'];
   void (async () => {
     let accumulated = '';
     stream.push({ type: 'start', partial: reply([], 'pending') });

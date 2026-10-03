@@ -26,6 +26,12 @@ export function openDataDirectory(directory: string) {
     const db = openDatabase(join(root, 'app.db'));
     try {
       db.transaction(() => {
+        db.prepare(`INSERT INTO task_events(space_id,run_id,seq,value)
+          SELECT a.space_id,a.id,COALESCE((SELECT MAX(seq) FROM task_events e WHERE e.space_id=a.space_id AND e.run_id=a.id),0)+1,
+            '{"type":"state","state":"interrupted","error":"服务重启，任务已中断；未自动重放。"}'
+          FROM task_runs a JOIN tasks t ON t.space_id=a.space_id AND t.id=a.id WHERE t.state IN ('pending','running')`).run();
+        db.prepare(`UPDATE task_runs SET error='服务重启，任务已中断；未自动重放。'
+          WHERE (space_id,id) IN (SELECT space_id,id FROM tasks WHERE state IN ('pending','running'))`).run();
         db.prepare(`INSERT INTO agent_events(space_id,run_id,seq,value)
           SELECT a.space_id,a.id,COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=a.space_id AND e.run_id=a.id),0)+1,
             '{"type":"state","state":"interrupted","error":"服务重启，运行已中断；未自动重放。"}'

@@ -3,12 +3,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { generationInputSchema, idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
 import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
 import { failureStream, providerStream, teachingModel } from './model.js';
 import { createScenario } from './scenarios.js';
+import { createTask } from './tasks.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -16,6 +17,7 @@ interface RuntimeOptions {
   scenario?: (input: FrozenContext) => ScenarioRun;
   milliseconds?: number;
   debugDirectory?: string;
+  projectDirectory?: (space: string) => string;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
@@ -27,10 +29,16 @@ export class TeachingRuntime {
   }
   get available() { return this.config !== null && this.config.model === teachingModel.id; }
 
+  private tables(space: string, id: string) {
+    return this.learning.db.prepare('SELECT 1 FROM task_runs WHERE space_id=? AND id=?').get(space, id)
+      ? { work: 'tasks', run: 'task_runs', events: 'task_events', messages: 'task_messages', manifests: 'task_manifests' }
+      : { work: 'runs', run: 'agent_runs', events: 'agent_events', messages: 'agent_messages', manifests: 'context_manifests' };
+  }
   get(space: string, id: string): AgentRun {
     idSchema.parse(space); idSchema.parse(id);
+    const tables = this.tables(space, id);
     const row = this.learning.db.prepare(`SELECT r.id,r.unit_id AS unitId,r.session_id AS sessionId,r.kind,r.state,
-      a.error,a.cancelled,a.created_at AS createdAt FROM runs r JOIN agent_runs a ON a.space_id=r.space_id AND a.id=r.id
+      a.error,a.cancelled,a.created_at AS createdAt FROM ${tables.work} r JOIN ${tables.run} a ON a.space_id=r.space_id AND a.id=r.id
       WHERE r.space_id=? AND r.id=?`).get(space, id) as (Omit<AgentRun, 'cancelled'> & { cancelled: number }) | undefined;
     if (!row) throw new BusinessError(404, '运行不存在。');
     return { ...row, cancelled: !!row.cancelled };
@@ -38,12 +46,13 @@ export class TeachingRuntime {
   events(space: string, id: string, after = 0): RunEvents {
     const run = this.get(space, id);
     if (!Number.isSafeInteger(after) || after < 0) throw new BusinessError(400, '事件游标无效。');
-    const rows = this.learning.db.prepare('SELECT seq,value FROM agent_events WHERE space_id=? AND run_id=? AND seq>? ORDER BY seq LIMIT 500')
+    const rows = this.learning.db.prepare(`SELECT seq,value FROM ${this.tables(space, id).events} WHERE space_id=? AND run_id=? AND seq>? ORDER BY seq LIMIT 500`)
       .all(space, id, after) as { seq: number; value: string }[];
     return { run, events: rows.map((r) => ({ runId: id, seq: r.seq, data: JSON.parse(r.value) as AgentEventData })) };
   }
   private emit(space: string, id: string, data: AgentEventData) {
-    this.learning.db.prepare(`INSERT INTO agent_events SELECT ?,?,COALESCE(MAX(seq),0)+1,? FROM agent_events WHERE space_id=? AND run_id=?`)
+    const table = this.tables(space, id).events;
+    this.learning.db.prepare(`INSERT INTO ${table} SELECT ?,?,COALESCE(MAX(seq),0)+1,? FROM ${table} WHERE space_id=? AND run_id=?`)
       .run(space, id, JSON.stringify(data), space, id);
   }
   private freeze(space: string, session: string, references: FrozenContext['references']): FrozenContext {
@@ -54,7 +63,27 @@ export class TeachingRuntime {
       requirement: w.requirement, route: s.scope === 'intake' ? null : w.route,
       unit: w.route.content?.stages.flatMap((stage) => stage.units).find((unit) => unit.id === s.unitId) ?? null,
       lesson: s.unitId ? this.learning.unit(space, s.unitId).lesson : null, references,
+      conclusions: s.scope === 'intake' ? [] : w.conclusions.filter((c) => c.adopted && c.valid),
     });
+  }
+  generate(space: string, unit: string, key: string, raw: unknown): AgentRun {
+    const input = generationInputSchema.parse(raw);
+    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    const id = this.learning.once(key, `task:${space}:${unit}`, input, () => {
+      const w = this.learning.space(space), u = this.learning.unit(space, unit);
+      if (!w.requirement.confirmed || (u.lesson?.revision ?? 0) !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
+      if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, unit, input.kind)) throw new BusinessError(409, '当前单元已有相同生成任务。');
+      const frozen: FrozenContext = { spaceId: space, sessionId: null, unitId: unit, scenario: input.kind,
+        requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
+        lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid) };
+      const id = randomUUID();
+      this.learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,?,'pending')").run(space, id, unit, input.kind);
+      this.learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
+      this.emit(space, id, { type: 'state', state: 'pending', error: null });
+      return id;
+    });
+    this.launch(space, id, '生成当前单元的结构化课件。');
+    return this.get(space, id);
   }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);
@@ -83,19 +112,22 @@ export class TeachingRuntime {
       this.emit(space, id, { type: 'state', state: 'pending', error: null });
       return id;
     });
+    this.launch(space, id, input.text);
+    return { run: this.get(space, id), session: this.learning.session(space, session) };
+  }
+  private launch(space: string, id: string, text: string) {
     if (this.get(space, id).state === 'pending' && !this.live.has(id)) {
       const entry: { space: string; agent?: Agent; done: Promise<void> } = { space, done: Promise.resolve() };
       this.live.set(id, entry);
-      entry.done = Promise.resolve().then(() => this.execute(space, id, input.text, entry)).finally(() => { this.live.delete(id); });
+      entry.done = Promise.resolve().then(() => this.execute(space, id, text, entry)).finally(() => { this.live.delete(id); });
     }
-    return { run: this.get(space, id), session: this.learning.session(space, session) };
   }
   stop(space: string, id: string) {
     const run = this.get(space, id);
     if (active(run)) {
       // Synchronous commit fence: a cancellation accepted before commit wins.
       this.learning.db.transaction(() => {
-        this.learning.db.prepare('UPDATE agent_runs SET cancelled=1 WHERE space_id=? AND id=?').run(space, id);
+        this.learning.db.prepare(`UPDATE ${this.tables(space, id).run} SET cancelled=1 WHERE space_id=? AND id=?`).run(space, id);
         this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
       })();
       this.live.get(id)?.agent?.abort();
@@ -112,9 +144,10 @@ export class TeachingRuntime {
     await Promise.all([...this.live.values()].map((entry) => entry.done));
   }
   private finish(space: string, id: string, state: AgentRun['state'], error: string | null) {
-    const changed = this.learning.db.prepare("UPDATE runs SET state=? WHERE space_id=? AND id=? AND state IN ('pending','running')").run(state, space, id);
+    const tables = this.tables(space, id);
+    const changed = this.learning.db.prepare(`UPDATE ${tables.work} SET state=? WHERE space_id=? AND id=? AND state IN ('pending','running')`).run(state, space, id);
     if (!changed.changes) return;
-    this.learning.db.prepare('UPDATE agent_runs SET error=? WHERE space_id=? AND id=?').run(error, space, id);
+    this.learning.db.prepare(`UPDATE ${tables.run} SET error=? WHERE space_id=? AND id=?`).run(error, space, id);
     this.emit(space, id, { type: 'state', state, error });
   }
   private history(space: string, session: string, id: string): HistoryGroup[] {
@@ -126,17 +159,19 @@ export class TeachingRuntime {
   }
   private async execute(space: string, id: string, text: string, entry: { agent?: Agent }) {
     if (!active(this.get(space, id))) return;
-    const { input } = this.learning.db.prepare('SELECT input FROM agent_runs WHERE space_id=? AND id=?').get(space, id) as { input: string };
+    const tables = this.tables(space, id);
+    const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
     const frozen = JSON.parse(input) as FrozenContext;
-    const history = this.history(space, frozen.sessionId, id);
+    const history = frozen.sessionId ? this.history(space, frozen.sessionId, id) : [];
+    const toolSources: unknown[] = [];
     let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const scenario = this.options.scenario?.(frozen) ?? createScenario(this.learning, frozen);
+      const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space)) : createTask(this.learning, frozen));
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({
         initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: 'off' },
-        sessionId: frozen.sessionId, toolExecution: 'sequential', maxRetryDelayMs: 1000,
+        sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
         getApiKey: () => this.config?.apiKey,
         beforeToolCall: async () => {
           if (++calls > budget.tools || !active(this.get(space, id))) {
@@ -152,8 +187,8 @@ export class TeachingRuntime {
             const compiled = compileRequest(frozen, history, context.messages, tools);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
               model: teachingModel.id, provider: teachingModel.provider, modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
-              actualUsage: null };
-            this.learning.db.prepare('INSERT INTO context_manifests VALUES (?,?,?,?)').run(space, id, request, JSON.stringify(manifest));
+              toolSources, actualUsage: null };
+            this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
             if (this.options.debugDirectory) {
               mkdirSync(this.options.debugDirectory, { recursive: true, mode: 0o700 });
               writeFileSync(join(this.options.debugDirectory, `${id}-${request}.json`), JSON.stringify({ manifest, messages: compiled.messages }), { mode: 0o600, flag: 'wx' });
@@ -167,19 +202,20 @@ export class TeachingRuntime {
       });
       entry.agent = agent;
       timer = setTimeout(() => { failure = '模型运行超时，请重试或缩小任务。'; agent.abort(); }, this.options.milliseconds ?? budget.milliseconds);
-      this.learning.db.prepare("UPDATE runs SET state='running' WHERE space_id=? AND id=?").run(space, id);
+      this.learning.db.prepare(`UPDATE ${tables.work} SET state='running' WHERE space_id=? AND id=?`).run(space, id);
       this.emit(space, id, { type: 'state', state: 'running', error: null });
       agent.subscribe((event) => {
         if (event.type === 'message_end' && event.message.role !== 'system') {
           const m = event.message;
-          this.learning.db.prepare('INSERT INTO agent_messages VALUES (?,?,?,1,?)').run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
+          this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
             output += m.usage.output;
-            this.learning.db.prepare("UPDATE context_manifests SET value=json_set(value,'$.actualUsage',json(?)) WHERE space_id=? AND run_id=? AND request=?")
+            this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
               .run(JSON.stringify(m.usage), space, id, request);
           }
         }
         if (!active(this.get(space, id))) return;
+        if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
         if (event.type === 'tool_execution_end' && event.isError) failure = '工具调用或结构化产物无效，未保存生成产物。';
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
           const delta = event.assistantMessageEvent.delta;

@@ -1,5 +1,18 @@
 import { createAssistantMessageEventStream, type AssistantMessage } from '@earendil-works/pi-ai';
 import { teachingModel } from './model.js';
+import { randomUUID } from 'node:crypto';
+import type { Learning } from '../modules/learning.js';
+
+export function populated(learning: Learning, name = 'Rust') {
+  const space = learning.create({ name, goal: `学习 ${name}` });
+  learning.saveRequirement(space.id, { ...space.requirement, confirmed: true });
+  const unit = () => ({ id: randomUUID(), title: 'Unit', summary: 'Summary', goals: ['Goal'] });
+  const units = [unit(), unit()];
+  const routeSession = space.sessions.find((s) => s.scope === 'route')!.id;
+  const p = learning.proposeRoute(space.id, routeSession, { note: 'Test route', stages: [{ id: randomUUID(), title: 'Stage', units }] });
+  learning.applyProposal(space.id, p.id);
+  return { space: learning.space(space.id), units, routeSession };
+}
 
 export const syntheticConfig = { model: teachingModel.id, apiKey: 'synthetic-test-only' };
 export function reply(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {

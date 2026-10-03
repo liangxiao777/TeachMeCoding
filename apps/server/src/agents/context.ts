@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
 
-export type Scenario = 'intake' | 'roadmap' | 'tutor';
+export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson';
 export interface FrozenContext {
   spaceId: string;
-  sessionId: string;
+  sessionId: string | null;
   unitId: string | null;
   scenario: Scenario;
   requirement: RequirementState;
@@ -14,6 +14,7 @@ export interface FrozenContext {
   unit: RouteContent['stages'][number]['units'][number] | null;
   lesson: UnitDetail['lesson'];
   references: Quote[];
+  conclusions?: LearningConclusion[];
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
@@ -34,7 +35,7 @@ const resource = (name: string) => {
   return value;
 };
 export function systemPrompt(scenario: Scenario) {
-  return `<teaching schemaVersion="1">${resource('teaching')}<scenario>${scenario}</scenario>${scenario === 'tutor' ? '' : resource(scenario)}</teaching>`;
+  return `<teaching schemaVersion="1">${resource('teaching')}<scenario>${scenario}</scenario>${resource(scenario)}</teaching>`;
 }
 
 export function compileContext(input: FrozenContext) {
@@ -43,9 +44,10 @@ export function compileContext(input: FrozenContext) {
     ...(input.route ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
     ...(input.unit ? [{ kind: 'unit', id: input.unit.id, revision: input.route?.revision ?? 0, value: input.unit }] : []),
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
+    ...(input.conclusions ?? []).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
     ...input.references.map((value, index) => ({ kind: 'reference', id: `${input.sessionId}:${index}`, revision: hash(value), value })),
   ];
-  const xml = `<context schemaVersion="${contextVersion}" scenario="${input.scenario}"><scope spaceId="${xmlText(input.spaceId)}" sessionId="${xmlText(input.sessionId)}" unitId="${xmlText(input.unitId ?? '')}" />${sources.map((s) =>
+  const xml = `<context schemaVersion="${contextVersion}" scenario="${input.scenario}"><scope spaceId="${xmlText(input.spaceId)}" sessionId="${xmlText(input.sessionId ?? '')}" unitId="${xmlText(input.unitId ?? '')}" />${sources.map((s) =>
     `<source kind="${s.kind}" id="${xmlText(s.id)}" revision="${xmlText(String(s.revision))}" hash="${hash(s.value)}">${xmlText(JSON.stringify(s.value))}</source>`).join('')}</context>`;
   return { xml, sources: sources.map(({ value, ...s }) => ({ ...s, hash: hash(value) })) };
 }

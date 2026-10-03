@@ -8,6 +8,7 @@ import { Projects } from './modules/projects.js';
 import { loadModelConfig, type ModelConfig } from './config/model.js';
 import { TeachingRuntime } from './agents/runtime.js';
 import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 
 try {
   const config = serverConfig();
@@ -18,6 +19,7 @@ try {
   try { model = loadModelConfig(); } catch { /* Missing model configuration must not block saved learning data. */ }
   const learning = new Learning(data.db);
   const agents = new TeachingRuntime(learning, model, {
+    projectDirectory: (space) => { const path = join(data.root, 'projects', space); mkdirSync(path, { recursive: true, mode: 0o700 }); return path; },
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
   const server = serve({ fetch: createApp(access, learning, new Projects(data.root), agents).fetch, hostname, port }, () => {

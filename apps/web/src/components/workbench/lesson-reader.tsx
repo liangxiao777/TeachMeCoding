@@ -278,7 +278,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           <Generating
             className="py-6"
             title="正在为你生成课件"
-            steps={['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
+            steps={['回顾你的学习目标与背景', persistence ? '参考已采纳结论与有效测评' : '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
             note="课件会结合你此刻的学习情况生成，所以和别人看到的可能不一样。"
           />
         )}
@@ -315,6 +315,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               <EmptyDescription>当前单元尚无可读取的课件内容。你的学习路线、会话和代码不会受影响。</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
+              {persistence && capabilities.agent && <Button disabled={persistence.busy} onClick={() => retryGeneration(unit.id)}>生成课件</Button>}
               <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
             </EmptyContent>
           </Empty>

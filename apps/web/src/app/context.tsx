@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { ProjectFile, Proposal } from '@teach-me-coding/contracts'
+import type { LearningConclusion, ProjectFile, Proposal } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 
 type Action = () => void
@@ -80,6 +80,8 @@ export interface AppModel {
     resolveFile: (keepLocal: boolean) => void
     proposals: Proposal[]
     applyProposal: (id: string) => void
+    conclusions: LearningConclusion[]
+    decideConclusion: (id: string, adopted: boolean) => void
   }
 }
 

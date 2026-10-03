@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AssessmentDraft as SavedAssessmentDraft, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import type { AgentRun, AssessmentDraft as SavedAssessmentDraft, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
@@ -45,7 +45,12 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
   const drafts = Object.fromEntries(units.map((unit) => [unit.id, { ...answers(unit.draft), unitId: unit.id, state: 'ready' as const, q2Output: null, q2Running: false, attempt: Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]))
-  const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => ({ ...unit, status: details[unit.id]!.status, contentState: details[unit.id]!.lesson ? 'ready' as const : 'none' as const, lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns })) })) ?? []
+  const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => {
+    const task = saved.tasks.filter((t) => t.unitId === unit.id && t.kind === 'lesson').at(-1)
+    return { ...unit, status: details[unit.id]!.status, contentState: task && ['pending', 'running'].includes(task.state) ? 'generating' as const
+      : task && ['failed', 'interrupted'].includes(task.state) ? 'failed' as const : details[unit.id]!.lesson ? 'ready' as const : 'none' as const,
+      lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns }
+  }) })) ?? []
   const selectedSessions: Record<string, string> = {}
   for (const session of sessions) {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
@@ -133,7 +138,7 @@ export function usePersistentModel(): AppModel {
         setCurrentId(id)
       }
       publish(); setReady(true)
-      for (const entry of entries) for (const work of entry.saved.runs) if (['pending', 'running'].includes(work.state)) watchRun(entry.saved.id, work)
+      for (const entry of entries) for (const work of [...entry.saved.runs, ...entry.saved.tasks]) if (['pending', 'running'].includes(work.state)) watchRun(entry.saved.id, work)
     })
   }, [])
   useEffect(() => () => { for (const subscription of subscriptions.current.values()) subscription.abort(); subscriptions.current.clear() }, [])
@@ -171,6 +176,9 @@ export function usePersistentModel(): AppModel {
       sessionStorage.setItem(`session:${space}:${key}`, saved.id)
     })
   }
+  useEffect(() => {
+    if (ready && capabilities.agent && current && sessionScope(current) === 'unit' && !session) editSession({})
+  }, [ready, capabilities.agent, current?.id, current?.view, current?.currentUnitId, session?.id])
   const refreshBusiness = async (space: string) => {
     const loaded = await loadSpace(await api<Workspace>(`/spaces/${space}`))
     change(space, (s) => {
@@ -201,6 +209,10 @@ export function usePersistentModel(): AppModel {
       if (event.data.type === 'text') text += event.data.delta
       if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
       const state = event.data.type === 'state' ? event.data.state : 'running'
+      if (!work.sessionId && event.data.type === 'state') {
+        change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: s.saved.tasks.map((t) => t.id === work.id ? { ...t, state } : t) } }))
+        if (event.data.error) setError(event.data.error)
+      }
       changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
         messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, sequence: event.seq,
           status: state === 'succeeded' ? 'done' : state === 'failed' ? 'error' : state === 'interrupted' ? 'stopped' : text ? 'streaming' : 'thinking' }),
@@ -292,6 +304,15 @@ export function usePersistentModel(): AppModel {
     return result ? null : errorRef.current
   }
   const unavailable = () => { setError('该能力尚未接入，不会执行模拟操作。') }
+  const generateLesson = (space: string, unit: string) => {
+    const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
+    void run(`lesson:${space}:${unit}`, async () => {
+      const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision })
+      change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] },
+        ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit ? { ...u, contentState: 'generating' } : u) })) } }))
+      watchRun(space, task)
+    })
+  }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
   const uiCurrent = current && { ...current, onboarding: { ...current.onboarding,
@@ -303,7 +324,7 @@ export function usePersistentModel(): AppModel {
     capabilities,
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
-      return lesson ? { intro: '', blocks: [{ type: 'markdown', text: lesson.content }] } : null
+      return lesson ? { intro: lesson.intro ?? '', blocks: lesson.blocks ?? [{ type: 'markdown', text: lesson.content }] } : null
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment
@@ -337,11 +358,26 @@ export function usePersistentModel(): AppModel {
       })
     },
     setView: navigate,
-    enterUnit: (id) => navigate('unit', id),
-    retryGeneration: unavailable,
+    enterUnit: (id) => {
+      navigate('unit', id)
+      if (current && capabilities.agent && !selected?.units[id]?.lesson && !selected?.saved.tasks.some((t) => t.unitId === id && t.kind === 'lesson')) generateLesson(current.id, id)
+    },
+    retryGeneration: (id) => { if (current) generateLesson(current.id, id) },
     setComposerText: (text) => editSession({ composerText: text }),
     setRouteSuggestion: (text) => editSession({ routeSuggestion: text }),
-    setQuote: (quote) => { editSession({ composerQuote: quote }); if (quote && current) changeUi(current.id, (s) => ({ ...s, agentOpen: true })) },
+    setQuote: (quote) => {
+      if (quote && current) {
+        const lesson = current.currentUnitId ? selected?.units[current.currentUnitId]?.lesson : null
+        quote = { ...quote, provenance: quote.provenance ?? { capturedAt: Date.now(),
+          kind: quote.source === 'code' ? 'editor-buffer' : quote.source === 'lesson' ? 'lesson' : quote.source === 'terminal' ? 'terminal' : 'assessment',
+          objectId: quote.source === 'code' ? current.activeFileId ?? undefined : current.currentUnitId ?? undefined,
+          version: quote.source === 'lesson' ? String(lesson?.revision ?? 0) : undefined,
+          range: quote.source === 'code' && activeFile ? `${activeFile.content.indexOf(quote.text)}:${quote.text.length}` : undefined,
+        } }
+        changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
+      }
+      editSession({ composerQuote: quote })
+    },
     sendMessage: (text) => {
       if (current && text !== undefined && sessionScope(current) === 'route') changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
       return saveSession(true, text)
@@ -418,6 +454,14 @@ export function usePersistentModel(): AppModel {
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      conclusions: selected?.saved.conclusions ?? [],
+      decideConclusion: (id, adopted) => { if (!current || !selected) return
+        const space = current.id, conclusion = selected.saved.conclusions.find((c) => c.id === id)!
+        void run(`conclusion:${id}`, async () => {
+          const conclusions = await api<LearningConclusion[]>(`/spaces/${space}/conclusions/${id}`, { revision: conclusion.revision, adopted })
+          change(space, (s) => ({ ...s, saved: { ...s.saved, conclusions } }))
+        })
+      },
       requirementDraft: selected?.requirementDraft ?? null,
       setRequirementDraft: (value) => { if (current) change(current.id, (s) => ({ ...s, requirementDraft: value })) },
       saveName: () => { if (!current || !selected || current.name === selected.saved.name) return; const id = current.id, name = current.name, previousName = selected.saved.name

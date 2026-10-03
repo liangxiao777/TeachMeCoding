@@ -45,6 +45,22 @@ export const migrations = [
    CREATE TABLE context_manifests (space_id TEXT NOT NULL, run_id TEXT NOT NULL, request INTEGER NOT NULL,
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,run_id,request), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));`,
   `ALTER TABLE proposals ADD COLUMN requirement_revision INTEGER;`,
+  `ALTER TABLE lessons ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+   CREATE TABLE lesson_versions (space_id TEXT NOT NULL, unit_id TEXT NOT NULL, revision INTEGER NOT NULL, content TEXT NOT NULL,
+     PRIMARY KEY(space_id,unit_id,revision), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id));
+   INSERT INTO lesson_versions SELECT space_id,unit_id,revision,content FROM lessons;
+   CREATE TABLE conclusions (space_id TEXT NOT NULL, id TEXT NOT NULL, unit_id TEXT NOT NULL, run_id TEXT NOT NULL, text TEXT NOT NULL,
+     revision INTEGER NOT NULL DEFAULT 0, adopted INTEGER NOT NULL DEFAULT 0, sources TEXT NOT NULL CHECK(json_valid(sources)),
+     PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   CREATE UNIQUE INDEX one_active_task ON tasks(space_id,unit_id,kind) WHERE state IN ('pending','running');
+   CREATE TABLE task_runs (space_id TEXT NOT NULL, id TEXT NOT NULL, input TEXT NOT NULL CHECK(json_valid(input)),
+     error TEXT, cancelled INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,id) REFERENCES tasks(space_id,id));
+   CREATE TABLE task_events (space_id TEXT NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)),
+     PRIMARY KEY(space_id,run_id,seq), FOREIGN KEY(space_id,run_id) REFERENCES task_runs(space_id,id));
+   CREATE TABLE task_messages (space_id TEXT NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL, format_version INTEGER NOT NULL,
+     value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,run_id,seq), FOREIGN KEY(space_id,run_id) REFERENCES task_runs(space_id,id));
+   CREATE TABLE task_manifests (space_id TEXT NOT NULL, run_id TEXT NOT NULL, request INTEGER NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)),
+     PRIMARY KEY(space_id,run_id,request), FOREIGN KEY(space_id,run_id) REFERENCES task_runs(space_id,id));`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

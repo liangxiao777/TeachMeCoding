@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
-  assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, createSessionSchema, createSpaceSchema,
+  assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
   idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
-  type AssessmentRecord, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  type AssessmentRecord, type LearningConclusion, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 
 export class BusinessError extends Error {
@@ -50,6 +50,7 @@ export class Learning {
       proposals: proposals.map((p) => ({ ...p, content: JSON.parse(p.content) })),
       tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=?', id),
       runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=?', id),
+      conclusions: this.conclusions(id),
     };
   }
   create(input: unknown): Workspace {
@@ -125,12 +126,12 @@ export class Learning {
   unit(space: string, id: string): UnitDetail {
     idSchema.parse(space); idSchema.parse(id);
     const unit = this.one<Pick<UnitDetail, 'id' | 'status'>>('SELECT id,status FROM units WHERE space_id=? AND id=?', space, id);
-    const lesson = this.db.prepare('SELECT content FROM lessons WHERE space_id=? AND unit_id=?').get(space, id) as { content: string } | undefined;
+    const lesson = this.db.prepare('SELECT content,revision FROM lessons WHERE space_id=? AND unit_id=?').get(space, id) as { content: string; revision: number } | undefined;
     const spec = this.db.prepare('SELECT content FROM assessment_specs WHERE space_id=? AND unit_id=?').get(space, id) as { content: string } | undefined;
     const draft = this.db.prepare('SELECT revision,answers FROM assessment_drafts WHERE space_id=? AND unit_id=?').get(space, id) as { revision: number; answers: string } | undefined;
     const records = this.all<{ id: string; unitId: string; attempt: number; answers: string; result: string; createdAt: number }>(
       'SELECT id,unit_id AS unitId,attempt,answers,result,created_at AS createdAt FROM assessments WHERE space_id=? AND unit_id=? ORDER BY attempt DESC', space, id);
-    return { ...unit, lesson: lesson ? JSON.parse(lesson.content) : null, assessment: spec ? JSON.parse(spec.content) : null,
+    return { ...unit, lesson: lesson ? { ...JSON.parse(lesson.content), revision: lesson.revision } : null, assessment: spec ? JSON.parse(spec.content) : null,
       draft: { unitId: id, revision: draft?.revision ?? 0, ...(draft ? JSON.parse(draft.answers) : { q1: '', q2: '' }) },
       records: records.map(({ result, answers, ...r }) => ({ ...r, ...JSON.parse(result), answers: JSON.parse(answers) })),
     };
@@ -181,10 +182,44 @@ export class Learning {
       return this.space(space);
     })();
   }
-  saveLesson(space: string, unit: string, input: unknown) {
-    this.unit(space, unit);
+  saveLesson(space: string, unit: string, input: unknown, baseline?: { requirement: number; route: number; lesson: number }) {
     const content = lessonSchema.parse(input);
-    this.db.prepare('INSERT INTO lessons VALUES (?,?,?) ON CONFLICT(space_id,unit_id) DO UPDATE SET content=excluded.content').run(space, unit, JSON.stringify(content));
+    return this.db.transaction(() => {
+      const revision = this.unit(space, unit).lesson?.revision ?? 0;
+      if (baseline) this.checkBaseline(space, unit, baseline);
+      this.db.prepare(`INSERT INTO lessons(space_id,unit_id,content,revision) VALUES (?,?,?,?)
+        ON CONFLICT(space_id,unit_id) DO UPDATE SET content=excluded.content,revision=excluded.revision`).run(space, unit, JSON.stringify(content), revision + 1);
+      this.db.prepare('INSERT INTO lesson_versions VALUES (?,?,?,?)').run(space, unit, revision + 1, JSON.stringify(content));
+      this.db.prepare("UPDATE units SET status='learning' WHERE space_id=? AND id=? AND status='not_started'").run(space, unit);
+      return this.unit(space, unit).lesson!;
+    })();
+  }
+  checkBaseline(space: string, unit: string, baseline: { requirement: number; route: number; lesson: number }) {
+    const w = this.space(space), u = this.unit(space, unit);
+    if (!w.requirement.confirmed || w.requirement.revision !== baseline.requirement || w.route.revision !== baseline.route || (u.lesson?.revision ?? 0) !== baseline.lesson) throw conflict();
+  }
+  conclusions(space: string): LearningConclusion[] {
+    const rows = this.all<Omit<LearningConclusion, 'sources' | 'adopted' | 'valid'> & { sources: string; adopted: number; valid: number }>(
+      `SELECT c.id,c.unit_id AS unitId,c.run_id AS runId,c.text,c.revision,c.adopted,c.sources,
+        (r.confirmed=1 AND r.revision=json_extract(c.sources,'$.requirement') AND t.revision=json_extract(c.sources,'$.route')
+        AND COALESCE(l.revision,0)=json_extract(c.sources,'$.lesson')) AS valid
+        FROM conclusions c JOIN requirements r ON r.space_id=c.space_id JOIN routes t ON t.space_id=c.space_id
+        LEFT JOIN lessons l ON l.space_id=c.space_id AND l.unit_id=c.unit_id WHERE c.space_id=? ORDER BY c.rowid`, space);
+    return rows.map((r) => ({ ...r, sources: JSON.parse(r.sources), adopted: !!r.adopted, valid: !!r.valid }));
+  }
+  proposeConclusion(space: string, unit: string, run: string, input: unknown, sources: LearningConclusion['sources']) {
+    this.checkBaseline(space, unit, sources);
+    const value = conclusionSchema.parse(input);
+    this.db.prepare('INSERT INTO conclusions(space_id,id,unit_id,run_id,text,sources) VALUES (?,?,?,?,?,?)')
+      .run(space, randomUUID(), unit, run, value.text, JSON.stringify(sources));
+  }
+  decideConclusion(space: string, id: string, raw: unknown) {
+    const input = conclusionDecisionSchema.parse(raw);
+    const c = this.conclusions(space).find((c) => c.id === id);
+    if (!c) throw new BusinessError(404, '结论不存在。');
+    if (c.revision !== input.revision || (input.adopted && !c.valid)) throw conflict();
+    this.db.prepare('UPDATE conclusions SET adopted=?,revision=revision+1 WHERE space_id=? AND id=?').run(Number(input.adopted), space, id);
+    return this.conclusions(space);
   }
   saveAssessmentSpec(space: string, unit: string, input: unknown) {
     this.unit(space, unit);

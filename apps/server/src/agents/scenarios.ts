@@ -1,10 +1,12 @@
 import { Type } from '@earendil-works/pi-ai';
-import { requirementSchema, routeContentSchema, type Requirement, type RouteContent } from '@teach-me-coding/contracts';
+import { conclusionSchema, requirementSchema, routeContentSchema, type Requirement, type RouteContent } from '@teach-me-coding/contracts';
 import type { Learning } from '../modules/learning.js';
 import type { FrozenContext } from './context.js';
 import type { ScenarioRun } from './runtime.js';
+import { readTools } from './read-tools.js';
+import { baseline } from './tasks.js';
 
-export function createScenario(learning: Learning, input: FrozenContext): ScenarioRun {
+export function createScenario(learning: Learning, input: FrozenContext, runId: string, cwd?: string): ScenarioRun {
   if (input.scenario === 'intake') {
     let draft: Requirement | undefined;
     return {
@@ -32,9 +34,19 @@ export function createScenario(learning: Learning, input: FrozenContext): Scenar
         },
       }],
       commit() {
-        if (proposal) learning.proposeRoute(input.spaceId, input.sessionId, proposal, { requirement: input.requirement.revision, route: input.route!.revision });
+        if (proposal) learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision });
       },
     };
   }
-  return { tools: [], commit() {} };
+  let conclusion: ReturnType<typeof conclusionSchema.parse> | undefined;
+  return { tools: [...(cwd ? readTools(cwd) : []), {
+    name: 'submit_learning_conclusion', label: '整理学习结论', description: 'Stage a specific learning conclusion for user adoption; never infer mastery or assign a score.',
+    parameters: Type.Unsafe<ReturnType<typeof conclusionSchema.parse>>(JSON.parse(JSON.stringify(conclusionSchema.toJSONSchema()))),
+    async execute(_id, args) {
+      conclusion = conclusionSchema.parse(args);
+      return { content: [{ type: 'text', text: '待用户采纳，不代表测评通过。' }], details: {} };
+    },
+  }], commit() {
+    if (conclusion) learning.proposeConclusion(input.spaceId, input.unitId!, runId, conclusion, baseline(input));
+  } };
 }
