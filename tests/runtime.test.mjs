@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
@@ -7,6 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+
+test('compiled teaching prompt assets load without a source-tree cwd', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'tmc-prompt-assets-'));
+  try {
+    const url = new URL('../apps/server/dist/agents/context.js', import.meta.url).href;
+    const xml = execFileSync(process.execPath, ['--input-type=module', '-e', `const {systemPrompt}=await import(${JSON.stringify(url)}); console.log(systemPrompt('tutor'));`], { cwd, encoding: 'utf8' });
+    assert.match(xml, /<teaching schemaVersion="1">/);
+    assert.match(xml, /<scenario>tutor<\/scenario>/);
+    assert.ok(!xml.includes('undefined'));
+  } finally { await rm(cwd, { recursive: true, force: true }); }
+});
 
 function rawRequest(path, headers = {}, method = 'GET') {
   return new Promise((resolve, reject) => {

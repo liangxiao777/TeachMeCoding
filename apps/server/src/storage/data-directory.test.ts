@@ -27,14 +27,19 @@ test('versioned migrations preserve existing data and roll back failed schema an
   const db = new Database(path);
   try {
     db.exec("CREATE TABLE prior_data(value TEXT); INSERT INTO prior_data VALUES ('keep this exact value')");
+    migrate(db, migrations.slice(0, 1));
+    assert.equal(db.pragma('user_version', { simple: true }), 1);
+    db.exec("INSERT INTO spaces VALUES ('old-space','preserved space',17)");
     migrate(db);
-    assert.equal(db.pragma('user_version', { simple: true }), 1);
-    assert.throws(() => migrate(db, [...migrations, "CREATE TABLE partial(value TEXT); INSERT INTO missing VALUES (1)"]), /migration 2 failed.*preserved/);
-    assert.equal(db.pragma('user_version', { simple: true }), 1);
+    assert.equal(db.pragma('user_version', { simple: true }), migrations.length);
+    assert.deepEqual(db.prepare('SELECT * FROM spaces').all(), [{ id: 'old-space', name: 'preserved space', created_at: 17 }]);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_events').all(), []);
+    assert.throws(() => migrate(db, [...migrations, "CREATE TABLE partial(value TEXT); INSERT INTO missing VALUES (1)"]), /migration \d+ failed.*preserved/);
+    assert.equal(db.pragma('user_version', { simple: true }), migrations.length);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='partial'").get(), undefined);
     assert.deepEqual(db.prepare('SELECT * FROM prior_data').all(), [{ value: 'keep this exact value' }]);
     migrate(db, [...migrations, 'CREATE INDEX space_names ON spaces(name)']);
-    assert.equal(db.pragma('user_version', { simple: true }), 2);
+    assert.equal(db.pragma('user_version', { simple: true }), migrations.length + 1);
     assert.deepEqual(db.prepare('SELECT * FROM prior_data').all(), [{ value: 'keep this exact value' }]);
   } finally { db.close(); }
   try {

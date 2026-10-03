@@ -7,11 +7,12 @@ import { localAccessError, type LocalAccess } from './local-access.js';
 import { workspaceApi } from './workspaces.js';
 import type { Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
+import type { TeachingRuntime } from '../agents/runtime.js';
 
 // Source and compiled modules have the same depth relative to apps/web.
 export const webRoot = fileURLToPath(new URL('../../../web/dist/', import.meta.url));
 
-export function createApp(access: LocalAccess, learning?: Learning, projects?: Projects) {
+export function createApp(access: LocalAccess, learning?: Learning, projects?: Projects, agents?: TeachingRuntime) {
   const app = new Hono();
   app.use('*', async (c, next) => {
     c.header('X-Content-Type-Options', 'nosniff');
@@ -36,7 +37,7 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
     return c.json({ token: access.token });
   });
   app.post('/api/access/check', (c) => c.json({ ok: true }));
-  if (learning) app.route('/api', workspaceApi(learning, projects));
+  if (learning) app.route('/api', workspaceApi(learning, projects, agents));
   app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
   app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
   app.use('*', serveStatic({ root: webRoot }));

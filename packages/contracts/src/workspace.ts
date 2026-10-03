@@ -31,12 +31,18 @@ export type AssessmentSpec = z.infer<typeof assessmentSpecSchema>;
 export interface SpaceSummary { id: string; name: string; createdAt: number }
 export interface RequirementState { revision: number; confirmed: boolean; value: Requirement }
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number }
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number }
 export interface Proposal { id: string; baseRevision: number; state: 'pending' | 'applied'; content: RouteContent }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
+export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number }
+export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
+  | { type: 'text'; delta: string } | { type: 'tool'; name: string; phase: 'start' | 'end'; failed?: boolean };
+export interface RunEvent { runId: string; seq: number; data: AgentEventData }
+export interface RunEvents { run: AgentRun; events: RunEvent[] }
+export interface RunSubmission { run: AgentRun; session: SessionDetail }
 export interface Workspace extends SpaceSummary {
   requirement: RequirementState;
   route: { revision: number; content: RouteContent | null };

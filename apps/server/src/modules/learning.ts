@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, createSessionSchema, createSpaceSchema,
   idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
-  type AssessmentRecord, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  type AssessmentRecord, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 
 export class BusinessError extends Error {
@@ -84,8 +84,12 @@ export class Learning {
     idSchema.parse(space); idSchema.parse(id);
     const row = this.one<SessionSummary & { revision: number; draft: string }>(
       'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
-    const messages = this.all<{ id: string; role: 'user' | 'agent'; text: string; quote: string | null; createdAt: number }>(
-      'SELECT id,role,text,quote,created_at AS createdAt FROM messages WHERE space_id=? AND session_id=? ORDER BY rowid', space, id);
+    const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
+      `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
+       CASE r.state WHEN 'pending' THEN 'thinking' WHEN 'running' THEN CASE WHEN m.text='' THEN 'thinking' ELSE 'streaming' END
+         WHEN 'interrupted' THEN 'stopped' WHEN 'failed' THEN 'error' ELSE 'done' END AS status
+       FROM messages m LEFT JOIN runs r ON r.space_id=m.space_id AND r.id=m.id
+       WHERE m.space_id=? AND m.session_id=? ORDER BY m.rowid`, space, id);
     return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
       draft: { ...JSON.parse(row.draft), revision: row.revision },
       messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote) })),

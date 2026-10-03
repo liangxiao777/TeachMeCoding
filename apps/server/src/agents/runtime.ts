@@ -1,0 +1,193 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
+import { normalizeContext, type Message } from '@earendil-works/pi-ai';
+import { idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import type { ModelConfig } from '../config/model.js';
+import { BusinessError, Learning } from '../modules/learning.js';
+import { budget, compileRequest, ContextLimit, retainedMessage, type FrozenContext, type HistoryGroup } from './context.js';
+import { failureStream, providerStream, teachingModel } from './model.js';
+
+export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
+interface RuntimeOptions {
+  stream?: StreamFn;
+  scenario?: (input: FrozenContext) => ScenarioRun;
+  milliseconds?: number;
+  debugDirectory?: string;
+}
+const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
+export class TeachingRuntime {
+  private live = new Map<string, { space: string; agent?: Agent; done: Promise<void> }>();
+  private closing = false;
+  private stream: StreamFn;
+  constructor(readonly learning: Learning, private config: ModelConfig | null, private options: RuntimeOptions = {}) {
+    this.stream = options.stream ?? providerStream();
+  }
+  get available() { return this.config !== null && this.config.model === teachingModel.id; }
+
+  get(space: string, id: string): AgentRun {
+    idSchema.parse(space); idSchema.parse(id);
+    const row = this.learning.db.prepare(`SELECT r.id,r.unit_id AS unitId,r.session_id AS sessionId,r.kind,r.state,
+      a.error,a.cancelled,a.created_at AS createdAt FROM runs r JOIN agent_runs a ON a.space_id=r.space_id AND a.id=r.id
+      WHERE r.space_id=? AND r.id=?`).get(space, id) as (Omit<AgentRun, 'cancelled'> & { cancelled: number }) | undefined;
+    if (!row) throw new BusinessError(404, '运行不存在。');
+    return { ...row, cancelled: !!row.cancelled };
+  }
+  events(space: string, id: string, after = 0): RunEvents {
+    const run = this.get(space, id);
+    if (!Number.isSafeInteger(after) || after < 0) throw new BusinessError(400, '事件游标无效。');
+    const rows = this.learning.db.prepare('SELECT seq,value FROM agent_events WHERE space_id=? AND run_id=? AND seq>? ORDER BY seq LIMIT 500')
+      .all(space, id, after) as { seq: number; value: string }[];
+    return { run, events: rows.map((r) => ({ runId: id, seq: r.seq, data: JSON.parse(r.value) as AgentEventData })) };
+  }
+  private emit(space: string, id: string, data: AgentEventData) {
+    this.learning.db.prepare(`INSERT INTO agent_events SELECT ?,?,COALESCE(MAX(seq),0)+1,? FROM agent_events WHERE space_id=? AND run_id=?`)
+      .run(space, id, JSON.stringify(data), space, id);
+  }
+  private freeze(space: string, session: string, references: FrozenContext['references']): FrozenContext {
+    const s = this.learning.session(space, session), w = this.learning.space(space);
+    if (s.scope !== 'intake' && !w.requirement.confirmed) throw new BusinessError(422, '请先确认学习需求。');
+    return structuredClone({ spaceId: space, sessionId: session, unitId: s.unitId,
+      scenario: s.scope === 'route' ? 'roadmap' : s.scope === 'unit' ? 'tutor' : 'intake',
+      requirement: w.requirement, route: s.scope === 'intake' ? null : w.route,
+      unit: w.route.content?.stages.flatMap((stage) => stage.units).find((unit) => unit.id === s.unitId) ?? null,
+      lesson: s.unitId ? this.learning.unit(space, s.unitId).lesson : null, references,
+    });
+  }
+  submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
+    const input = messageInputSchema.parse(raw);
+    if (this.closing) throw new BusinessError(503, '服务正在关闭。');
+    if (!this.available) throw new BusinessError(503, '教学模型未配置或模型不匹配；请检查服务端配置。');
+    const id = this.learning.once(key, `agent:${space}:${session}`, input, () => {
+      const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
+      if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
+        throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
+      }
+      this.learning.addMessage(space, session, input);
+      const id = randomUUID();
+      this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
+      this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
+      this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, session, id, Date.now());
+      this.emit(space, id, { type: 'state', state: 'pending', error: null });
+      return id;
+    });
+    if (this.get(space, id).state === 'pending' && !this.live.has(id)) {
+      const entry: { space: string; agent?: Agent; done: Promise<void> } = { space, done: Promise.resolve() };
+      this.live.set(id, entry);
+      entry.done = Promise.resolve().then(() => this.execute(space, id, input.text, entry)).finally(() => { this.live.delete(id); });
+    }
+    return { run: this.get(space, id), session: this.learning.session(space, session) };
+  }
+  stop(space: string, id: string) {
+    const run = this.get(space, id);
+    if (active(run)) {
+      // Synchronous commit fence: a cancellation accepted before commit wins.
+      this.learning.db.transaction(() => {
+        this.learning.db.prepare('UPDATE agent_runs SET cancelled=1 WHERE space_id=? AND id=?').run(space, id);
+        this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
+      })();
+      this.live.get(id)?.agent?.abort();
+    }
+    return this.get(space, id);
+  }
+  async idle(id: string) { await this.live.get(id)?.done; }
+  async close() {
+    this.closing = true;
+    for (const [id, entry] of this.live) {
+      this.learning.db.transaction(() => this.finish(entry.space, id, 'interrupted', '服务关闭，运行已中断；未自动重放。'))();
+      entry.agent?.abort();
+    }
+    await Promise.all([...this.live.values()].map((entry) => entry.done));
+  }
+  private finish(space: string, id: string, state: AgentRun['state'], error: string | null) {
+    const changed = this.learning.db.prepare("UPDATE runs SET state=? WHERE space_id=? AND id=? AND state IN ('pending','running')").run(state, space, id);
+    if (!changed.changes) return;
+    this.learning.db.prepare('UPDATE agent_runs SET error=? WHERE space_id=? AND id=?').run(error, space, id);
+    this.emit(space, id, { type: 'state', state, error });
+  }
+  private history(space: string, session: string, id: string): HistoryGroup[] {
+    const rows = this.learning.db.prepare(`SELECT r.id,m.value FROM runs r JOIN agent_messages m ON m.space_id=r.space_id AND m.run_id=r.id
+      WHERE r.space_id=? AND r.session_id=? AND r.id!=? AND r.state='succeeded' ORDER BY r.rowid,m.seq`).all(space, session, id) as { id: string; value: string }[];
+    const groups = new Map<string, HistoryGroup>();
+    for (const row of rows) { const g = groups.get(row.id) ?? { id: row.id, messages: [] }; g.messages.push(JSON.parse(row.value) as Message); groups.set(row.id, g); }
+    return [...groups.values()];
+  }
+  private async execute(space: string, id: string, text: string, entry: { agent?: Agent }) {
+    if (!active(this.get(space, id))) return;
+    const { input } = this.learning.db.prepare('SELECT input FROM agent_runs WHERE space_id=? AND id=?').get(space, id) as { input: string };
+    const frozen = JSON.parse(input) as FrozenContext;
+    const history = this.history(space, frozen.sessionId, id);
+    let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const scenario = this.options.scenario?.(frozen) ?? { tools: [], commit() {} };
+      const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+      const agent = new Agent({
+        initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: 'off' },
+        sessionId: frozen.sessionId, toolExecution: 'sequential', maxRetryDelayMs: 1000,
+        getApiKey: () => this.config?.apiKey,
+        beforeToolCall: async () => {
+          if (++calls > budget.tools || !active(this.get(space, id))) {
+            failure = '工具调用预算耗尽或运行已停止。';
+            return { block: true, reason: failure, terminate: true };
+          }
+          return undefined;
+        },
+        streamFn: async (model, context, options) => {
+          try {
+            if (++request > budget.requests || output >= budget.outputTotal) throw new ContextLimit('模型轮次或总输出预算已耗尽。');
+            if (!active(this.get(space, id))) return failureStream('运行已停止。', true);
+            const compiled = compileRequest(frozen, history, context.messages, tools);
+            const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
+              model: teachingModel.id, provider: teachingModel.provider, modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
+              actualUsage: null };
+            this.learning.db.prepare('INSERT INTO context_manifests VALUES (?,?,?,?)').run(space, id, request, JSON.stringify(manifest));
+            if (this.options.debugDirectory) {
+              mkdirSync(this.options.debugDirectory, { recursive: true, mode: 0o700 });
+              writeFileSync(join(this.options.debugDirectory, `${id}-${request}.json`), JSON.stringify({ manifest, messages: compiled.messages }), { mode: 0o600, flag: 'wx' });
+            }
+            return await this.stream(model, normalizeContext({ messages: compiled.messages }), { ...options, maxTokens: Math.min(budget.output, budget.outputTotal - output) });
+          } catch (error) {
+            failure = error instanceof ContextLimit ? error.message : '无法准备模型请求。';
+            return failureStream(failure);
+          }
+        },
+      });
+      entry.agent = agent;
+      timer = setTimeout(() => { failure = '模型运行超时，请重试或缩小任务。'; agent.abort(); }, this.options.milliseconds ?? budget.milliseconds);
+      this.learning.db.prepare("UPDATE runs SET state='running' WHERE space_id=? AND id=?").run(space, id);
+      this.emit(space, id, { type: 'state', state: 'running', error: null });
+      agent.subscribe((event) => {
+        if (event.type === 'message_end' && event.message.role !== 'system') {
+          const m = event.message;
+          this.learning.db.prepare('INSERT INTO agent_messages VALUES (?,?,?,1,?)').run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
+          if (m.role === 'assistant') {
+            output += m.usage.output;
+            this.learning.db.prepare("UPDATE context_manifests SET value=json_set(value,'$.actualUsage',json(?)) WHERE space_id=? AND run_id=? AND request=?")
+              .run(JSON.stringify(m.usage), space, id, request);
+          }
+        }
+        if (!active(this.get(space, id))) return;
+        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+          const delta = event.assistantMessageEvent.delta;
+          this.learning.db.transaction(() => {
+            this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(delta, space, id);
+            this.emit(space, id, { type: 'text', delta });
+          })();
+        }
+        if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') this.emit(space, id,
+          { type: 'tool', name: event.toolName, phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
+      });
+      await agent.prompt({ role: 'user', content: text, timestamp: Date.now() });
+      const last = agent.state.messages.at(-1);
+      if (!active(this.get(space, id))) return;
+      if (failure) throw new BusinessError(422, failure);
+      if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
+        last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。' : '模型请求失败或中断，未保存生成产物。');
+      this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
+    } catch (error) {
+      this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
+    } finally { if (timer) clearTimeout(timer); }
+  }
+}

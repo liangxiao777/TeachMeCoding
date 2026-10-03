@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { streamSSE } from 'hono/streaming';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
+import type { TeachingRuntime } from '../agents/runtime.js';
 
-export function workspaceApi(learning: Learning, projects?: Projects) {
+export function workspaceApi(learning: Learning, projects?: Projects, agents?: TeachingRuntime) {
   const api = new Hono();
   api.use('*', bodyLimit({ maxSize: 1_100_000, onError: (c) => c.json({ error: '请求内容过大。' }, 413) }));
   api.onError((error, c) => {
@@ -16,6 +18,30 @@ export function workspaceApi(learning: Learning, projects?: Projects) {
   api.get('/spaces/:space/sessions/:session', (c) => c.json(learning.session(c.req.param('space'), c.req.param('session'))));
   api.get('/spaces/:space/units/:unit', (c) => c.json(learning.unit(c.req.param('space'), c.req.param('unit'))));
   api.get('/spaces/:space/records/:record', (c) => c.json(learning.record(c.req.param('space'), c.req.param('record'))));
+  api.get('/capabilities', (c) => c.json({ agent: agents?.available ?? false, terminal: false, assessment: false }));
+  if (agents) {
+    api.post('/spaces/:space/sessions/:session/runs', async (c) => c.json(agents.submit(
+      c.req.param('space'), c.req.param('session'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
+    api.get('/spaces/:space/runs/:run', (c) => c.json(agents.get(c.req.param('space'), c.req.param('run'))));
+    api.get('/spaces/:space/runs/:run/events', (c) => c.json(agents.events(c.req.param('space'), c.req.param('run'), Number(c.req.query('after') ?? 0))));
+    api.post('/spaces/:space/runs/:run/stop', (c) => c.json(agents.stop(c.req.param('space'), c.req.param('run'))));
+    api.get('/spaces/:space/runs/:run/stream', (c) => {
+      const { space, run } = c.req.param();
+      let cursor = Number(c.req.query('after') ?? 0);
+      agents.events(space, run, cursor); // Validate before starting a successful stream response.
+      return streamSSE(c, async (stream) => {
+        while (!stream.aborted) {
+          const result = agents.events(space, run, cursor);
+          for (const event of result.events) {
+            await stream.writeSSE({ id: `${run}:${event.seq}`, event: 'run', data: JSON.stringify(event) });
+            cursor = event.seq;
+          }
+          if (!['pending', 'running'].includes(result.run.state) && result.events.length < 500) return;
+          await stream.sleep(100);
+        }
+      }); // Subscription cancellation never calls agents.stop().
+    });
+  }
   api.post('/spaces', async (c) => {
     const input: unknown = await c.req.json();
     return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.create(input)));
