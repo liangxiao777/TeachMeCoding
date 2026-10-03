@@ -1,8 +1,8 @@
 'use client'
 
-import { ArrowLeft, ArrowUp, Check, ClipboardList, Pencil } from 'lucide-react'
+import { ArrowLeft, ArrowUp, Check, ClipboardList, Pencil, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { SessionMenu, SessionSaveControls } from '@/components/agent/agent-panel'
+import { AgentMessage, SessionMenu, SessionSaveControls } from '@/components/agent/agent-panel'
 import { BrandMark, Generating, isComposing } from '@/components/shared'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -173,7 +173,7 @@ function RequirementCard() {
 
 function Chat() {
   const space = useSpace()
-  const { onboardSend, sendMessage, session, setComposerText, capabilities, persistence } = useApp()
+  const { onboardSend, sendMessage, stopReply, session, setComposerText, capabilities, persistence } = useApp()
   const [previewText, setPreviewText] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
@@ -182,8 +182,9 @@ function Chat() {
   const setText = persistence ? setComposerText : setPreviewText
   const endRef = useRef<HTMLDivElement>(null)
   const { messages, step } = space.onboarding
-  const agentTyping = capabilities.agent && space.onboarding.agentTyping
-  const busy = agentTyping || sending || !!persistence && (persistence.busy || !persistence.ready)
+  const replying = capabilities.agent && space.onboarding.agentTyping
+  const agentTyping = replying && (!persistence || !messages.some((m) => m.status === 'streaming'))
+  const busy = replying || sending || !!persistence && (persistence.busy || !persistence.ready)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -224,7 +225,7 @@ function Chat() {
               {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
             </p>
           </div>
-          {messages.map((m) =>
+          {messages.map((m) => persistence && m.status === 'thinking' ? null :
             m.role === 'user' ? (
               <div key={m.id} className="flex justify-end">
                 <p className="max-w-lg rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm leading-relaxed text-primary-foreground">
@@ -234,9 +235,13 @@ function Chat() {
             ) : (
               <div key={m.id} className="flex gap-3">
                 <BrandMark className="shrink-0" />
-                <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
-                  {m.text}
-                </p>
+                {persistence ? (
+                  <div className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">
+                    <AgentMessage msg={{ ...m, createdAt: 0 }} />
+                  </div>
+                ) : (
+                  <p className="max-w-lg rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm leading-relaxed shadow-sm">{m.text}</p>
+                )}
               </div>
             ),
           )}
@@ -255,7 +260,7 @@ function Chat() {
       </div>
 
       <div className="flex flex-col gap-3 pb-6">
-        {!agentTyping && (
+        {!replying && (
           <div className="flex flex-wrap gap-2">
             {suggestions.map((s) => (
               <Button key={s} variant="outline" size="sm" className="rounded-full font-normal" disabled={busy} onClick={() => void send(s)}>
@@ -294,7 +299,11 @@ function Chat() {
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
               <SessionSaveControls disabled={sending} />
-              <InputGroupButton
+              {persistence && replying ? (
+                <InputGroupButton type="button" size="sm" variant="outline" className="ml-auto" onClick={stopReply}>
+                  <Square data-icon="inline-start" />停止
+                </InputGroupButton>
+              ) : <InputGroupButton
                 type="submit"
                 variant="default"
                 size="icon-sm"
@@ -303,7 +312,7 @@ function Chat() {
                 aria-label={capabilities.agent ? '发送' : '保存问题'}
               >
                 <ArrowUp />
-              </InputGroupButton>
+              </InputGroupButton>}
             </InputGroupAddon>
           </InputGroup>
         </form>

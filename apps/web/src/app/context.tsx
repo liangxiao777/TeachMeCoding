@@ -62,6 +62,7 @@ export interface AppModel {
     ready: boolean
     busy: boolean
     error: string
+    connection?: string
     retry: Action
     requirementConfirmed: boolean
     requirementDraft: Requirement | null

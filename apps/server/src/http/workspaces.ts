@@ -25,6 +25,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     api.get('/spaces/:space/runs/:run', (c) => c.json(agents.get(c.req.param('space'), c.req.param('run'))));
     api.get('/spaces/:space/runs/:run/events', (c) => c.json(agents.events(c.req.param('space'), c.req.param('run'), Number(c.req.query('after') ?? 0))));
     api.post('/spaces/:space/runs/:run/stop', (c) => c.json(agents.stop(c.req.param('space'), c.req.param('run'))));
+    api.post('/spaces/:space/runs/:run/retry', (c) => c.json(agents.retry(c.req.param('space'), c.req.param('run'), c.req.header('Idempotency-Key') ?? '')));
     api.get('/spaces/:space/runs/:run/stream', (c) => {
       const { space, run } = c.req.param();
       let cursor = Number(c.req.query('after') ?? 0);

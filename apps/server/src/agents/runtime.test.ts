@@ -103,7 +103,8 @@ test('protected SSE reconnect reads missing events and disconnect does not stop 
   const headers = { Host: '127.0.0.1:14320', 'X-TMC-Token': access.token };
   try {
     const { run } = runtime.submit(a.id, sa, randomUUID(), message('stream'));
-    while (!complete) await new Promise((r) => setTimeout(r, 1));
+    for (let i = 0; i < 100 && !complete; i++) await new Promise((r) => setTimeout(r, 1));
+    assert.ok(complete, 'request reached the test provider');
     const path = `/api/spaces/${a.id}/runs/${run.id}/stream`;
     assert.equal((await app.request(path, { headers: { Host: headers.Host } })).status, 401);
     const result = await app.request(path, { headers }); const reader = result.body!.getReader();
@@ -113,7 +114,7 @@ test('protected SSE reconnect reads missing events and disconnect does not stop 
     complete(); await runtime.idle(run.id);
     const replay = await app.request(`${path}?after=2`, { headers });
     const text = await replay.text(); assert.match(text, /"seq":3/); assert.ok(!text.includes('"seq":1'));
-  } finally { await runtime.close(); db.close(); }
+  } finally { complete?.(); await runtime.close(); db.close(); }
 });
 
 test('startup appends an interrupted event once and does not replay a pending request', async () => {

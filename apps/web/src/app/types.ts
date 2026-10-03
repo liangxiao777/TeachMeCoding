@@ -42,6 +42,7 @@ export interface Message {
   full?: string
   quote?: Quote
   status?: MessageStatus
+  sequence?: number
   inAssessment?: boolean
   action?: RouteAction
   createdAt: number
@@ -113,6 +114,7 @@ export interface OnboardMsg {
   id: string
   role: 'user' | 'agent'
   text: string
+  status?: MessageStatus
 }
 
 export interface Requirement {

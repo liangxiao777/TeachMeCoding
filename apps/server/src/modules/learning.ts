@@ -86,6 +86,7 @@ export class Learning {
       'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
     const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
       `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
+       COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=m.space_id AND e.run_id=m.id),0) AS sequence,
        CASE r.state WHEN 'pending' THEN 'thinking' WHEN 'running' THEN CASE WHEN m.text='' THEN 'thinking' ELSE 'streaming' END
          WHEN 'interrupted' THEN 'stopped' WHEN 'failed' THEN 'error' ELSE 'done' END AS status
        FROM messages m LEFT JOIN runs r ON r.space_id=m.space_id AND r.id=m.id

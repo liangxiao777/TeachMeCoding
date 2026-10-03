@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AssessmentDraft as SavedAssessmentDraft, ProjectEntry, ProjectFile, RequirementState, SessionDetail, SpaceSummary, UnitDetail, Workspace } from '@teach-me-coding/contracts'
-import { api } from '@/lib/api'
+import type { AssessmentDraft as SavedAssessmentDraft, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import { api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
 import { useUnsavedWarning } from './request-state'
@@ -76,6 +76,9 @@ export function usePersistentModel(): AppModel {
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [connection, setConnection] = useState('')
+  const [capabilities, setCapabilities] = useState({ agent: false, terminal: false, assessment: false })
+  const subscriptions = useRef(new Map<string, AbortController>())
   const errorRef = useRef('')
   const retry = useRef<() => void>(() => {})
   const inFlight = useRef(new Map<string, Promise<unknown>>())
@@ -109,6 +112,12 @@ export function usePersistentModel(): AppModel {
     if (booted.current) return
     booted.current = true
     void run('load', async () => {
+      // Older running servers can still expose saved work while their watcher is paused.
+      const supported = await api<AppModel['capabilities']>('/capabilities').catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 404) return { agent: false, terminal: false, assessment: false }
+        throw error
+      })
+      setCapabilities(supported)
       const summaries = await api<SpaceSummary[]>('/spaces')
       const entries = await Promise.all(summaries.map(async (s) => loadSpace(await api<Workspace>(`/spaces/${s.id}`))))
       cache.current = Object.fromEntries(entries.map((s) => [s.ui.id, s]))
@@ -124,8 +133,10 @@ export function usePersistentModel(): AppModel {
         setCurrentId(id)
       }
       publish(); setReady(true)
+      for (const entry of entries) for (const work of entry.saved.runs) if (['pending', 'running'].includes(work.state)) watchRun(entry.saved.id, work)
     })
   }, [])
+  useEffect(() => () => { for (const subscription of subscriptions.current.values()) subscription.abort(); subscriptions.current.clear() }, [])
   useEffect(() => {
     if (!ready) return
     const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
@@ -160,6 +171,58 @@ export function usePersistentModel(): AppModel {
       sessionStorage.setItem(`session:${space}:${key}`, saved.id)
     })
   }
+  const refreshBusiness = async (space: string) => {
+    const loaded = await loadSpace(await api<Workspace>(`/spaces/${space}`))
+    change(space, (s) => {
+      const requirement = loaded.saved.requirement.revision >= s.saved.requirement.revision ? loaded.saved.requirement : s.saved.requirement
+      const sessions = { ...s.sessions }
+      for (const [id, fresh] of Object.entries(loaded.sessions)) if (fresh.draft.revision >= (sessions[id]?.draft.revision ?? 0)) sessions[id] = fresh
+      return { ...s, saved: { ...loaded.saved, requirement }, units: loaded.units, drafts: { ...loaded.drafts, ...s.drafts },
+        sessions, ui: { ...s.ui, requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
+          sessions: s.ui.sessions.map((old) => {
+            const fresh = loaded.ui.sessions.find((next) => next.id === old.id)
+            if (!fresh) return old
+            const messages = new Map(old.messages.map((m) => [m.id, m]))
+            for (const message of fresh.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
+            return { ...old, messages: [...messages.values()], updatedAt: Math.max(old.updatedAt, fresh.updatedAt) }
+          }),
+        },
+      }
+    })
+  }
+  const watchRun = (space: string, work: WorkStatus) => {
+    if (subscriptions.current.has(work.id)) return
+    const controller = new AbortController()
+    subscriptions.current.set(work.id, controller)
+    let cursor = 0, text = '', terminal = false
+    const receive = (event: RunEvent) => {
+      if (event.runId !== work.id || event.seq <= cursor) return
+      cursor = event.seq
+      if (event.data.type === 'text') text += event.data.delta
+      if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
+      const state = event.data.type === 'state' ? event.data.state : 'running'
+      changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
+        messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, sequence: event.seq,
+          status: state === 'succeeded' ? 'done' : state === 'failed' ? 'error' : state === 'interrupted' ? 'stopped' : text ? 'streaming' : 'thinking' }),
+      }) }))
+    }
+    void (async () => {
+      try {
+        while (!controller.signal.aborted) {
+          try {
+            if (!terminal) await streamRun(`/spaces/${space}/runs/${work.id}`, cursor, controller.signal, receive)
+            if (controller.signal.aborted) return
+            if (terminal) { await refreshBusiness(space); setConnection(''); return }
+            throw new Error('Disconnected before final event')
+          } catch {
+            if (controller.signal.aborted) return
+            setConnection('事件连接中断，正在重连；后台运行不会重新提交。')
+            await new Promise((resolve) => setTimeout(resolve, 1000))
+          }
+        }
+      } finally { subscriptions.current.delete(work.id) }
+    })()
+  }
   const saveSession = (send: boolean, text?: string): Promise<boolean> => {
     if (!current || !session) return Promise.resolve(false)
     const space = current.id, id = session.id, snapshot = composer(session)
@@ -167,7 +230,8 @@ export function usePersistentModel(): AppModel {
     const input = send ? { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision } : { ...snapshot, revision: stored.draft.revision }
     if (send && !input.text.trim() && !input.quote) return Promise.resolve(false)
     return run(`session:${id}`, async () => {
-      const saved = await api<SessionDetail>(`/spaces/${space}/sessions/${id}/${send ? 'messages' : 'draft'}`, input)
+      const submission = send && capabilities.agent ? await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input) : undefined
+      const saved = submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/${send ? 'messages' : 'draft'}`, input)
       change(space, (s) => ({ ...s, sessions: { ...s.sessions, [id]: saved }, ui: { ...s.ui,
         sessions: s.ui.sessions.map((x) => {
           if (x.id !== id) return x
@@ -180,6 +244,7 @@ export function usePersistentModel(): AppModel {
           }
         }),
       } }))
+      if (submission) watchRun(space, submission.run)
       return true
     }).then(Boolean)
   }
@@ -229,11 +294,13 @@ export function usePersistentModel(): AppModel {
   const unavailable = () => { setError('该能力尚未接入，不会执行模拟操作。') }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
-  const uiCurrent = current && { ...current, onboarding: { ...current.onboarding, messages: current.view === 'onboarding' ? session?.messages ?? [] : current.onboarding.messages } }
+  const uiCurrent = current && { ...current, onboarding: { ...current.onboarding,
+    agentTyping: !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming'),
+    messages: current.view === 'onboarding' ? session?.messages ?? [] : current.onboarding.messages } }
 
   return {
     state: { spaces, currentSpaceId: currentId, globalView }, current: uiCurrent, session,
-    capabilities: { agent: false, terminal: false, assessment: false },
+    capabilities,
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       return lesson ? { intro: '', blocks: [{ type: 'markdown', text: lesson.content }] } : null
@@ -265,7 +332,19 @@ export function usePersistentModel(): AppModel {
       if (current && text !== undefined && sessionScope(current) === 'route') changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
       return saveSession(true, text)
     },
-    stopReply: unavailable, retryReply: unavailable, applyRouteAction: unavailable,
+    stopReply: () => { if (!current || !session) return
+      const running = session.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
+      if (running) void run(`stop:${running.id}`, () => api(`/spaces/${current.id}/runs/${running.id}/stop`, {}))
+    },
+    retryReply: (id) => { if (!current) return; const space = current.id
+      void run(`retry:${id}`, async () => {
+        const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
+        change(space, (s) => ({ ...s, sessions: { ...s.sessions, [submission.session.id]: submission.session }, ui: { ...s.ui,
+          sessions: s.ui.sessions.map((x) => x.id === submission.session.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
+        watchRun(space, submission.run)
+      })
+    },
+    applyRouteAction: unavailable,
     newSession: () => { if (!current) return; const space = current.id, key = sessionKey(current)
       void run(`new-session:${space}:${key}`, async () => {
         const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
@@ -324,7 +403,7 @@ export function usePersistentModel(): AppModel {
     goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) navigate('unit', next.id) } },
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
-      ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
       requirementDraft: selected?.requirementDraft ?? null,
       setRequirementDraft: (value) => { if (current) change(current.id, (s) => ({ ...s, requirementDraft: value })) },
       saveName: () => { if (!current || !selected || current.name === selected.saved.name) return; const id = current.id, name = current.name, previousName = selected.saved.name

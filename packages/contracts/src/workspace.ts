@@ -31,7 +31,7 @@ export type AssessmentSpec = z.infer<typeof assessmentSpecSchema>;
 export interface SpaceSummary { id: string; name: string; createdAt: number }
 export interface RequirementState { revision: number; confirmed: boolean; value: Requirement }
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number }

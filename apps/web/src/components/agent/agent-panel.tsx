@@ -78,7 +78,7 @@ const ACTION_COPY = {
   'project-first': { title: '在「所有权」之后插入一个练习项目', text: '新增单元「练习项目：单词计数器」，后续单元顺延。' },
 }
 
-function AgentMessage({ msg }: { msg: Message }) {
+export function AgentMessage({ msg }: { msg: Message }) {
   const { retryReply, applyRouteAction, bringToIde, capabilities, persistence } = useApp()
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'

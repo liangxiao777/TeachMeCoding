@@ -34,7 +34,7 @@ const resource = (name: string) => {
   return value;
 };
 export function systemPrompt(scenario: Scenario) {
-  return `<teaching schemaVersion="1">${resource('teaching')}<scenario>${scenario}</scenario></teaching>`;
+  return `<teaching schemaVersion="1">${resource('teaching')}<scenario>${scenario}</scenario>${scenario === 'intake' ? resource('intake') : ''}</teaching>`;
 }
 
 export function compileContext(input: FrozenContext) {

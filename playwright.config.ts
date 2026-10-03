@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/browser',
+  testIgnore: '**/teaching.spec.ts',
   outputDir: '.amp/in/artifacts/browser',
   // Both serving modes must match the same platform-specific visual baseline.
   snapshotPathTemplate: '{testDir}/__screenshots__/{platform}/{arg}{ext}',

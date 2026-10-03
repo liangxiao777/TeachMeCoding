@@ -6,8 +6,9 @@ import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 import { idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
-import { budget, compileRequest, ContextLimit, retainedMessage, type FrozenContext, type HistoryGroup } from './context.js';
+import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
 import { failureStream, providerStream, teachingModel } from './model.js';
+import { createScenario } from './scenarios.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -56,18 +57,28 @@ export class TeachingRuntime {
     });
   }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
+    return this.begin(space, session, key, raw);
+  }
+  retry(space: string, id: string, key: string): RunSubmission {
+    const previous = this.get(space, id);
+    if (!['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的运行。');
+    const original = this.learning.db.prepare('SELECT input FROM agent_runs WHERE space_id=? AND id=?').get(space, id) as { input: string };
+    const { submitted } = JSON.parse(original.input) as { submitted: unknown };
+    return this.begin(space, previous.sessionId!, key, submitted, id);
+  }
+  private begin(space: string, session: string, key: string, raw: unknown, retryOf?: string): RunSubmission {
     const input = messageInputSchema.parse(raw);
     if (this.closing) throw new BusinessError(503, '服务正在关闭。');
     if (!this.available) throw new BusinessError(503, '教学模型未配置或模型不匹配；请检查服务端配置。');
-    const id = this.learning.once(key, `agent:${space}:${session}`, input, () => {
+    const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => {
       const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
       if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
         throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
       }
-      this.learning.addMessage(space, session, input);
+      if (!retryOf) this.learning.addMessage(space, session, input);
       const id = randomUUID();
       this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
-      this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
+      this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input }), Date.now());
       this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, session, id, Date.now());
       this.emit(space, id, { type: 'state', state: 'pending', error: null });
       return id;
@@ -121,7 +132,7 @@ export class TeachingRuntime {
     let failure = '', request = 0, calls = 0, output = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const scenario = this.options.scenario?.(frozen) ?? { tools: [], commit() {} };
+      const scenario = this.options.scenario?.(frozen) ?? createScenario(this.learning, frozen);
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({
         initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: 'off' },
@@ -169,6 +180,7 @@ export class TeachingRuntime {
           }
         }
         if (!active(this.get(space, id))) return;
+        if (event.type === 'tool_execution_end' && event.isError) failure = '工具调用或结构化产物无效，未保存生成产物。';
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
           const delta = event.assistantMessageEvent.delta;
           this.learning.db.transaction(() => {
@@ -179,7 +191,9 @@ export class TeachingRuntime {
         if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') this.emit(space, id,
           { type: 'tool', name: event.toolName, phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
-      await agent.prompt({ role: 'user', content: text, timestamp: Date.now() });
+      await agent.prompt({ role: 'user', content: frozen.references.length ? [
+        { type: 'text', text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },
+      ] : text, timestamp: Date.now() });
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
