@@ -146,7 +146,7 @@ export class Learning {
     const submitted = this.db.prepare('SELECT MAX(attempt) AS n FROM submissions WHERE space_id=? AND unit_id=?').get(space, id) as { n: number | null };
     const evaluated: AssessmentRecord[] = records.map(({ result, answers, ...r }) => {
       const value = JSON.parse(result);
-      const valid = value.verification === 'non-execution' && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
+      const valid = ['non-execution', 'execution-verified'].includes(value.verification) && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
         && value.sources?.requirement === versions.requirement && value.sources?.route === versions.route;
       return { ...r, ...value, valid, answers: JSON.parse(answers) };
     });

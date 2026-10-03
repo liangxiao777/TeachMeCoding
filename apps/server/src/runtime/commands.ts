@@ -10,7 +10,7 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
   if (signal.aborted) return { status: 'cancelled', output: '', exitCode: null, signal: null };
   return new Promise((resolve) => {
     const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], { cwd, env: terminalEnvironment(process.env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = Buffer.alloc(0), status: CommandResult['status'] | undefined, cleanup: Promise<void> | undefined;
+    let output = Buffer.alloc(0), stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), status: CommandResult['status'] | undefined, cleanup: Promise<void> | undefined;
     const stop = (reason: CommandResult['status']) => {
       if (status) return;
       status = reason;
@@ -22,21 +22,23 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
     const timer = setTimeout(() => stop('timed-out'), limits.milliseconds);
-    const data = (value: Buffer) => {
+    const data = (value: Buffer, channel: 'stdout' | 'stderr') => {
       const remaining = limits.outputBytes - output.length;
-      output = Buffer.concat([output, value.subarray(0, remaining)]);
+      const chunk = value.subarray(0, remaining);
+      output = Buffer.concat([output, chunk]);
+      if (channel === 'stdout') stdout = Buffer.concat([stdout, chunk]); else stderr = Buffer.concat([stderr, chunk]);
       if (value.length > remaining) stop('output-limit');
     };
-    child.stdout.on('data', data); child.stderr.on('data', data);
+    child.stdout.on('data', (v: Buffer) => data(v, 'stdout')); child.stderr.on('data', (v: Buffer) => data(v, 'stderr'));
     child.on('error', () => { status = signal.aborted ? 'cancelled' : 'unavailable'; });
     // Kill remaining members of the detached process group even on normal
     // shell exit, so a background writer cannot outlive the operation.
-    child.on('exit', () => { if (child.pid && !cleanup) cleanup = stopProcesses(groupMembers(child.pid)); });
+    child.on('exit', () => { clearTimeout(timer); if (child.pid && !cleanup) cleanup = stopProcesses(groupMembers(child.pid)); });
     child.on('close', (code, exitSignal) => {
       clearTimeout(timer); signal.removeEventListener('abort', abort);
       void (async () => {
         await cleanup;
-        resolve({ status: status ?? (code === 0 ? 'succeeded' : code === 127 ? 'unavailable' : 'failed'), output: output.toString('utf8'), exitCode: code, signal: exitSignal });
+        resolve({ status: status ?? (code === 0 ? 'succeeded' : code === 127 ? 'unavailable' : 'failed'), output: output.toString('utf8'), stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), exitCode: code, signal: exitSignal });
       })();
     });
   });

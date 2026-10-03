@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { assessmentResultSchema, assessmentSpecSchema, generationInputSchema, type AssessmentSpec } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, generationInputSchema, type AssessmentSpec, type CodeExecution } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from './learning.js';
 import { hash } from '../agents/context.js';
 
@@ -8,7 +8,7 @@ const criterion = z.object({ answer: z.string().min(1).max(6000), criteria: z.ar
 export const assessmentArtifactSchema = z.object({ public: assessmentSpecSchema, rubric: z.object({ q1: criterion, q2: criterion }).strict() }).strict();
 export const evaluationArtifactSchema = assessmentResultSchema.extend({ result: z.enum(['pass', 'needs_work']) });
 export type AssessmentSources = { requirement: number; route: number; lesson: number };
-type ExecutionEvidence = { kind: 'none' } | { kind: 'fixture'; status: 'succeeded' | 'failed'; output: string };
+type ExecutionEvidence = { kind: 'none' } | { kind: 'fixture'; status: 'succeeded' | 'failed'; output: string } | { kind: 'local'; execution: CodeExecution };
 export interface FixedAssessment {
   revision: number; public: AssessmentSpec; rubric: z.infer<typeof assessmentArtifactSchema>['rubric']; sources: AssessmentSources;
   submission: { id: string; attempt: number; answers: { q1: string; q2: string }; answerHash: string; evidence: ExecutionEvidence; createdAt: number };
@@ -55,15 +55,27 @@ export class Assessments {
       // Retry evaluates exactly the same submission; a committed result cannot be replaced.
       if (l.db.prepare('SELECT 1 FROM assessments WHERE space_id=? AND id=?').get(space, fixed.submission.id)) return l.record(space, fixed.submission.id);
       const code = fixed.public.q2Kind === 'code';
-      const verification = code ? fixed.submission.evidence.kind === 'fixture' && fixed.submission.evidence.status === 'failed' ? 'execution-failed' : 'execution-unverified' : 'non-execution';
-      const result = { ...proposed, result: code ? 'unverified' as const : proposed.result, verification,
+      let execution: CodeExecution | undefined;
+      if (fixed.submission.evidence.kind === 'local') {
+        const row = l.db.prepare('SELECT value FROM code_executions WHERE space_id=? AND id=?').get(space, fixed.submission.evidence.execution.id) as { value: string } | undefined;
+        if (row) {
+          const value = JSON.parse(row.value) as CodeExecution;
+          if (value.unitId === unit && value.submissionId === fixed.submission.id && value.specRevision === fixed.revision
+            && value.codeHash === hash(fixed.submission.answers.q2) && hash(value.plan) === hash(fixed.public.execution)) execution = value;
+        }
+      }
+      const checked = execution?.state === 'succeeded' && execution.results.length === execution.plan.cases.length && execution.results.every((r) => r.result.status === 'succeeded');
+      const matched = checked && execution?.results.every((r) => r.matches);
+      const unverified = code && !checked;
+      const verification = !code ? 'non-execution' : checked ? 'execution-verified' : execution || fixed.submission.evidence.kind === 'fixture' && fixed.submission.evidence.status === 'failed' ? 'execution-failed' : 'execution-unverified';
+      const result = { ...proposed, result: unverified ? 'unverified' as const : code && !matched ? 'needs_work' as const : proposed.result, verification, execution,
         specRevision: fixed.revision, lessonRevision: fixed.sources.lesson, answerHash: fixed.submission.answerHash,
         sources: fixed.sources, q2Kind: fixed.public.q2Kind,
-        // Static/code fixture feedback is not evidence of executed correctness or mastery.
-        mastered: code ? [] : proposed.mastered,
-        summary: code ? `代码尚未通过真实执行验证。${proposed.summary}` : proposed.summary,
-        evidence: [code ? '只进行了静态模型评估；未运行所提交代码。' : '基于固定题目、rubric 和提交答案的非执行模型评估。', ...proposed.evidence],
-        toVerify: code ? ['需在 M5 接入真实本机执行后验证代码；模拟执行不能证明通过。', ...proposed.toVerify] : proposed.toVerify };
+        mastered: code && !matched ? [] : proposed.mastered,
+        summary: unverified ? `代码尚未通过真实执行验证。${execution ? '本机执行未完成或失败，不能据此判定掌握。' : ''}${proposed.summary}` : code && !matched ? `实际输出与测试期望不符。${proposed.summary}` : proposed.summary,
+        evidence: [execution ? `执行 ${execution.id}，代码 SHA-256 ${execution.codeHash}；${execution.state}，匹配 ${execution.results.filter((r) => r.matches).length}/${execution.plan.cases.length} 个公开用例。`
+          : code ? '只进行了静态模型评估；未运行所提交代码。' : '基于固定题目、rubric 和提交答案的非执行模型评估。', ...proposed.evidence],
+        toVerify: unverified ? ['需要完整的真实执行证据；缺工具链请自行配置，不自动安装。', ...proposed.toVerify] : proposed.toVerify };
       l.db.prepare('INSERT INTO assessments VALUES (?,?,?,?,?,?,?)').run(space, unit, fixed.submission.id, fixed.submission.attempt,
         JSON.stringify(fixed.submission.answers), JSON.stringify(result), Date.now());
       const current = l.unit(space, unit), record = current.records.find((r) => r.id === fixed.submission.id)!;

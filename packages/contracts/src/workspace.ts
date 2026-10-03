@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { codePlanSchema, type CodeExecution } from './execution.js';
 
 export const idSchema = z.string().uuid();
 const text = z.string().max(100_000);
@@ -37,9 +38,9 @@ export const conclusionSchema = z.object({ text: z.string().trim().min(1).max(20
 export const conclusionDecisionSchema = z.object({ revision: z.number().int().nonnegative(), adopted: z.boolean() }).strict();
 export const generationInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['lesson', 'assessment']), revision: z.number().int().nonnegative() }).strict(),
-  z.object({ kind: z.literal('evaluation'), revision: z.number().int().nonnegative(), specRevision: z.number().int().positive(), q1: text, q2: text }).strict(),
+  z.object({ kind: z.literal('evaluation'), revision: z.number().int().nonnegative(), specRevision: z.number().int().positive(), q1: text, q2: text, execute: z.boolean().optional() }).strict(),
 ]);
-export const assessmentSpecSchema = z.object({ q1: title, q2: text, starter: text, q2Kind: z.enum(['code', 'reasoning']).default('code') }).strict();
+export const assessmentSpecSchema = z.object({ q1: title, q2: text, starter: text, q2Kind: z.enum(['code', 'reasoning']).default('code'), execution: codePlanSchema.optional() }).strict();
 export const assessmentResultSchema = z.object({ result: z.enum(['pass', 'needs_work', 'unverified']), summary: text,
   mastered: z.array(text).max(100), concerns: z.array(text).max(100), evidence: z.array(text).max(100), toVerify: z.array(text).max(100),
 }).strict();
@@ -59,7 +60,7 @@ export interface Message { id: string; role: 'user' | 'agent'; text: string; quo
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
-  valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed'; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
+  valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
 export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null }

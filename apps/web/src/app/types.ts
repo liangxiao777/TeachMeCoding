@@ -1,3 +1,5 @@
+import type { CodeExecution, CodePlan } from '@teach-me-coding/contracts'
+
 export type UnitStatus = 'not_started' | 'learning' | 'needs_work' | 'passed' | 'skipped'
 export type ContentState = 'none' | 'generating' | 'ready' | 'failed'
 
@@ -111,6 +113,7 @@ export interface AssessmentRecord {
   valid?: boolean
   verification?: string
   q2Kind?: 'code' | 'reasoning'
+  execution?: CodeExecution
 }
 
 export type SpaceView = 'onboarding' | 'planning' | 'route' | 'unit' | 'assessment' | 'result'
@@ -201,6 +204,7 @@ export interface Lesson {
 export interface AssessmentSpec {
   abilities: string[]
   q2Kind?: 'code' | 'reasoning'
+  execution?: CodePlan
   q1: { title: string; prompt: string; code?: string }
   q2: { title: string; prompt: string; starter: string; file: string; expected?: string }
 }

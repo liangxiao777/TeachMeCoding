@@ -28,6 +28,21 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     if (!agents?.actions) throw new BusinessError(503, '本机确认执行不可用。');
     return c.json(agents.actions.decide(c.req.param('space'), c.req.param('action'), await c.req.json()));
   });
+  api.get('/spaces/:space/units/:unit/executions', (c) => {
+    learning.unit(c.req.param('space'), c.req.param('unit'));
+    return c.json(agents?.executions?.list(c.req.param('space'), c.req.param('unit')) ?? []);
+  });
+  api.post('/spaces/:space/units/:unit/executions', async (c) => {
+    if (!agents?.executions) throw new BusinessError(503, '本机执行不可用。');
+    const { space, unit } = c.req.param(), input: unknown = await c.req.json();
+    const e = learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => agents.executions!.create(space, unit, input));
+    void agents.executions.run(space, e.id).catch(() => { console.error('Cannot persist local execution result. Check data directory permissions and available space.'); });
+    return c.json(agents.executions.get(space, e.id));
+  });
+  api.post('/spaces/:space/executions/:execution/stop', (c) => {
+    if (!agents?.executions) throw new BusinessError(503, '本机执行不可用。');
+    return c.json(agents.executions.stop(c.req.param('space'), c.req.param('execution')));
+  });
   if (agents) {
     api.post('/spaces/:space/plan', async (c) => c.json(agents.plan(c.req.param('space'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/tasks/:task/retry', (c) => c.json(agents.retryTask(c.req.param('space'), c.req.param('task'), c.req.header('Idempotency-Key') ?? '')));

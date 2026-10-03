@@ -27,6 +27,7 @@ export function openDataDirectory(directory: string) {
     const db = openDatabase(join(root, 'app.db'));
     try {
       db.transaction(() => {
+        db.prepare(`UPDATE code_executions SET value=json_set(value,'$.state','interrupted') WHERE json_extract(value,'$.state') IN ('pending','running')`).run();
         db.prepare(`UPDATE action_proposals SET value=json_set(value,'$.state',
           CASE json_extract(value,'$.state') WHEN 'running' THEN 'interrupted' ELSE 'expired' END)
           WHERE json_extract(value,'$.state') IN ('pending','running')`).run();

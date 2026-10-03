@@ -12,6 +12,7 @@ import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
 import { Assessments } from '../modules/assessments.js';
 import type { Actions } from '../modules/actions.js';
+import type { Executions } from '../modules/executions.js';
 import { sealToolCalls } from '../storage/agent-messages.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
@@ -22,6 +23,7 @@ interface RuntimeOptions {
   debugDirectory?: string;
   projectDirectory?: (space: string) => string;
   actions?: Actions;
+  executions?: Executions;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
@@ -33,6 +35,7 @@ export class TeachingRuntime {
   }
   get available() { return this.config !== null && this.config.model === teachingModel.id; }
   get actions() { return this.options.actions; }
+  get executions() { return this.options.executions; }
 
   private tables(space: string, id: string) {
     return this.learning.db.prepare('SELECT 1 FROM task_runs WHERE space_id=? AND id=?').get(space, id)
@@ -91,6 +94,11 @@ export class TeachingRuntime {
         lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
         assessmentRevision: u.assessment?.revision ?? 0,
         ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
+      if (input.kind === 'evaluation' && input.execute) {
+        if (!this.executions) throw new BusinessError(503, '本机执行不可用。');
+        const fixed = frozen.evaluation!;
+        fixed.submission.evidence = { kind: 'local', execution: this.executions.create(space, unit, { specRevision: input.specRevision, code: input.q2 }, fixed.submission.id) };
+      }
       const id = randomUUID();
       this.learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,?,'pending')").run(space, id, unit, input.kind);
       this.learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
@@ -190,15 +198,22 @@ export class TeachingRuntime {
         this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
       })();
       this.live.get(id)?.agent?.abort();
+      this.stopExecution(space, id);
     }
     return this.get(space, id);
   }
   async idle(id: string) { await this.live.get(id)?.done; }
+  private stopExecution(space: string, id: string) {
+    const row = this.learning.db.prepare(`SELECT input FROM ${this.tables(space, id).run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
+    const evidence = (JSON.parse(row.input) as FrozenContext).evaluation?.submission.evidence;
+    if (evidence?.kind === 'local') this.executions?.stop(space, evidence.execution.id);
+  }
   async close() {
     this.closing = true;
     for (const [id, entry] of this.live) {
       this.learning.db.transaction(() => this.finish(entry.space, id, 'interrupted', '服务关闭，运行已中断；未自动重放。'))();
       entry.agent?.abort();
+      this.stopExecution(entry.space, id);
     }
     await Promise.all([...this.live.values()].map((entry) => entry.done));
   }
@@ -242,6 +257,14 @@ export class TeachingRuntime {
     let failure = '', toolFailed = false, request = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      const fixed = frozen.evaluation;
+      if (fixed?.submission.evidence.kind === 'local') {
+        if (!this.executions) throw new BusinessError(503, '本机执行不可用。');
+        fixed.submission.evidence.execution = await this.executions.run(space, fixed.submission.evidence.execution.id);
+        this.learning.db.prepare('UPDATE submissions SET evidence=? WHERE space_id=? AND id=?').run(JSON.stringify(fixed.submission.evidence), space, fixed.submission.id);
+        this.learning.db.prepare('UPDATE task_runs SET input=? WHERE space_id=? AND id=?').run(JSON.stringify(frozen), space, id);
+        if (!active(this.get(space, id))) return;
+      }
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({

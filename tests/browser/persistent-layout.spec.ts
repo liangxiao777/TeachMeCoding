@@ -73,8 +73,9 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   const code = page.getByRole('textbox', { name: '编辑 layout.rs', exact: true });
   const draft = page.getByRole('textbox', { name: '向 Agent 提问', exact: true });
   const ide = page.getByRole('region', { name: 'IDE 与终端', exact: true });
-  // The terminal is a resizable panel containing a log, not a standalone region.
-  const terminalPanel = ide.locator('[data-slot="resizable-panel"]').filter({ has: page.getByRole('log', { name: '终端输出', exact: true }) });
+  // The original resizable panel now contains the actual xterm input, not a fixture log.
+  const terminalInput = page.getByRole('textbox', { name: '本机终端输入', exact: true });
+  const terminalPanel = ide.locator('[data-slot="resizable-panel"]').filter({ has: terminalInput });
   await code.fill('fn main() {\n    println!("local project");\n}\n');
   await page.getByRole('button', { name: '保存文件', exact: true }).click();
   await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
@@ -88,7 +89,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   expect(tree.y + tree.height).toBeGreaterThan(960);
   expect(terminal.x).toBeGreaterThan(editor.x);
   expect(Math.abs(terminal.y - editor.y)).toBeLessThan(100);
-  await expect(page.getByRole('textbox', { name: '终端命令', exact: true })).toBeDisabled();
+  await expect(terminalInput).toBeEnabled();
   await capture(page, info, 'ide-normal');
 
   const initialHeight = (await box(ide)).height;

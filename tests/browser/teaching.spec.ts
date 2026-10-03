@@ -590,3 +590,95 @@ test('local proposals require confirmation, recover pending cards and return rea
   await expect(last).toContainText('已取消');
   await expect(page.getByRole('treeitem', { name: 'must-not-exist', exact: true })).toHaveCount(0);
 });
+
+test('real code assessment shows errors and cancellation, fixes output and keeps newer drafts separate', async ({ page }, info) => {
+  test.setTimeout(90000);
+  const name = `真实代码测评 ${info.project.name}`;
+  await create(page, name);
+  await expect(page.locator('dd').filter({ hasText: /^真实代码测评$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  const code = page.getByLabel('编辑 代码答案', { exact: true }), result = page.getByTestId('code-execution');
+  await expect(page.getByText(/不是沙箱，拥有服务账号权限/)).toBeVisible();
+  await page.getByText('查看执行命令和公开测试', { exact: true }).click();
+  await expect(page.getByText("$ node answer.js 'red' 'blue'", { exact: false })).toBeVisible();
+  await page.getByLabel('你的回答', { exact: true }).fill('参数由程序的调用者提供');
+  await code.fill('syntax error !');
+  let dropped = false;
+  await page.route('**/units/*/executions', async (route) => {
+    if (!dropped && route.request().method() === 'POST') { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await page.getByRole('button', { name: '运行', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(result).toContainText('SyntaxError');
+  await expect(result).toContainText('执行失败');
+  const stderr = result.locator('pre');
+  await expect.poll(() => stderr.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  await stderr.evaluate((e) => { e.scrollTop = e.scrollHeight; });
+  await expect.poll(() => stderr.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+  await stderr.evaluate((e) => { e.scrollTop = 0; });
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await result.scrollIntoViewIfNeeded();
+  await result.screenshot({ path: `.amp/in/artifacts/code-error-${info.project.name}.png` });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await code.fill('while(true) {}');
+  let staleListDelivered = false;
+  await page.route('**/units/*/executions', async (route) => {
+    if (!staleListDelivered && route.request().method() === 'GET') {
+      const response = await route.fetch(), list = await response.json();
+      if (list.at(-1)?.state === 'running') {
+        // Simulate a list captured before this execution and delivered late.
+        await route.fulfill({ response, json: list.slice(0, -1) }); staleListDelivered = true; return;
+      }
+      await route.fulfill({ response }); return;
+    }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '运行', exact: true }).click();
+  await expect.poll(() => staleListDelivered).toBe(true);
+  await page.waitForTimeout(200); // Allow the stale business refresh to render.
+  await expect(result).toContainText('执行中');
+  await page.getByRole('button', { name: '停止代码运行', exact: true }).click();
+  await expect(result).toContainText('已取消或中断');
+  const correct = 'console.log(process.argv.slice(2).length)';
+  await code.fill('console.log(2)');
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
+  await code.fill(correct);
+  await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
+  await expect(page.getByText('再巩固一下会更扎实', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(result).toContainText('用例 2 · succeeded · 退出码 0 · 未匹配');
+  await expect(page.getByText('已经掌握', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
+  await expect(page.getByText('console.log(2)', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '重新测评', exact: true }).click();
+  await expect(code).toHaveValue(correct);
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
+  await code.fill('// 第三份新草稿，不属于已提交代码');
+  await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
+  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(result).toContainText('用例 1 · succeeded · 退出码 0 · 输出匹配');
+  await expect(result).toContainText('用例 2 · succeeded · 退出码 0 · 输出匹配');
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await page.getByText('你已经掌握了这个单元', { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/code-verified-${info.project.name}.png` });
+  const saved = await workspace(page, name), unit = saved.route.content.stages[0].units[0].id;
+  const evidence = await page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    return (await fetch(`/api/spaces/${space}/units/${unit}/executions`, { headers: { 'X-TMC-Token': token } })).json();
+  }, { space: saved.id, unit });
+  expect(evidence).toHaveLength(4); // Lost-response retry did not rerun the first program.
+  expect(evidence.at(-1).code).toBe(correct);
+  expect(evidence.at(-1).results.map((r: { result: { stdout: string } }) => r.result.stdout)).toEqual(['2\n', '0\n']);
+  await page.getByRole('button', { name: '返回单元', exact: true }).click();
+  await page.getByRole('button', { name: '继续测评', exact: true }).click();
+  await expect(code).toHaveValue('// 第三份新草稿，不属于已提交代码');
+  await expect(page.getByText('以下输出属于较早的固定代码；当前新草稿尚未运行。', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(code).toHaveValue('// 第三份新草稿，不属于已提交代码');
+  await expect(page.getByText(/不是沙箱，拥有服务账号权限/)).toBeVisible();
+});

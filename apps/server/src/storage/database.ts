@@ -74,6 +74,8 @@ export const migrations = [
   `CREATE TABLE action_proposals (space_id TEXT NOT NULL, id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT NOT NULL,
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id),
      FOREIGN KEY(space_id,session_id) REFERENCES sessions(space_id,id), FOREIGN KEY(space_id,run_id) REFERENCES runs(space_id,id));`,
+  `CREATE TABLE code_executions (space_id TEXT NOT NULL, id TEXT NOT NULL, unit_id TEXT NOT NULL,
+     value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id));`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

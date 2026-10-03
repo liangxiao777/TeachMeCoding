@@ -21,6 +21,7 @@ import { Separator } from '@/components/ui/separator'
 import { findUnit, nextUnit, relativeTime } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
+import { ExecutionResult } from './execution-result'
 
 function Section({
   icon: Icon,
@@ -96,7 +97,7 @@ export function ResultView() {
   )
   const passed = record.result === 'pass'
   const unverified = record.result === 'unverified'
-  const expired = record.verification === 'non-execution' && record.valid === false
+  const expired = ['non-execution', 'execution-verified'].includes(record.verification ?? '') && record.valid === false
   const unit = findUnit(space, record.unitId)
   const next = nextUnit(space, record.unitId)
   const isLatest = [...space.records].reverse().find((r) => r.unitId === record.unitId)?.id === record.id
@@ -150,6 +151,7 @@ export function ResultView() {
         </div>
         <Section icon={Quote} title="判断依据" items={record.evidence} tone="muted" />
         <Section icon={HelpCircle} title="尚未验证" items={record.toVerify} tone="muted" onAsk={ask} />
+        {record.execution && <ExecutionResult execution={record.execution} />}
 
         <Collapsible className="rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">

@@ -60,11 +60,12 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }
     if (has('submit_assessment')) return response(reply([{ type: 'toolCall', id: 'assessment-call', name: 'submit_assessment', arguments: {
-      public: { q1: '解释命令行参数来自哪里', q2: all.includes('纯推理') ? '说明零个参数与两个参数的区别' : '读取并输出参数个数', starter: 'import sys\n', q2Kind: all.includes('纯推理') ? 'reasoning' : 'code' },
+      public: { q1: '解释命令行参数来自哪里', q2: all.includes('纯推理') ? '说明零个参数与两个参数的区别' : '读取并输出参数个数', starter: all.includes('真实代码测评') ? '// 输出参数个数\n' : 'import sys\n', q2Kind: all.includes('纯推理') ? 'reasoning' : 'code',
+        ...(all.includes('真实代码测评') ? { execution: { language: 'javascript', cases: [{ args: ['red', 'blue'], expected: '2' }, { args: [], expected: '0' }] } } : {}) },
       rubric: { q1: { answer: 'PRIVATE-RUBRIC', criteria: ['调用者'] }, q2: { answer: 'PRIVATE-CODE', criteria: ['正确计数'] } },
     } }], 'toolUse'));
     if (has('submit_evaluation')) return response(reply([{ type: 'toolCall', id: 'evaluation-call', name: 'submit_evaluation', arguments: {
-      result: 'pass', summary: '静态分析已完成。', mastered: ['参数读取'], concerns: ['还需验证边界输入'], evidence: ['答案提到程序的调用者'], toVerify: ['实际执行'],
+      result: 'pass', summary: all.includes('codeHash') ? '已核对固定作答与本机执行证据。' : '静态分析已完成。', mastered: ['参数读取'], concerns: ['还需验证边界输入'], evidence: ['答案提到程序的调用者'], toVerify: [all.includes('codeHash') ? '公开用例之外的输入' : '实际执行'],
     } }], 'toolUse'));
     if (has('submit_lesson')) return response(reply([{ type: 'toolCall', id: 'lesson-call', name: 'submit_lesson', arguments: {
       title: '参数与输入', intro: '从一个小工具开始理解命令行参数。', blocks: [
@@ -77,7 +78,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
     } }], 'toolUse'));
     if (!has('submit_route_proposal') && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
-      goal: text.includes('纯推理') ? '纯推理' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
+      goal: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
     } }], 'toolUse'));
   }
   if (has('submit_route_proposal')) {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
-import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
@@ -21,6 +21,7 @@ interface StoredSpace {
   planningError: string | null
   taskParts: Record<string, AgentDisplayPart[]>
   actions: ActionProposal[]
+  executions: CodeExecution[]
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
@@ -45,7 +46,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   const metadata = saved.route.content?.stages.flatMap((stage) => stage.units) ?? []
   const completedTasks = [...new Map(saved.tasks.map((task) => [`${task.unitId}:${task.kind}`, task])).values()]
     .filter((task) => !['pending', 'running'].includes(task.state))
-  const [sessions, units, tree, taskEntries, actionGroups] = await Promise.all([
+  const [sessions, units, tree, taskEntries, actionGroups, executionGroups] = await Promise.all([
     Promise.all(saved.sessions.map((s) => api<SessionDetail>(`/spaces/${saved.id}/sessions/${s.id}`))),
     Promise.all(metadata.map((unit) => api<UnitDetail>(`/spaces/${saved.id}/units/${unit.id}`))),
     api<ProjectEntry[]>(`/spaces/${saved.id}/project/tree`),
@@ -62,6 +63,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       return [task.id, parts]
     })),
     Promise.all(saved.sessions.map((s) => api<ActionProposal[]>(`/spaces/${saved.id}/sessions/${s.id}/actions`))),
+    Promise.all(metadata.map((u) => api<CodeExecution[]>(`/spaces/${saved.id}/units/${u.id}/executions`))),
   ])
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
@@ -81,7 +83,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
     selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
   }
-  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), actions: actionGroups.flat(),
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), actions: actionGroups.flat(), executions: executionGroups.flat(),
     ui: {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
@@ -242,7 +244,14 @@ export function usePersistentModel(): AppModel {
         const known = s.actions.find((p) => p.id === fresh.id)
         return known && (!['pending', 'running'].includes(known.state) || known.state === 'running' && fresh.state === 'pending') ? known : fresh
       })
-      return { ...s, actions, saved: { ...loaded.saved, requirement, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
+      const executions = loaded.executions.map((fresh) => {
+        const known = s.executions.find((e) => e.id === fresh.id)
+        return known && (!['pending', 'running'].includes(known.state) || known.state === 'running' && fresh.state === 'pending' || known.results.length > fresh.results.length) ? known : fresh
+      })
+      // A refresh started before a new execution must not erase its stop control.
+      executions.push(...s.executions.filter((known) => !executions.some((e) => e.id === known.id)))
+      executions.sort((a, b) => a.createdAt - b.createdAt)
+      return { ...s, actions, executions, saved: { ...loaded.saved, requirement, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
           ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
           currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
@@ -385,7 +394,7 @@ export function usePersistentModel(): AppModel {
     change(space, (s) => ({ ...s, disk: null, files: { ...s.files, [path]: saved } }))
   }
   useEffect(() => {
-    const active = Object.values(cache.current).filter((s) => s.actions.some((p) => p.state === 'running'))
+    const active = Object.values(cache.current).filter((s) => s.actions.some((p) => p.state === 'running') || s.executions.some((e) => ['pending', 'running'].includes(e.state)))
     if (!active.length) return
     const timer = setTimeout(() => {
       void Promise.all(active.map(async (s) => { await refreshBusiness(s.ui.id); await refreshFiles(s.ui.id) }))
@@ -436,7 +445,7 @@ export function usePersistentModel(): AppModel {
   const assessmentTask = (space: string, unit: string, kind: 'assessment' | 'evaluation') => {
     const entry = cache.current[space]!, detail = entry.units[unit]!, draft = entry.drafts[unit]!
     const input = kind === 'assessment' ? { kind, revision: detail.assessment?.revision ?? 0 }
-      : { kind, revision: detail.draft.revision, specRevision: detail.assessment?.revision, ...answers(draft) }
+      : { kind, revision: detail.draft.revision, specRevision: detail.assessment?.revision, ...answers(draft), execute: detail.assessment?.q2Kind === 'code' && !!detail.assessment.execution }
     void run(`${kind}:${space}:${unit}`, async () => {
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, input)
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] } }))
@@ -475,7 +484,7 @@ export function usePersistentModel(): AppModel {
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment
-      return spec ? { abilities: unit.goals, q2Kind: spec.q2Kind, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
+      return spec ? { abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
     },
     goHome: () => { setCurrentId(null); setGlobalView('home') },
     goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
@@ -599,7 +608,13 @@ export function usePersistentModel(): AppModel {
     updateDraft: (patch) => { if (!current?.draft) return; const unit = current.draft.unitId
       change(current.id, (s) => { const draft = { ...s.drafts[unit]!, ...patch }; return { ...s, drafts: { ...s.drafts, [unit]: draft }, ui: { ...s.ui, draft } } })
     },
-    runDraft: unavailable,
+    runDraft: () => { if (!current?.draft || !selected) return
+      const space = current.id, unit = current.draft.unitId, input = { specRevision: selected.units[unit]!.assessment?.revision, code: current.draft.q2 }
+      void run(`code:${space}:${unit}`, async () => {
+        const execution = await api<CodeExecution>(`/spaces/${space}/units/${unit}/executions`, input)
+        change(space, (s) => ({ ...s, executions: [...s.executions.filter((e) => e.id !== execution.id), execution] }))
+      })
+    },
     submitAssessment: () => { if (current?.draft) assessmentTask(current.id, current.draft.unitId, 'evaluation') },
     leaveAssessment: () => navigate('unit'),
     viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!; changeUi(current.id, (s) => ({ ...s, viewingRecordId: id, currentUnitId: record.unitId, view: 'result', ideFullscreen: false })) },
@@ -609,6 +624,8 @@ export function usePersistentModel(): AppModel {
       ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
       planning: { run: selected ? latestPlan(selected.saved) : undefined, error: selected?.planningError ?? null },
       conclusions: selected?.saved.conclusions ?? [],
+      execution: selected?.executions.filter((e) => e.unitId === recordUnit).at(-1),
+      stopExecution: (id) => { if (current) void run(`stop-code:${id}`, async () => { await api(`/spaces/${current.id}/executions/${id}/stop`, {}); await refreshBusiness(current.id) }) },
       actions: selected?.actions ?? [],
       decideAction: (id, decision) => { if (!current || !selected) return
         const space = current.id, proposal = selected.actions.find((p) => p.id === id)!

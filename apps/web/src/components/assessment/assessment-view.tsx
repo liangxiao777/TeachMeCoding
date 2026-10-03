@@ -12,6 +12,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { CodeEditor, TermOutput } from '@/components/workbench/ide-panel'
 import { findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
+import { codeCommands } from '@teach-me-coding/contracts'
+import { ExecutionResult } from './execution-result'
 
 function QuestionHeader({ n, title, prompt }: { n: number; title: string; prompt: string }) {
   return (
@@ -49,7 +51,9 @@ export function AssessmentView() {
     </div>
   )
   const spec = getAssessment(unit)
-  const canRun = !!spec && capabilities.assessment && capabilities.terminal
+  const canRun = !!spec && capabilities.assessment && capabilities.terminal && (!persistence || !!spec.execution)
+  const execution = persistence?.execution
+  const executing = !!execution && ['pending', 'running'].includes(execution.state)
   const storageBusy = !!persistence && (!persistence.ready || persistence.busy)
   const task = persistence?.tasks.filter((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind)).at(-1)
   const activeTask = task && ['pending', 'running'].includes(task.state)
@@ -104,8 +108,8 @@ export function AssessmentView() {
         {persistence && capabilities.assessment && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm" role="status">
             <span className="flex-1">{activeTask ? task.kind === 'evaluation'
-              ? '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
-              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : '代码题仅作静态评估，不代表运行通过。'}</span>
+              ? spec?.execution ? '正在运行并评估固定提交；你可以继续编辑新草稿。' : '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
+              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : spec?.execution ? '提交测评将执行固定代码，并绑定本次执行证据。' : '代码题仅作静态评估，不代表运行通过。'}</span>
             {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>停止任务</Button> : <>
               {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>重试原任务</Button>}
               <Button size="sm" variant="outline" disabled={storageBusy} onClick={persistence.generateAssessment}>{spec ? '重新出题' : '生成题目'}</Button>
@@ -160,19 +164,30 @@ export function AssessmentView() {
                 <CardHeader><CardTitle>代码答案草稿</CardTitle></CardHeader>
               )}
               <CardContent>
+                {persistence && spec?.execution && <div className="mb-4 space-y-2 text-xs">
+                  <p>点击「运行」或「提交测评」即在本机运行当前代码快照。每个用例在一次性目录执行，不依赖项目文件；不是沙箱，拥有服务账号权限。总计最多 30 秒、256 KiB 输出，不自动安装环境，取消不回滚。</p>
+                  <details><summary className="cursor-pointer">查看执行命令和公开测试</summary>
+                    {codeCommands(spec.execution).map((command, i) => <pre key={i} className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{`$ ${command}\n期望标准输出：${spec.execution!.cases[i]!.expected}`}</pre>)}
+                  </details>
+                </div>}
                 {spec?.q2Kind === 'reasoning' ? <Textarea aria-label="分析题回答" rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
                   <div className="flex items-center justify-between border-b py-1.5 pr-1.5 pl-3">
                     <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? '代码答案草稿'}</span>
                     {persistence && spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>载入起始代码</Button>}
-                    <Button size="xs" disabled={!canRun || draft.q2Running || storageBusy} onClick={runDraft}>
+                    <Button size="xs" disabled={!canRun || draft.q2Running || executing || storageBusy || !!activeTask} onClick={runDraft}>
                       {canRun && draft.q2Running ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
                       运行
                     </Button>
                   </div>
                   <CodeEditor className="h-64" label={spec ? `编辑 ${spec.q2.file}` : '代码答案草稿'} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
                   <div className="min-h-16 border-t px-3 py-2 font-mono text-xs leading-5" aria-live="polite">
-                    {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{canRun ? '运行后在这里查看输出' : '代码运行暂不可用，不会执行模拟运行。'}</p>}
+                    {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{execution ? '固定代码的执行结果见下方。' : canRun ? '运行后在这里查看输出' : '代码运行暂不可用，不会执行模拟运行。'}</p>}
                   </div>
+                </div>}
+                {persistence && execution && <div className="mt-4 space-y-2">
+                  {execution.code !== draft.q2 && <p role="status" className="text-xs text-muted-foreground">以下输出属于较早的固定代码；当前新草稿尚未运行。</p>}
+                  <ExecutionResult execution={execution} />
+                  {executing && <Button size="sm" variant="outline" onClick={() => persistence.stopExecution(execution.id)}>停止代码运行</Button>}
                 </div>}
               </CardContent>
             </Card>
@@ -193,7 +208,7 @@ export function AssessmentView() {
                   保存答案草稿
                 </Button>
               )}
-              <Button size="lg" onClick={submitAssessment} disabled={!spec || !capabilities.assessment || storageBusy || !!activeTask || !draft.q1.trim()}>
+              <Button size="lg" onClick={submitAssessment} disabled={!spec || !capabilities.assessment || storageBusy || executing || !!activeTask || !draft.q1.trim()}>
                 <Send data-icon="inline-start" />
                 提交测评
               </Button>
