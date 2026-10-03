@@ -17,17 +17,40 @@ const ask = async (session: string, text: string) => {
   const { run } = runtime.submit(space.id, session, randomUUID(), { text, quote: null, draftRevision: learning.session(space.id, session).draft.revision });
   await runtime.idle(run.id);
   const final = runtime.get(space.id, run.id);
-  console.log(JSON.stringify({ scenario: run.kind, state: final.state, error: final.error }));
+  console.log(JSON.stringify({ scenario: run.kind, state: final.state, error: final.error,
+    reply: learning.session(space.id, session).messages.find((message) => message.id === run.id)?.text }));
   assert.equal(final.state, 'succeeded');
 };
 try {
   console.log(JSON.stringify({ model: config.model, data: 'synthetic disposable', execution: 'disabled' }));
-  await ask(space.sessions[0]!.id, '我的目标是学习 Python 函数参数；基础是会变量、if 和循环；成果是写一个带默认参数的问候函数；时间为今天 30 分钟。四项已给全，请调用工具整理需求草稿。');
+  await ask(space.sessions[0]!.id, '我会 Python 的变量、if 和循环，想弄懂函数默认参数，能自己写一个问候函数。什么时候学还没决定，时间先留空。');
   let w = learning.space(space.id);
   assert.ok(w.requirement.revision > 0); assert.equal(w.requirement.confirmed, false);
-  learning.saveRequirement(space.id, { ...w.requirement, confirmed: true });
-  await ask(space.sessions[1]!.id, '请生成只含一个阶段和一个简短单元的路线，聚焦默认参数，调用路线提案工具。');
+  assert.equal(w.requirement.value.schedule, '', 'Do not invent a schedule when the user has not chosen one');
+  console.log(JSON.stringify({ requirement: w.requirement.value }));
+  await ask(space.sessions[0]!.id, '今天有 30 分钟，就学前面说的默认参数，先安排一个短单元就好。');
+  w = learning.space(space.id);
+  assert.equal(w.requirement.confirmed, false);
+  assert.match(w.requirement.value.schedule, /30|三十/);
+  assert.match(w.requirement.value.background, /变量/);
+  assert.match(w.requirement.value.outcome, /问候/);
+  console.log(JSON.stringify({ requirement: w.requirement.value }));
+  const planned = runtime.plan(space.id, randomUUID(), { ...w.requirement, confirmed: true });
+  await runtime.idle(planned.run.id);
+  const plannedFinal = runtime.get(space.id, planned.run.id);
+  console.log(JSON.stringify({ scenario: 'initial-roadmap', state: plannedFinal.state, error: plannedFinal.error,
+    reply: learning.session(space.id, planned.run.sessionId!).messages.find((message) => message.id === planned.run.id)?.text }));
+  assert.equal(plannedFinal.state, 'succeeded');
   w = learning.space(space.id); assert.ok(w.route.content); assert.equal(w.proposals.at(-1)!.state, 'applied');
+  assert.equal(w.route.revision, 1); assert.equal(w.tasks.length, 0);
+  console.log(JSON.stringify({ route: w.route.content }));
+  assert.equal(w.route.content.stages.flatMap((stage) => stage.units).length, 1, 'Respect the requested one-unit scope');
+  await ask(space.sessions[1]!.id, '只改路线说明，在开头加上“先预测，再验证。”，保留现有阶段、单元和其他内容。');
+  const adjustment = learning.space(space.id);
+  assert.deepEqual(adjustment.route, w.route, 'An adjustment must not replace the route before approval');
+  assert.equal(adjustment.proposals.at(-1)!.state, 'pending');
+  assert.match(adjustment.proposals.at(-1)!.content.note, /先预测，再验证/);
+  assert.deepEqual(adjustment.proposals.at(-1)!.content.stages, w.route.content.stages);
   const unit = learning.space(space.id).route.content!.stages[0]!.units[0]!.id;
   const lesson = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 }); await runtime.idle(lesson.id);
   const final = runtime.get(space.id, lesson.id); console.log(JSON.stringify({ scenario: 'lesson', state: final.state, error: final.error }));

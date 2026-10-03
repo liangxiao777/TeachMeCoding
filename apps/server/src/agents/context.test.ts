@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
-import type { Message } from '@earendil-works/pi-ai';
+import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 import { budget, compileContext, compileRequest, retainedMessage, systemPrompt, type FrozenContext } from './context.js';
+import { providerStream, teachingModel } from './model.js';
 import { reply } from './test-support.js';
 
 const input: FrozenContext = { spaceId: 'space', sessionId: 'session', unitId: null, scenario: 'intake',
@@ -19,6 +20,28 @@ test('actual XML resources and hostile data parse as one context, never instruct
   assert.equal(parsed.context.source.length, 2);
   assert.equal(JSON.parse(parsed.context.source[1]['#text']).text, hostile);
   assert.equal(compiled.sources[0]?.revision, 4);
+});
+
+test('real provider adapter sends the scene prompt as instructions and business context as user data', async () => {
+  for (const scenario of ['intake', 'roadmap'] as const) {
+    const frozen: FrozenContext = { ...input, scenario, requirement: { ...input.requirement, confirmed: scenario === 'roadmap' },
+      route: scenario === 'roadmap' ? { revision: 0, content: null } : null };
+    const compiled = compileRequest(frozen, [], [{ role: 'user', content: '学习 Python 默认参数', timestamp: 1 }], []);
+    let payload: { messages: { role: string; content: unknown }[] } | undefined;
+    const stream = await providerStream()(teachingModel, normalizeContext({ messages: compiled.messages }), {
+      apiKey: 'synthetic-test-only',
+      onPayload(value) {
+        payload = value as typeof payload;
+        throw new Error('Stop before network transport');
+      },
+    });
+    assert.equal((await stream.result()).stopReason, 'error');
+    assert.ok(payload);
+    const instructions = payload.messages.filter((m) => m.role === 'system' || m.role === 'developer');
+    assert.deepEqual(instructions.map((m) => m.content), [systemPrompt(scenario)]);
+    assert.ok(payload.messages.some((m) => m.role === 'user' && m.content === compileContext(frozen).xml));
+    assert.deepEqual(payload.messages.at(-1), { role: 'user', content: '学习 Python 默认参数' });
+  }
 });
 
 test('budget boundary includes tools, system and output reserve; current references cannot be dropped', () => {
