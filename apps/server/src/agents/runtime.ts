@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
 import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
@@ -125,6 +125,19 @@ export class TeachingRuntime {
     // Start only after creation, the opening message and the run commit atomically.
     for (const run of created.runs) this.launch(created.id, run.id, input.goal);
     return created;
+  }
+  plan(space: string, key: string, raw: unknown): RunSubmission {
+    const input = saveRequirementSchema.parse(raw);
+    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    const text = '请根据已确认需求生成完整学习路线，调用路线工具提交阶段、单元及安排说明。';
+    const id = this.learning.once(key, `plan:${space}`, input, () => {
+      this.learning.saveRequirement(space, { ...input, confirmed: true });
+      const session = this.learning.space(space).sessions.find((s) => s.scope === 'route')!;
+      return this.recordRun(space, session.id, { text, quote: null, draftRevision: this.learning.session(space, session.id).draft.revision });
+    });
+    this.launch(space, id, text);
+    const run = this.get(space, id);
+    return { run, session: this.learning.session(space, run.sessionId!) };
   }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);

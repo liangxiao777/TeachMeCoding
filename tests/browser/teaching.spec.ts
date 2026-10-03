@@ -39,13 +39,13 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-intake-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
-  await expect(page.getByTestId('route-proposal')).toContainText('参数与输入');
-  await expect(page.getByText('尚无学习路线', { exact: true })).toBeVisible();
-  await page.screenshot({ path: `.amp/in/artifacts/teaching-proposal-${info.project.name}.png`, animations: 'disabled' });
-  await page.reload();
-  await expect(page.getByTestId('route-proposal')).toBeVisible();
-  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
+  await expect(page.getByText(`正在为「${opening.slice(0, 80)}」规划学习路线`, { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '学习需求摘要', exact: true })).toHaveCount(0);
+  await expect(page.getByText('尚无学习路线', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   await expect(page.getByTestId('route-proposal')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
+  await page.reload();
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-route-${info.project.name}.png`, animations: 'disabled' });
@@ -128,7 +128,6 @@ test('reasoning assessment failure retries the same attempt; expired evidence st
   await create(page, `纯推理 ${info.project.name}`);
   await expect(page.locator('dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
-  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
@@ -216,3 +215,114 @@ test('empty requirements are editable and late intake cannot replace saved or un
     await expect(page.locator('dd').filter({ hasText: /^只会 SQL$/ })).toBeVisible();
   }
 });
+
+test('standalone planning survives reload and leaving; only later route adjustments need confirmation', async ({ page }, info) => {
+  test.setTimeout(60000);
+  const goal = `规划恢复 ${info.project.name}`;
+  await create(page, goal);
+  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-SLOW 每周 4 小时');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  const title = page.getByText(`正在为「${goal}」规划学习路线`, { exact: true });
+  await expect(title).toBeVisible();
+  await expect(page.getByRole('progressbar', { name: '生成进度' })).toHaveAttribute('aria-valuenow', '0');
+  await page.screenshot({ path: `.amp/in/artifacts/planning-initial-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(title).toBeVisible();
+  await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('progressbar', { name: '生成进度' })).toHaveAttribute('aria-valuenow', '75', { timeout: 10000 });
+  await page.screenshot({ path: `.amp/in/artifacts/planning-progress-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
+  await expect(title).toHaveCount(0);
+  // Completion updates its own space without navigating away from the space list.
+  await expect.poll(async () => (await workspace(page, goal)).route.content, { timeout: 15000 }).not.toBeNull();
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '继续学习', exact: true }).first().click();
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
+  await expect(page.getByTestId('route-proposal')).toHaveCount(0);
+  const first = await workspace(page, goal);
+  expect(first.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(1);
+  expect(first.tasks).toHaveLength(0); // Route completion must not silently generate lessons.
+  await page.getByRole('textbox', { name: '路线调整想法', exact: true }).fill('保留单元，调整为更多边界练习');
+  await page.getByRole('textbox', { name: '路线调整想法', exact: true }).press('Enter');
+  await expect(page.getByTestId('route-proposal')).toContainText('调整后增加边界练习', { timeout: 15000 });
+  expect((await workspace(page, goal)).route).toEqual(first.route);
+  await page.screenshot({ path: `.amp/in/artifacts/planning-adjustment-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
+  await expect(page.getByTestId('route-proposal')).toHaveCount(0);
+  expect((await workspace(page, goal)).route.content.note).toBe('调整后增加边界练习');
+});
+
+test('planning response loss, provider failure and cancellation remain recoverable without repeating confirmation', async ({ page }, info) => {
+  test.setTimeout(60000);
+  const goal = `规划错误恢复 ${info.project.name}`;
+  await create(page, goal);
+  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-FAIL-ONCE PLAN-SLOW');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  let dropped = false, failedRefresh = false, confirmations = 0;
+  await page.route('**/plan', async (route) => {
+    confirmations++;
+    if (!dropped) { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  const spaceId = new URL(page.url()).searchParams.get('space');
+  await page.route(`**/api/spaces/${spaceId}`, async (route) => {
+    if (!failedRefresh) { failedRefresh = true; await route.abort(); } else await route.continue();
+  });
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect.poll(() => failedRefresh).toBe(true);
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重试规划', exact: true })).toBeVisible({ timeout: 15000 });
+  expect(confirmations).toBe(2); // The successful confirmation is not resubmitted after a failed read.
+  const failed = await workspace(page, goal);
+  expect(failed.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(1);
+  expect(failed.route.content).toBeNull();
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/planning-failed-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '返回修改需求', exact: true }).click();
+  await page.getByRole('button', { name: '查看规划进度', exact: true }).click();
+  await page.getByRole('button', { name: '重试规划', exact: true }).click();
+  await page.getByRole('button', { name: '停止规划', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '路线规划已停止', exact: true })).toBeVisible();
+  let reads = 0, captured = false, delivered = false, release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(`**/api/spaces/${spaceId}`, async (route) => {
+    // The first read boots the page; delay the interrupted run's subsequent refresh.
+    if (++reads !== 2) return route.continue();
+    const response = await route.fetch(); captured = true;
+    await held; await route.fulfill({ response }); delivered = true;
+  });
+  try {
+    await page.reload();
+    await expect(page.getByRole('heading', { name: '路线规划已停止', exact: true })).toBeVisible();
+    await expect.poll(() => captured).toBe(true);
+    expect((await workspace(page, goal)).route.content).toBeNull();
+    await page.getByRole('button', { name: '重试规划', exact: true }).click();
+    await expect(page.getByRole('button', { name: '停止规划', exact: true })).toBeVisible();
+    release();
+    await expect.poll(() => delivered).toBe(true);
+    await expect(page.getByRole('button', { name: '停止规划', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '路线规划已停止', exact: true })).toHaveCount(0);
+  } finally { release(); }
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible({ timeout: 15000 });
+  const completed = await workspace(page, goal);
+  expect(completed.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(3);
+  expect(completed.requirement.revision).toBe(failed.requirement.revision);
+  expect(completed.route.revision).toBe(1);
+});
+
+async function workspace(page: Page, name: string) {
+  return page.evaluate(async (name) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token };
+    const spaces = await (await fetch('/api/spaces', { headers })).json();
+    const id = spaces.find((space: { name: string }) => space.name === name).id;
+    return (await fetch(`/api/spaces/${id}`, { headers })).json();
+  }, name);
+}

@@ -164,7 +164,9 @@ function RequirementCard() {
           {persistence?.requirementConfirmed ? '已确认学习需求' : capabilities.agent ? '确认，开始规划路线' : '确认学习需求'}
         </Button>
         {persistence?.requirementConfirmed && (
-          <Button variant="outline" size="lg" disabled={editing || busy} onClick={() => setView('route')}>查看学习路线</Button>
+          <Button variant="outline" size="lg" disabled={editing || busy} onClick={() => setView(!space.stages.length && persistence.planning.run ? 'planning' : 'route')}>
+            {!space.stages.length && persistence.planning.run ? '查看规划进度' : '查看学习路线'}
+          </Button>
         )}
         <p className="text-center text-xs text-muted-foreground">{capabilities.agent ? '不准确？直接修改，或在左侧继续告诉 Agent' : '不准确？直接修改。左侧仅保存问题，不会自动整理需求或生成路线。'}</p>
       </CardFooter>
@@ -325,18 +327,35 @@ function Chat() {
 
 export function Onboarding() {
   const space = useSpace()
-  const { goSpaces, renameSpace, capabilities, persistence } = useApp()
+  const { goSpaces, renameSpace, setView, retryReply, stopReply, capabilities, persistence } = useApp()
+  const planning = persistence?.planning
+  const planningStopped = planning?.run && ['failed', 'interrupted'].includes(planning.run.state)
 
-  if (space.view === 'planning' && capabilities.agent) {
+  if (space.view === 'planning') {
     return (
       <div className="flex min-h-dvh items-center justify-center px-6">
         <Card className="w-full max-w-md shadow-lg">
           <CardContent>
-            <Generating
+            {planningStopped || persistence && (!capabilities.agent || persistence.error) ? (
+              <div className="flex flex-col gap-3">
+                <h1 className="text-base font-semibold">{planning?.run?.state === 'interrupted' ? '路线规划已停止' : '路线规划未完成'}</h1>
+                <p role="alert" className="text-sm text-muted-foreground">{planning?.error || persistence?.error || '完整路线尚未保存。请重新规划，或返回修改学习需求。'}</p>
+              </div>
+            ) : <Generating
               title={`正在为「${space.name}」规划学习路线`}
               steps={['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
               note="这一步只生成路线和单元概要。每个单元的课件，会在你进入该单元时结合你当时的学习情况再生成。"
-            />
+              activeStep={planning?.step}
+            />}
+            {persistence && <div className="mt-6 flex flex-wrap gap-2">
+              {planning?.run && ['failed', 'interrupted'].includes(planning.run.state) ? (
+                <Button disabled={persistence.busy || !capabilities.agent} onClick={() => retryReply(planning.run!.id)}>重试规划</Button>
+              ) : planning?.run && ['pending', 'running'].includes(planning.run.state) ? (
+                <Button variant="outline" disabled={persistence.busy} onClick={stopReply}>停止规划</Button>
+              ) : null}
+              <Button variant="ghost" onClick={goSpaces}>全部学习空间</Button>
+              {(!planning?.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>返回修改需求</Button>}
+            </div>}
           </CardContent>
         </Card>
       </div>

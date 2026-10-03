@@ -49,7 +49,7 @@ export class Learning {
       sessions: this.all('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id),
       proposals: proposals.map((p) => ({ ...p, content: JSON.parse(p.content) })),
       tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=? ORDER BY rowid', id),
-      runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=?', id),
+      runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=? ORDER BY rowid', id),
       conclusions: this.conclusions(id),
     };
   }

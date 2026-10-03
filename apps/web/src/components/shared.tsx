@@ -132,17 +132,22 @@ export function Generating({
   steps,
   note,
   className,
+  activeStep,
 }: {
   title: string
   steps: string[]
   note?: string
   className?: string
+  /** Omit only for the simulated preview; real work advances on durable events. */
+  activeStep?: number
 }) {
-  const [active, setActive] = useState(0)
+  const [simulated, setActive] = useState(0)
+  const active = activeStep ?? simulated
   useEffect(() => {
+    if (activeStep !== undefined) return
     const t = setInterval(() => setActive((a) => Math.min(a + 1, steps.length - 1)), 750)
     return () => clearInterval(t)
-  }, [steps.length])
+  }, [steps.length, activeStep])
   return (
     <div role="status" aria-live="polite" className={cn('flex flex-col gap-5', className)}>
       <div className="flex items-center gap-3">
@@ -151,7 +156,7 @@ export function Generating({
         </span>
         <p className="text-base font-semibold tracking-tight">{title}</p>
       </div>
-      <Progress value={((active + 1) / steps.length) * 100} aria-label="生成进度" />
+      <Progress value={((active + (activeStep === undefined ? 1 : 0)) / steps.length) * 100} aria-label="生成进度" />
       <ol className="flex flex-col gap-2.5 pl-1">
         {steps.map((s, i) => (
           <li

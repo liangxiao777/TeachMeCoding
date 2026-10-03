@@ -1,6 +1,6 @@
 import { Type } from '@earendil-works/pi-ai';
 import { conclusionSchema, requirementSchema, routeContentSchema, type Requirement, type RouteContent } from '@teach-me-coding/contracts';
-import type { Learning } from '../modules/learning.js';
+import { BusinessError, type Learning } from '../modules/learning.js';
 import type { FrozenContext } from './context.js';
 import type { ScenarioRun } from './runtime.js';
 import { readTools } from './read-tools.js';
@@ -24,17 +24,24 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
     };
   }
   if (input.scenario === 'roadmap') {
+    const initial = input.route!.content === null;
     let proposal: RouteContent | undefined;
     return {
-      tools: [{ name: 'submit_route_proposal', label: '拟定路线提案', description: 'Stage the complete route, retaining existing unit IDs. User confirmation is required.',
+      tools: [{ name: 'submit_route_proposal', label: '拟定路线提案', description: initial
+        ? 'Submit the initial route authorized by requirement confirmation. It is applied after successful completion.'
+        : 'Stage an adjustment to the complete route, retaining existing unit IDs. User confirmation is required.',
         parameters: Type.Unsafe<RouteContent>(JSON.parse(JSON.stringify(routeContentSchema.toJSONSchema()))),
         async execute(_id, args) {
           proposal = routeContentSchema.parse(args);
-          return { content: [{ type: 'text', text: '提案已暂存，尚未应用。' }], details: {} };
+          return { content: [{ type: 'text', text: initial ? '首次路线已暂存，运行成功并通过版本校验后自动应用。' : '调整提案已暂存，等待用户确认后应用。' }], details: {} };
         },
       }],
       commit() {
-        if (proposal) learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision });
+        if (initial && !proposal) throw new BusinessError(422, '未生成完整学习路线，请重试规划。');
+        if (proposal) {
+          const saved = learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision });
+          if (initial) learning.applyProposal(input.spaceId, saved.id);
+        }
       },
     };
   }

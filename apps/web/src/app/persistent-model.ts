@@ -16,8 +16,11 @@ interface StoredSpace {
   files: Record<string, ProjectFile>
   disk: ProjectFile | null
   requirementDraft: Requirement | null
+  planningStep: number
+  planningError: string | null
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
 const composer = (s: Session) => ({ text: s.composerText, quote: s.composerQuote, routeSuggestion: s.routeSuggestion })
 const savedComposer = (s: SessionDetail) => ({ text: s.draft.text, quote: s.draft.quote, routeSuggestion: s.draft.routeSuggestion })
 const answers = (d: { q1: string; q2: string }) => ({ q1: d.q1, q2: d.q2 })
@@ -60,13 +63,14 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
     selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
   }
-  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null,
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningStep: 0, planningError: null,
     ui: {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
       routeNote: saved.route.content?.note ?? '', stages,
       currentUnitId: units.find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')?.id ?? units[0]?.id ?? null,
-      view: saved.route.content ? 'route' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
+      // Older successful runs may have left an explicit proposal; keep it reachable.
+      view: saved.route.content || latestPlan(saved)?.state === 'succeeded' ? 'route' : latestPlan(saved) ? 'planning' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
       ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
       terminal: [], terminalDirectoryId: null, running: false, env: 'disconnected', envLabel: '终端尚未接入',
       ideOpen: false, ideFullscreen: false, explorerOpen: true, agentOpen: true, draft: null, records, viewingRecordId: null,
@@ -136,13 +140,16 @@ export function usePersistentModel(): AppModel {
         const entry = cache.current[id]
         if (!entry) throw new Error('学习空间不存在，请返回首页。')
         const tab = params.get('tab')
-        const view = tab === 'requirement' ? 'onboarding' : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
+        const view = tab === 'requirement' ? 'onboarding' : entry.ui.view === 'planning' || tab === 'planning' ? entry.ui.view
+          : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
         const unitId = params.get('unit') ?? entry.ui.currentUnitId
         entry.ui = { ...entry.ui, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: params.get('record') }
         setCurrentId(id)
       }
       publish(); setReady(true)
-      for (const entry of entries) for (const work of [...entry.saved.runs, ...entry.saved.tasks]) if (['pending', 'running'].includes(work.state)) watchRun(entry.saved.id, work)
+      for (const entry of entries) for (const work of [...entry.saved.runs, ...entry.saved.tasks]) {
+        if (['pending', 'running'].includes(work.state) || !entry.saved.route.content && work.id === latestPlan(entry.saved)?.id) watchRun(entry.saved.id, work)
+      }
     })
   }, [])
   useEffect(() => () => { for (const subscription of subscriptions.current.values()) subscription.abort(); subscriptions.current.clear() }, [])
@@ -187,6 +194,13 @@ export function usePersistentModel(): AppModel {
     const loaded = await loadSpace(await api<Workspace>(`/spaces/${space}`))
     change(space, (s) => {
       const requirement = loaded.saved.requirement.revision >= s.saved.requirement.revision ? loaded.saved.requirement : s.saved.requirement
+      // A terminal refresh may return after the user has already retried the run.
+      const runs = [...loaded.saved.runs]
+      for (const known of s.saved.runs) {
+        const index = runs.findIndex((r) => r.id === known.id)
+        if (index < 0) runs.push(known)
+        else if (!['pending', 'running'].includes(known.state) || known.state === 'running' && runs[index]!.state === 'pending') runs[index] = known
+      }
       const sessions = { ...s.sessions }
       for (const [id, fresh] of Object.entries(loaded.sessions)) if (fresh.draft.revision >= (sessions[id]?.draft.revision ?? 0)) sessions[id] = fresh
       const units = { ...loaded.units }
@@ -196,8 +210,10 @@ export function usePersistentModel(): AppModel {
       }
       const drafts = { ...s.drafts }
       for (const [id, fresh] of Object.entries(loaded.drafts)) drafts[id] = { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }
-      return { ...s, saved: { ...loaded.saved, requirement }, units, drafts,
+      return { ...s, saved: { ...loaded.saved, requirement, runs }, units, drafts,
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
+          ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
+          currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
           requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
           sessions: s.ui.sessions.map((old) => {
             const fresh = loaded.ui.sessions.find((next) => next.id === old.id)
@@ -221,6 +237,13 @@ export function usePersistentModel(): AppModel {
       if (event.data.type === 'text') text += event.data.delta
       if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
       const state = event.data.type === 'state' ? event.data.state : 'running'
+      if (work.sessionId) change(space, (s) => ({ ...s, saved: { ...s.saved, runs: s.saved.runs.map((r) => r.id === work.id ? { ...r, state } : r) },
+        ...(work.id === latestPlan(s.saved)?.id ? {
+          planningError: event.data.type === 'state' ? event.data.error : s.planningError,
+          planningStep: event.data.type === 'tool' && event.data.name === 'submit_route_proposal' && !event.data.failed
+            ? Math.max(s.planningStep, event.data.phase === 'end' ? 3 : 2) : s.planningStep,
+        } : {}),
+      }))
       if (!work.sessionId && event.data.type === 'state') {
         change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: s.saved.tasks.map((t) => t.id === work.id ? { ...t, state } : t) } }))
         if (event.data.error) {
@@ -385,19 +408,15 @@ export function usePersistentModel(): AppModel {
     onboardSend: (text) => { void saveSession(true, text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
-    confirmRequirement: () => { if (!current?.requirement) return
-      const space = current.id
-      void saveRequirement(current.requirement, true).then((saved) => {
-        if (!saved || !capabilities.agent) return
-        changeUi(space, (s) => ({ ...s, view: 'route', agentOpen: true }))
-        const entry = cache.current[space]!, route = Object.values(entry.sessions).find((s) => s.scope === 'route')!
-        const input = { text: '请根据已确认需求生成学习路线提案。', quote: null, draftRevision: route.draft.revision }
-        void run(`plan:${space}`, async () => {
-          const submission = await api<RunSubmission>(`/spaces/${space}/sessions/${route.id}/runs`, input)
-          change(space, (s) => ({ ...s, sessions: { ...s.sessions, [route.id]: submission.session }, ui: { ...s.ui,
-            sessions: s.ui.sessions.map((x) => x.id === route.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
-          watchRun(space, submission.run)
-        })
+    confirmRequirement: () => { if (!current?.requirement || !selected) return
+      if (!capabilities.agent) { void saveRequirement(current.requirement, true); return }
+      const space = current.id, input = { revision: selected.saved.requirement.revision, value: current.requirement, confirmed: true }
+      change(space, (s) => ({ ...s, planningStep: 0, planningError: null, ui: { ...s.ui, view: s.saved.route.content ? 'route' : 'planning', agentOpen: !!s.saved.route.content } }))
+      let submission: RunSubmission | undefined
+      void run(`plan:${space}`, async () => {
+        submission ??= await api<RunSubmission>(`/spaces/${space}/plan`, input)
+        await refreshBusiness(space)
+        watchRun(space, submission.run)
       })
     },
     setView: navigate,
@@ -425,14 +444,16 @@ export function usePersistentModel(): AppModel {
       if (current && text !== undefined && sessionScope(current) === 'route') changeUi(current.id, (s) => ({ ...s, agentOpen: true }))
       return saveSession(true, text)
     },
-    stopReply: () => { if (!current || !session) return
-      const running = session.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
+    stopReply: () => { if (!current) return
+      const running = current.view === 'planning' ? latestPlan(selected!.saved) : session?.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
       if (running) void run(`stop:${running.id}`, () => api(`/spaces/${current.id}/runs/${running.id}/stop`, {}))
     },
     retryReply: (id) => { if (!current) return; const space = current.id
       void run(`retry:${id}`, async () => {
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
-        change(space, (s) => ({ ...s, sessions: { ...s.sessions, [submission.session.id]: submission.session }, ui: { ...s.ui,
+        change(space, (s) => ({ ...s, planningStep: 0, planningError: null,
+          saved: { ...s.saved, runs: [...s.saved.runs.filter((r) => r.id !== submission.run.id), submission.run] },
+          sessions: { ...s.sessions, [submission.session.id]: submission.session }, ui: { ...s.ui,
           sessions: s.ui.sessions.map((x) => x.id === submission.session.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
         watchRun(space, submission.run)
       })
@@ -501,6 +522,7 @@ export function usePersistentModel(): AppModel {
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      planning: { run: selected ? latestPlan(selected.saved) : undefined, step: selected?.planningStep ?? 0, error: selected?.planningError ?? null },
       conclusions: selected?.saved.conclusions ?? [],
       tasks: selected?.saved.tasks ?? [],
       generateAssessment: () => { if (current && recordUnit) assessmentTask(current.id, recordUnit, 'assessment') },

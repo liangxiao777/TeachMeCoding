@@ -60,7 +60,7 @@ TMC_DATA_DIR="$HOME/teach-me-coding-data" pnpm start
 
 原型仍在本机运行时，可执行 `pnpm exec tsx tests/capture-prototype.ts`（默认 3000 端口，可用 `PROTOTYPE_URL` 指定本机地址）。脚本与 Vite 测试共用 `tests/visual-scenes.ts` 操作序列，只隐藏 Next 开发浮层和原型控制按钮；不修改参考源码，不掩盖业务内容。原型截图保存到 `.amp/in/artifacts/reference/`，浏览器失败截图和差异图保存到 `.amp/in/artifacts/browser/`。首次在新 checkout 运行前，用 `git rev-parse --git-path info/exclude` 找到本地排除文件，保留已有规则并加入 `/.amp/in/`，避免提交评审临时文件。
 
-组件迁移另用 `pnpm exec tsx tests/compare-components.ts <未修改参考版本的 apps/web 目录> <当前 Vite 地址>` 对照。参考目录须包含同版本依赖和 contracts，并可独立启动；脚本占用 15174，结束后关闭参考服务。它在相同输入下检查 14 个状态（上述 12 个状态另加需求编辑、会话菜单），逐组件比较 DOM、类名、文本、图标和计算样式；只忽略新增的「切换会话」无障碍标签。截图和签名保存在 `.amp/in/artifacts/component-parity/`。该检查验证展示组件没有偏移，不能替代正式入口的真实 API、保存、重试、刷新和文件冲突测试，两类检查必须分别通过。
+组件迁移另用 `pnpm exec tsx tests/compare-components.ts <未修改参考版本的 apps/web 目录> <当前 Vite 地址>` 对照。参考目录须包含同版本依赖和 contracts，并可独立启动；脚本占用 15174，结束后关闭参考服务。它在相同输入下检查 15 个状态（上述 12 个状态另加需求编辑、会话菜单、独立路线规划页），逐组件比较 DOM、类名、文本、图标和计算样式；只忽略新增的「切换会话」无障碍标签。规划页冻结原型时钟后单独验收，不能只检查最终路线页。截图和签名保存在 `.amp/in/artifacts/component-parity/`。该检查验证展示组件没有偏移，不能替代正式入口的真实 API、保存、重试、刷新和文件冲突测试，两类检查必须分别通过。
 
 Base UI 仍固定为 1.5.0。其 React 19 生产模式存在菜单可见但 `aria-expanded=false` 的[已知问题 #4956](https://github.com/mui/base-ui/issues/4956)；`patches/@base-ui__utils@0.2.9.patch` 仅回移[上游 #4866 的 store selector 修复](https://github.com/mui/base-ui/pull/4866)，通过 pnpm 自动应用，不升级组件或修改样式。浏览器回归检查异步保存期间新建会话、菜单重新打开时的无障碍状态及 Escape 关闭。将来升级包含该修复的版本时，应删除补丁并重跑这些检查。
 

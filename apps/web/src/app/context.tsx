@@ -65,6 +65,7 @@ export interface AppModel {
     connection?: string
     retry: Action
     requirementConfirmed: boolean
+    planning: { run?: WorkStatus; step: number; error: string | null }
     requirementDraft: Requirement | null
     setRequirementDraft: (value: Requirement | null) => void
     saveName: Action

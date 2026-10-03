@@ -107,7 +107,7 @@ test('retry reuses the fixed original input, does not duplicate users or clear a
   } finally { await runtime.close(); db.close(); }
 });
 
-test('roadmap binds generation and confirmation to both revisions and preserves learned units', async () => {
+test('initial roadmap applies on success while adjustments require confirmation and preserve both baselines', async () => {
   for (const change of ['none', 'requirement', 'route'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const space = learning.create({ name: change, goal: 'learn A not B' }), session = space.sessions[1]!.id;
@@ -116,7 +116,7 @@ test('roadmap binds generation and confirmation to both revisions and preserves 
     let turns = 0;
     const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
       assert.match(JSON.stringify(context), /learn A not B/);
-      if (turns++ === 0) return response(reply([{ type: 'toolCall', id: 'plan', name: 'submit_route_proposal', arguments: content }], 'toolUse'));
+      if (turns++ % 2 === 0) return response(reply([{ type: 'toolCall', id: 'plan', name: 'submit_route_proposal', arguments: { ...content, note: turns > 1 ? 'adjusted' : 'plan' } }], 'toolUse'));
       if (change === 'requirement') learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, confirmed: true });
       if (change === 'route') learning.applyProposal(space.id, learning.proposeRoute(space.id, session, content).id);
       return response(reply([{ type: 'text', text: '请确认提案' }]));
@@ -126,11 +126,20 @@ test('roadmap binds generation and confirmation to both revisions and preserves 
       await runtime.idle(run.id);
       assert.equal(runtime.get(space.id, run.id).state, change === 'none' ? 'succeeded' : 'failed');
       if (change !== 'none') continue;
-      assert.equal(learning.space(space.id).route.content, null);
+      assert.deepEqual(learning.space(space.id).route.content, content);
       const p = learning.space(space.id).proposals[0]!;
-      const old = learning.proposeRoute(space.id, session, content);
+      assert.equal(p.state, 'applied');
       learning.applyProposal(space.id, p.id); learning.applyProposal(space.id, p.id);
       assert.equal(learning.space(space.id).route.revision, 1);
+      const old = learning.proposeRoute(space.id, session, content);
+      const adjustment = runtime.submit(space.id, session, randomUUID(), { text: 'adjust', quote: null, draftRevision: learning.session(space.id, session).draft.revision });
+      await runtime.idle(adjustment.run.id);
+      assert.equal(runtime.get(space.id, adjustment.run.id).state, 'succeeded');
+      assert.deepEqual(learning.space(space.id).route.content, content);
+      const pending = learning.space(space.id).proposals.at(-1)!;
+      assert.equal(pending.state, 'pending');
+      learning.applyProposal(space.id, pending.id);
+      assert.equal(learning.space(space.id).route.content!.note, 'adjusted');
       assert.throws(() => learning.applyProposal(space.id, old.id), /内容已改变/);
       const unit = content.stages[0]!.units[0]!.id;
       learning.saveLesson(space.id, unit, { title: 'keep', content: 'learned' });
@@ -142,6 +151,66 @@ test('roadmap binds generation and confirmation to both revisions and preserves 
       assert.throws(() => learning.applyProposal(space.id, late.id), /内容已改变/);
       const remove = learning.proposeRoute(space.id, session, { ...content, stages: [{ ...content.stages[0]!, units: [{ ...content.stages[0]!.units[0]!, id: randomUUID() }] }] });
       assert.throws(() => learning.applyProposal(space.id, remove.id), /不能移除/);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('confirmation and planning commit atomically, retry once, and persist the initial route without a subscriber', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db);
+  const space = learning.create({ name: 'Atomic plan', goal: 'learn' });
+  const input = { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A' }, confirmed: true }, key = randomUUID();
+  const content = { note: 'A before B', stages: [{ id: randomUUID(), title: 'first', units: [{ id: randomUUID(), title: 'A', summary: 'intro', goals: ['A'] }] }] };
+  let calls = 0;
+  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+    calls++;
+    return context.messages.at(-1)?.role === 'toolResult' ? response(reply([]))
+      : response(reply([{ type: 'toolCall', id: 'initial', name: 'submit_route_proposal', arguments: content }], 'toolUse'));
+  } });
+  try {
+    db.exec("CREATE TRIGGER fail_plan BEFORE INSERT ON runs BEGIN SELECT RAISE(ABORT, 'injected planning failure'); END");
+    assert.throws(() => runtime.plan(space.id, key, input), /injected planning failure/);
+    assert.deepEqual(learning.space(space.id).requirement, space.requirement);
+    assert.equal(learning.space(space.id).runs.length, 0);
+    assert.equal(db.prepare<[], { n: number }>('SELECT count(*) n FROM requests').get()!.n, 0);
+    assert.equal(calls, 0);
+    db.exec('DROP TRIGGER fail_plan');
+    const { run } = runtime.plan(space.id, key, input);
+    assert.equal(runtime.plan(space.id, key, input).run.id, run.id);
+    assert.equal(learning.space(space.id).requirement.confirmed, true);
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
+    assert.equal(runtime.plan(space.id, key, input).run.id, run.id);
+    assert.deepEqual(learning.space(space.id).route.content, content);
+    assert.equal(learning.space(space.id).route.revision, 1);
+    assert.equal(learning.session(space.id, run.sessionId!).messages.filter((m) => m.role === 'user').length, 1);
+    assert.equal(calls, 2);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('missing, invalid, truncated and cancelled initial routes cannot be published; explicit retry can recover', async () => {
+  for (const variant of ['missing', 'invalid', 'truncated', 'cancelled'] as const) {
+    const db = openDatabase(':memory:'), learning = new Learning(db);
+    const space = learning.create({ name: variant, goal: 'learn' });
+    const content = { note: 'retry', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
+    let retrying = false;
+    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+      if (!retrying && variant === 'missing') return response(reply([{ type: 'text', text: 'I made a plan without submitting it' }]));
+      if (context.messages.at(-1)?.role === 'toolResult') return response(reply([], !retrying && variant === 'truncated' ? 'length' : 'stop'));
+      return response(reply([{ type: 'toolCall', id: 'route', name: 'submit_route_proposal', arguments: !retrying && variant === 'invalid' ? { stages: [] } : content }], 'toolUse'));
+    } });
+    try {
+      const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'A' }, confirmed: true });
+      if (variant === 'cancelled') runtime.stop(space.id, run.id);
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, variant === 'cancelled' ? 'interrupted' : 'failed');
+      assert.equal(learning.space(space.id).route.content, null);
+      assert.equal(learning.space(space.id).proposals.length, 0);
+      retrying = true;
+      const next = runtime.retry(space.id, run.id, randomUUID());
+      await runtime.idle(next.run.id);
+      assert.equal(runtime.get(space.id, next.run.id).state, 'succeeded');
+      assert.deepEqual(learning.space(space.id).route.content, content);
+      assert.equal(learning.session(space.id, run.sessionId!).messages.filter((m) => m.role === 'user').length, 1);
     } finally { await runtime.close(); db.close(); }
   }
 });

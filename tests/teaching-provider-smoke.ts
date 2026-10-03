@@ -27,8 +27,7 @@ try {
   assert.ok(w.requirement.revision > 0); assert.equal(w.requirement.confirmed, false);
   learning.saveRequirement(space.id, { ...w.requirement, confirmed: true });
   await ask(space.sessions[1]!.id, '请生成只含一个阶段和一个简短单元的路线，聚焦默认参数，调用路线提案工具。');
-  w = learning.space(space.id); assert.equal(w.route.content, null); assert.ok(w.proposals.length > 0);
-  learning.applyProposal(space.id, w.proposals.at(-1)!.id);
+  w = learning.space(space.id); assert.ok(w.route.content); assert.equal(w.proposals.at(-1)!.state, 'applied');
   const unit = learning.space(space.id).route.content!.stages[0]!.units[0]!.id;
   const lesson = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 }); await runtime.idle(lesson.id);
   const final = runtime.get(space.id, lesson.id); console.log(JSON.stringify({ scenario: 'lesson', state: final.state, error: final.error }));
