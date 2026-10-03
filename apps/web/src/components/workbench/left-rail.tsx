@@ -80,7 +80,7 @@ export function LeftRail() {
                           variant={r.result === 'pass' ? 'default' : 'secondary'}
                           className={cn(r.result !== 'pass' && 'bg-accent text-accent-foreground')}
                         >
-                          {r.result === 'pass' ? '通过' : '加强'}
+                          {r.result === 'unverified' ? '未验证' : r.result === 'pass' ? '通过' : '加强'}
                         </Badge>
                       </span>
                       <span className="text-xs text-muted-foreground">

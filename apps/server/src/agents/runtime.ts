@@ -10,6 +10,7 @@ import { budget, compileRequest, ContextLimit, retainedMessage, xmlText, type Fr
 import { failureStream, providerStream, teachingModel } from './model.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
+import { Assessments } from '../modules/assessments.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -38,7 +39,7 @@ export class TeachingRuntime {
     idSchema.parse(space); idSchema.parse(id);
     const tables = this.tables(space, id);
     const row = this.learning.db.prepare(`SELECT r.id,r.unit_id AS unitId,r.session_id AS sessionId,r.kind,r.state,
-      a.error,a.cancelled,a.created_at AS createdAt FROM ${tables.work} r JOIN ${tables.run} a ON a.space_id=r.space_id AND a.id=r.id
+      a.error,a.cancelled,a.created_at AS createdAt,json_extract(a.input,'$.evaluation.submission.id') AS resultId FROM ${tables.work} r JOIN ${tables.run} a ON a.space_id=r.space_id AND a.id=r.id
       WHERE r.space_id=? AND r.id=?`).get(space, id) as (Omit<AgentRun, 'cancelled'> & { cancelled: number }) | undefined;
     if (!row) throw new BusinessError(404, '运行不存在。');
     return { ...row, cancelled: !!row.cancelled };
@@ -64,25 +65,50 @@ export class TeachingRuntime {
       unit: w.route.content?.stages.flatMap((stage) => stage.units).find((unit) => unit.id === s.unitId) ?? null,
       lesson: s.unitId ? this.learning.unit(space, s.unitId).lesson : null, references,
       conclusions: s.scope === 'intake' ? [] : w.conclusions.filter((c) => c.adopted && c.valid),
+      evidence: s.scope === 'intake' ? [] : this.evidence(space),
+      publicAssessment: s.unitId ? this.learning.unit(space, s.unitId).assessment : null,
     });
+  }
+  private evidence(space: string) {
+    return this.learning.space(space).route.content?.stages.flatMap((s) => s.units).flatMap((u) => this.learning.unit(space, u.id).records.filter((r) => r.valid)) ?? [];
   }
   generate(space: string, unit: string, key: string, raw: unknown): AgentRun {
     const input = generationInputSchema.parse(raw);
     if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
     const id = this.learning.once(key, `task:${space}:${unit}`, input, () => {
       const w = this.learning.space(space), u = this.learning.unit(space, unit);
-      if (!w.requirement.confirmed || (u.lesson?.revision ?? 0) !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
+      const revision = input.kind === 'lesson' ? u.lesson?.revision ?? 0 : input.kind === 'assessment' ? u.assessment?.revision ?? 0 : u.draft.revision;
+      if (!w.requirement.confirmed || revision !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
+      if (input.kind !== 'lesson' && !u.lesson) throw new BusinessError(422, '请先生成课件。');
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, unit, input.kind)) throw new BusinessError(409, '当前单元已有相同生成任务。');
       const frozen: FrozenContext = { spaceId: space, sessionId: null, unitId: unit, scenario: input.kind,
         requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
-        lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid) };
+        lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
+        assessmentRevision: u.assessment?.revision ?? 0,
+        ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
       const id = randomUUID();
       this.learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,?,'pending')").run(space, id, unit, input.kind);
       this.learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
       this.emit(space, id, { type: 'state', state: 'pending', error: null });
       return id;
     });
-    this.launch(space, id, '生成当前单元的结构化课件。');
+    this.launch(space, id, '完成本次独立任务，并通过当前任务工具提交结构化产物。');
+    return this.get(space, id);
+  }
+  retryTask(space: string, previousId: string, key: string): AgentRun {
+    const previous = this.get(space, previousId);
+    if (previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的独立任务。');
+    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    const id = this.learning.once(key, `retry-task:${space}:${previousId}`, null, () => {
+      if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, previous.unitId, previous.kind)) throw new BusinessError(409, '当前单元已有相同任务。');
+      const old = this.learning.db.prepare('SELECT input FROM task_runs WHERE space_id=? AND id=?').get(space, previousId) as { input: string };
+      const id = randomUUID();
+      this.learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,?,'pending')").run(space, id, previous.unitId, previous.kind);
+      this.learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, old.input, Date.now());
+      this.emit(space, id, { type: 'state', state: 'pending', error: null });
+      return id;
+    });
+    this.launch(space, id, '重试固定输入的独立任务，并提交结构化产物。');
     return this.get(space, id);
   }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
@@ -90,7 +116,7 @@ export class TeachingRuntime {
   }
   retry(space: string, id: string, key: string): RunSubmission {
     const previous = this.get(space, id);
-    if (!['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的运行。');
+    if (!previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的会话运行。');
     const original = this.learning.db.prepare('SELECT input FROM agent_runs WHERE space_id=? AND id=?').get(space, id) as { input: string };
     const { submitted } = JSON.parse(original.input) as { submitted: unknown };
     return this.begin(space, previous.sessionId!, key, submitted, id);
@@ -217,7 +243,7 @@ export class TeachingRuntime {
         if (!active(this.get(space, id))) return;
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
         if (event.type === 'tool_execution_end' && event.isError) failure = '工具调用或结构化产物无效，未保存生成产物。';
-        if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+        if (frozen.sessionId && event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
           const delta = event.assistantMessageEvent.delta;
           this.learning.db.transaction(() => {
             this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(delta, space, id);

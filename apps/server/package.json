@@ -15,7 +15,8 @@
     "@teach-me-coding/contracts": "workspace:*",
     "better-sqlite3": "13.0.3",
     "hono": "4.13.12",
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",

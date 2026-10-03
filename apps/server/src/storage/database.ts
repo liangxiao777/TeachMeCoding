@@ -61,6 +61,16 @@ export const migrations = [
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,run_id,seq), FOREIGN KEY(space_id,run_id) REFERENCES task_runs(space_id,id));
    CREATE TABLE task_manifests (space_id TEXT NOT NULL, run_id TEXT NOT NULL, request INTEGER NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)),
      PRIMARY KEY(space_id,run_id,request), FOREIGN KEY(space_id,run_id) REFERENCES task_runs(space_id,id));`,
+  `ALTER TABLE assessment_specs ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+   CREATE TABLE assessment_versions (space_id TEXT NOT NULL, unit_id TEXT NOT NULL, revision INTEGER NOT NULL,
+     content TEXT NOT NULL CHECK(json_valid(content)), rubric TEXT CHECK(json_valid(rubric)), sources TEXT CHECK(json_valid(sources)),
+     PRIMARY KEY(space_id,unit_id,revision), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id));
+   INSERT INTO assessment_versions SELECT space_id,unit_id,revision,content,NULL,NULL FROM assessment_specs;
+   CREATE TABLE submissions (space_id TEXT NOT NULL, unit_id TEXT NOT NULL, id TEXT NOT NULL, attempt INTEGER NOT NULL,
+     spec_revision INTEGER NOT NULL, draft_revision INTEGER NOT NULL, answers TEXT NOT NULL CHECK(json_valid(answers)),
+     evidence TEXT NOT NULL CHECK(json_valid(evidence)), answer_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
+     PRIMARY KEY(space_id,id), UNIQUE(space_id,unit_id,attempt),
+     FOREIGN KEY(space_id,unit_id,spec_revision) REFERENCES assessment_versions(space_id,unit_id,revision));`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

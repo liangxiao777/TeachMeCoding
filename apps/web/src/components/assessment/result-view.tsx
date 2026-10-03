@@ -95,6 +95,7 @@ export function ResultView() {
     </div>
   )
   const passed = record.result === 'pass'
+  const unverified = record.result === 'unverified'
   const unit = findUnit(space, record.unitId)
   const next = nextUnit(space, record.unitId)
   const isLatest = [...space.records].reverse().find((r) => r.unitId === record.unitId)?.id === record.id
@@ -123,10 +124,10 @@ export function ResultView() {
               </div>
               <div className="flex flex-col gap-1">
                 <Badge variant={passed ? 'default' : 'secondary'} className="w-fit">
-                  {passed ? '通过' : '需要加强'}
+                  {unverified ? '尚未验证' : passed ? '通过' : '需要加强'}
                 </Badge>
                 <CardTitle className="text-2xl tracking-tight">
-                  {passed ? '你已经掌握了这个单元' : '再巩固一下会更扎实'}
+                  {unverified ? '代码尚未通过真实执行验证' : passed ? '你已经掌握了这个单元' : '再巩固一下会更扎实'}
                 </CardTitle>
               </div>
             </div>

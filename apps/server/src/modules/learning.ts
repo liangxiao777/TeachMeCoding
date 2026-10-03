@@ -48,7 +48,7 @@ export class Learning {
       route: { revision: route.revision, content: route.content === null ? null : JSON.parse(route.content) },
       sessions: this.all('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id),
       proposals: proposals.map((p) => ({ ...p, content: JSON.parse(p.content) })),
-      tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=?', id),
+      tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=? ORDER BY rowid', id),
       runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=?', id),
       conclusions: this.conclusions(id),
     };
@@ -127,13 +127,27 @@ export class Learning {
     idSchema.parse(space); idSchema.parse(id);
     const unit = this.one<Pick<UnitDetail, 'id' | 'status'>>('SELECT id,status FROM units WHERE space_id=? AND id=?', space, id);
     const lesson = this.db.prepare('SELECT content,revision FROM lessons WHERE space_id=? AND unit_id=?').get(space, id) as { content: string; revision: number } | undefined;
-    const spec = this.db.prepare('SELECT content FROM assessment_specs WHERE space_id=? AND unit_id=?').get(space, id) as { content: string } | undefined;
+    const spec = this.db.prepare('SELECT content,revision FROM assessment_specs WHERE space_id=? AND unit_id=?').get(space, id) as { content: string; revision: number } | undefined;
     const draft = this.db.prepare('SELECT revision,answers FROM assessment_drafts WHERE space_id=? AND unit_id=?').get(space, id) as { revision: number; answers: string } | undefined;
     const records = this.all<{ id: string; unitId: string; attempt: number; answers: string; result: string; createdAt: number }>(
       'SELECT id,unit_id AS unitId,attempt,answers,result,created_at AS createdAt FROM assessments WHERE space_id=? AND unit_id=? ORDER BY attempt DESC', space, id);
-    return { ...unit, lesson: lesson ? { ...JSON.parse(lesson.content), revision: lesson.revision } : null, assessment: spec ? JSON.parse(spec.content) : null,
+    const versions = this.one<{ requirement: number; route: number }>('SELECT r.revision AS requirement,t.revision AS route FROM requirements r JOIN routes t ON t.space_id=r.space_id WHERE r.space_id=?', space);
+    const submitted = this.db.prepare('SELECT MAX(attempt) AS n FROM submissions WHERE space_id=? AND unit_id=?').get(space, id) as { n: number | null };
+    const evaluated: AssessmentRecord[] = records.map(({ result, answers, ...r }) => {
+      const value = JSON.parse(result);
+      const valid = value.verification === 'non-execution' && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
+        && value.sources?.requirement === versions.requirement && value.sources?.route === versions.route;
+      return { ...r, ...value, valid, answers: JSON.parse(answers) };
+    });
+    // Versioned evidence, unlike legacy imports, must stop driving progress when its sources expire.
+    if (evaluated.some((r) => r.verification) && ['passed', 'needs_work'].includes(unit.status)) {
+      const current = evaluated.find((r) => r.valid);
+      unit.status = current ? current.result === 'pass' ? 'passed' : 'needs_work' : 'learning';
+    }
+    return { ...unit, lesson: lesson ? { ...JSON.parse(lesson.content), revision: lesson.revision } : null, assessment: spec ? { ...JSON.parse(spec.content), revision: spec.revision } : null,
+      nextAttempt: Math.max(submitted.n ?? 0, records[0]?.attempt ?? 0) + 1,
       draft: { unitId: id, revision: draft?.revision ?? 0, ...(draft ? JSON.parse(draft.answers) : { q1: '', q2: '' }) },
-      records: records.map(({ result, answers, ...r }) => ({ ...r, ...JSON.parse(result), answers: JSON.parse(answers) })),
+      records: evaluated,
     };
   }
   saveAssessmentDraft(space: string, unit: string, input: unknown) {
@@ -222,9 +236,13 @@ export class Learning {
     return this.conclusions(space);
   }
   saveAssessmentSpec(space: string, unit: string, input: unknown) {
-    this.unit(space, unit);
+    const revision = (this.unit(space, unit).assessment?.revision ?? 0) + 1;
     const content = assessmentSpecSchema.parse(input);
-    this.db.prepare('INSERT INTO assessment_specs VALUES (?,?,?) ON CONFLICT(space_id,unit_id) DO UPDATE SET content=excluded.content').run(space, unit, JSON.stringify(content));
+    this.db.transaction(() => {
+      this.db.prepare(`INSERT INTO assessment_specs(space_id,unit_id,content,revision) VALUES (?,?,?,?)
+        ON CONFLICT(space_id,unit_id) DO UPDATE SET content=excluded.content,revision=excluded.revision`).run(space, unit, JSON.stringify(content), revision);
+      this.db.prepare('INSERT INTO assessment_versions VALUES (?,?,?,?,NULL,NULL)').run(space, unit, revision, JSON.stringify(content));
+    })();
   }
   saveAssessmentResult(space: string, unit: string, revision: number, input: unknown) {
     const result = assessmentResultSchema.parse(input);

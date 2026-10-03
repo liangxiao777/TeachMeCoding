@@ -34,9 +34,12 @@ export const structuredLessonSchema = z.object({ title, intro: text, blocks: z.a
 export const lessonSchema = z.object({ title, content: text.default(''), intro: text.optional(), blocks: z.array(lessonBlockSchema).optional() }).strict();
 export const conclusionSchema = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
 export const conclusionDecisionSchema = z.object({ revision: z.number().int().nonnegative(), adopted: z.boolean() }).strict();
-export const generationInputSchema = z.object({ kind: z.literal('lesson'), revision: z.number().int().nonnegative() }).strict();
-export const assessmentSpecSchema = z.object({ q1: title, q2: text, starter: text }).strict();
-export const assessmentResultSchema = z.object({ result: z.enum(['pass', 'needs_work']), summary: text,
+export const generationInputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.enum(['lesson', 'assessment']), revision: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal('evaluation'), revision: z.number().int().nonnegative(), specRevision: z.number().int().positive(), q1: text, q2: text }).strict(),
+]);
+export const assessmentSpecSchema = z.object({ q1: title, q2: text, starter: text, q2Kind: z.enum(['code', 'reasoning']).default('code') }).strict();
+export const assessmentResultSchema = z.object({ result: z.enum(['pass', 'needs_work', 'unverified']), summary: text,
   mastered: z.array(text).max(100), concerns: z.array(text).max(100), evidence: z.array(text).max(100), toVerify: z.array(text).max(100),
 }).strict();
 
@@ -44,17 +47,18 @@ export type Quote = z.infer<typeof quoteSchema>;
 export type Requirement = z.infer<typeof requirementSchema>;
 export type RouteContent = z.infer<typeof routeContentSchema>;
 export type Lesson = z.infer<typeof lessonSchema> & { revision?: number };
-export type AssessmentSpec = z.infer<typeof assessmentSpecSchema>;
+export type AssessmentSpec = z.infer<typeof assessmentSpecSchema> & { revision?: number };
 export interface SpaceSummary { id: string; name: string; createdAt: number }
 export interface RequirementState { revision: number; confirmed: boolean; value: Requirement }
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
 export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
-export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number }
+export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
+  valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed'; specRevision?: number; lessonRevision?: number; answerHash?: string }
 export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
-export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number }
+export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
   | { type: 'text'; delta: string } | { type: 'tool'; name: string; phase: 'start' | 'end'; failed?: boolean };
 export interface RunEvent { runId: string; seq: number; data: AgentEventData }
@@ -74,6 +78,7 @@ export interface UnitDetail {
   id: string; status: 'not_started' | 'learning' | 'needs_work' | 'passed' | 'skipped';
   lesson: Lesson | null; assessment: AssessmentSpec | null; draft: AssessmentDraft;
   records: AssessmentRecord[];
+  nextAttempt?: number;
 }
 export interface ProjectEntry { path: string; kind: 'file' | 'directory'; version: string }
 export interface ProjectFile { path: string; content: string; version: string }

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { AssessmentRecord, AssessmentSpec, LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { FixedAssessment } from '../modules/assessments.js';
 
-export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson';
+export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' | 'evaluation';
 export interface FrozenContext {
   spaceId: string;
   sessionId: string | null;
@@ -15,6 +16,10 @@ export interface FrozenContext {
   lesson: UnitDetail['lesson'];
   references: Quote[];
   conclusions?: LearningConclusion[];
+  publicAssessment?: AssessmentSpec | null;
+  assessmentRevision?: number;
+  evaluation?: FixedAssessment;
+  evidence?: AssessmentRecord[];
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
@@ -39,12 +44,14 @@ export function systemPrompt(scenario: Scenario) {
 }
 
 export function compileContext(input: FrozenContext) {
-  const sources = [
+  const sources = input.evaluation ? [{ kind: 'fixed-evaluation', id: input.evaluation.submission.id, revision: input.evaluation.revision, value: input.evaluation }] : [
     { kind: 'requirement', id: input.spaceId, revision: input.requirement.revision, value: input.requirement },
     ...(input.route ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
     ...(input.unit ? [{ kind: 'unit', id: input.unit.id, revision: input.route?.revision ?? 0, value: input.unit }] : []),
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
     ...(input.conclusions ?? []).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
+    ...(input.evidence ?? []).map((value) => ({ kind: 'valid-assessment', id: value.id, revision: value.specRevision ?? 0, value })),
+    ...(input.publicAssessment ? [{ kind: 'public-assessment', id: input.unitId!, revision: input.publicAssessment.revision ?? 0, value: input.publicAssessment }] : []),
     ...input.references.map((value, index) => ({ kind: 'reference', id: `${input.sessionId}:${index}`, revision: hash(value), value })),
   ];
   const xml = `<context schemaVersion="${contextVersion}" scenario="${input.scenario}"><scope spaceId="${xmlText(input.spaceId)}" sessionId="${xmlText(input.sessionId ?? '')}" unitId="${xmlText(input.unitId ?? '')}" />${sources.map((s) =>

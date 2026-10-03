@@ -44,7 +44,11 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   ])
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
-  const drafts = Object.fromEntries(units.map((unit) => [unit.id, { ...answers(unit.draft), unitId: unit.id, state: 'ready' as const, q2Output: null, q2Running: false, attempt: Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]))
+  const drafts = Object.fromEntries(units.map((unit) => {
+    const task = saved.tasks.find((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind) && ['pending', 'running'].includes(t.state))
+    return [unit.id, { ...answers(unit.draft), unitId: unit.id, state: task?.kind === 'assessment' ? 'generating' as const : task?.kind === 'evaluation' ? 'evaluating' as const : 'ready' as const,
+      q2Output: null, q2Running: false, attempt: unit.nextAttempt ?? Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]
+  }))
   const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => {
     const task = saved.tasks.filter((t) => t.unitId === unit.id && t.kind === 'lesson').at(-1)
     return { ...unit, status: details[unit.id]!.status, contentState: task && ['pending', 'running'].includes(task.state) ? 'generating' as const
@@ -185,8 +189,11 @@ export function usePersistentModel(): AppModel {
       const requirement = loaded.saved.requirement.revision >= s.saved.requirement.revision ? loaded.saved.requirement : s.saved.requirement
       const sessions = { ...s.sessions }
       for (const [id, fresh] of Object.entries(loaded.sessions)) if (fresh.draft.revision >= (sessions[id]?.draft.revision ?? 0)) sessions[id] = fresh
-      return { ...s, saved: { ...loaded.saved, requirement }, units: loaded.units, drafts: { ...loaded.drafts, ...s.drafts },
-        sessions, ui: { ...s.ui, requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
+      const drafts = { ...s.drafts }
+      for (const [id, fresh] of Object.entries(loaded.drafts)) drafts[id] = { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }
+      return { ...s, saved: { ...loaded.saved, requirement }, units: loaded.units, drafts,
+        sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
+          requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
           sessions: s.ui.sessions.map((old) => {
             const fresh = loaded.ui.sessions.find((next) => next.id === old.id)
             if (!fresh) return old
@@ -224,7 +231,15 @@ export function usePersistentModel(): AppModel {
           try {
             if (!terminal) await streamRun(`/spaces/${space}/runs/${work.id}`, cursor, controller.signal, receive)
             if (controller.signal.aborted) return
-            if (terminal) { await refreshBusiness(space); setConnection(''); return }
+            if (terminal) {
+              await refreshBusiness(space)
+              if (work.kind === 'evaluation') {
+                const final = await api<AgentRun>(`/spaces/${space}/runs/${work.id}`)
+                if (final.state === 'succeeded' && final.resultId) changeUi(space, (s) => s.view === 'assessment' && s.currentUnitId === work.unitId
+                  ? { ...s, view: 'result', viewingRecordId: final.resultId! } : s)
+              }
+              setConnection(''); return
+            }
             throw new Error('Disconnected before final event')
           } catch {
             if (controller.signal.aborted) return
@@ -313,6 +328,17 @@ export function usePersistentModel(): AppModel {
       watchRun(space, task)
     })
   }
+  const assessmentTask = (space: string, unit: string, kind: 'assessment' | 'evaluation') => {
+    const entry = cache.current[space]!, detail = entry.units[unit]!, draft = entry.drafts[unit]!
+    const input = kind === 'assessment' ? { kind, revision: detail.assessment?.revision ?? 0 }
+      : { kind, revision: detail.draft.revision, specRevision: detail.assessment?.revision, ...answers(draft) }
+    void run(`${kind}:${space}:${unit}`, async () => {
+      const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, input)
+      change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] } }))
+      await refreshBusiness(space)
+      watchRun(space, task)
+    })
+  }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
   const uiCurrent = current && { ...current, onboarding: { ...current.onboarding,
@@ -328,7 +354,7 @@ export function usePersistentModel(): AppModel {
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment
-      return spec ? { abilities: unit.goals, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
+      return spec ? { abilities: unit.goals, q2Kind: spec.q2Kind, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
     },
     goHome: () => { setCurrentId(null); setGlobalView('home') },
     goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
@@ -443,11 +469,15 @@ export function usePersistentModel(): AppModel {
       void createEntry(name, 'file', null, code)
     },
     connectEnv: unavailable, terminalCommand: unavailable,
-    startAssessment: () => { if (recordUnit) navigate('assessment', recordUnit) },
+    startAssessment: () => { if (!recordUnit || !current) return
+      navigate('assessment', recordUnit)
+      if (capabilities.assessment && !selected?.units[recordUnit]?.assessment) assessmentTask(current.id, recordUnit, 'assessment')
+    },
     updateDraft: (patch) => { if (!current?.draft) return; const unit = current.draft.unitId
       change(current.id, (s) => { const draft = { ...s.drafts[unit]!, ...patch }; return { ...s, drafts: { ...s.drafts, [unit]: draft }, ui: { ...s.ui, draft } } })
     },
-    runDraft: unavailable, submitAssessment: unavailable,
+    runDraft: unavailable,
+    submitAssessment: () => { if (current?.draft) assessmentTask(current.id, current.draft.unitId, 'evaluation') },
     leaveAssessment: () => navigate('unit'),
     viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!; changeUi(current.id, (s) => ({ ...s, viewingRecordId: id, currentUnitId: record.unitId, view: 'result', ideFullscreen: false })) },
     goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) navigate('unit', next.id) } },
@@ -455,6 +485,15 @@ export function usePersistentModel(): AppModel {
     persistence: {
       ready, busy, error, connection, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
       conclusions: selected?.saved.conclusions ?? [],
+      tasks: selected?.saved.tasks ?? [],
+      generateAssessment: () => { if (current && recordUnit) assessmentTask(current.id, recordUnit, 'assessment') },
+      stopTask: (id) => { if (current) void run(`stop:${id}`, () => api(`/spaces/${current.id}/runs/${id}/stop`, {})) },
+      retryTask: (id) => { if (!current) return; const space = current.id
+        void run(`task-retry:${id}`, async () => {
+          const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
+          await refreshBusiness(space); watchRun(space, task)
+        })
+      },
       decideConclusion: (id, adopted) => { if (!current || !selected) return
         const space = current.id, conclusion = selected.saved.conclusions.find((c) => c.id === id)!
         void run(`conclusion:${id}`, async () => {

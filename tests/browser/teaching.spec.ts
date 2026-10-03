@@ -12,6 +12,7 @@ async function send(page: Page, text: string) {
   await page.getByRole('button', { name: '发送', exact: true }).click();
 }
 test('formal intake uses streamed API output, editable drafts and explicit confirmation', async ({ page }, info) => {
+  test.setTimeout(60000);
   await create(page, `真实需求 API ${info.project.name}`);
   let dropped = false;
   await page.route('**/sessions/*/runs', async (route) => {
@@ -53,6 +54,26 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await page.screenshot({ path: `.amp/in/artifacts/teaching-tutor-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '撤销采纳', exact: true }).click();
   await expect(page.getByText('学习结论 · 待采纳', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  await expect(page.getByText('解释命令行参数来自哪里', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
+  await page.getByLabel('你的回答', { exact: true }).fill('固定提交：由程序的调用者传入');
+  await page.getByLabel('编辑 代码答案', { exact: true }).fill('print(2)');
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('正在评估固定提交；你可以继续编辑新草稿。代码不会执行。', { exact: true })).toBeVisible();
+  await page.getByLabel('你的回答', { exact: true }).fill('评估期间的新草稿');
+  await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-evaluating-${info.project.name}.png`, animations: 'disabled' });
+  await expect(page.getByText('代码尚未通过真实执行验证', { exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
+  await expect(page.getByText('固定提交：由程序的调用者传入', { exact: true })).toBeVisible();
+  await expect(page.getByText('已经掌握', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-unverified-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '重新测评', exact: true }).click();
+  await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
+  await expect(page.getByText('单元测评 · 第 2 次', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
 });
 
 test('stream survives page reload and session switching; stop and model failure remain visible', async ({ page }, info) => {

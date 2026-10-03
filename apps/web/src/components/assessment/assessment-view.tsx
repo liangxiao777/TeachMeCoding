@@ -50,8 +50,10 @@ export function AssessmentView() {
   const spec = getAssessment(unit)
   const canRun = !!spec && capabilities.assessment && capabilities.terminal
   const storageBusy = !!persistence && (!persistence.ready || persistence.busy)
+  const task = persistence?.tasks.filter((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind)).at(-1)
+  const activeTask = task && ['pending', 'running'].includes(task.state)
 
-  if (draft.state === 'evaluating' && spec && capabilities.assessment) {
+  if (!persistence && draft.state === 'evaluating' && spec && capabilities.assessment) {
     return (
       <div className="flex flex-1 items-center justify-center p-8">
         <Card className="w-full max-w-md shadow-lg">
@@ -98,10 +100,21 @@ export function AssessmentView() {
           )}
         </div>
 
-        {draft.state === 'generating' && spec && capabilities.assessment ? (
+        {persistence && capabilities.assessment && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm" role="status">
+            <span className="flex-1">{activeTask ? task.kind === 'evaluation'
+              ? '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
+              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : '代码题仅作静态评估，不代表运行通过。'}</span>
+            {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>停止任务</Button> : <>
+              {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>重试原任务</Button>}
+              <Button size="sm" variant="outline" disabled={storageBusy} onClick={persistence.generateAssessment}>{spec ? '重新出题' : '生成题目'}</Button>
+            </>}
+          </div>
+        )}
+        {draft.state === 'generating' && capabilities.assessment ? (
           <Card>
             <CardContent>
-              <Generating title="正在根据你的学习情况出题" steps={['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']} />
+              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['读取本单元目标', '固定课件版本', '生成题目与独立评分标准'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']} />
             </CardContent>
           </Card>
         ) : (
@@ -144,7 +157,7 @@ export function AssessmentView() {
                 <CardHeader><CardTitle>代码答案草稿</CardTitle></CardHeader>
               )}
               <CardContent>
-                <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
+                {spec?.q2Kind === 'reasoning' ? <Textarea aria-label="分析题回答" rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
                   <div className="flex items-center justify-between border-b py-1.5 pr-1.5 pl-3">
                     <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? '代码答案草稿'}</span>
                     <Button size="xs" disabled={!canRun || draft.q2Running || storageBusy} onClick={runDraft}>
@@ -156,7 +169,7 @@ export function AssessmentView() {
                   <div className="min-h-16 border-t px-3 py-2 font-mono text-xs leading-5" aria-live="polite">
                     {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{canRun ? '运行后在这里查看输出' : '代码运行暂不可用，不会执行模拟运行。'}</p>}
                   </div>
-                </div>
+                </div>}
               </CardContent>
             </Card>
 
@@ -176,7 +189,7 @@ export function AssessmentView() {
                   保存答案草稿
                 </Button>
               )}
-              <Button size="lg" onClick={submitAssessment} disabled={!spec || !capabilities.assessment || storageBusy || !draft.q1.trim()}>
+              <Button size="lg" onClick={submitAssessment} disabled={!spec || !capabilities.assessment || storageBusy || !!activeTask || !draft.q1.trim()}>
                 <Send data-icon="inline-start" />
                 提交测评
               </Button>

@@ -99,7 +99,7 @@ export interface AssessmentRecord {
   unitId: string
   unitTitle: string
   attempt: number
-  result: 'pass' | 'needs_work'
+  result: 'pass' | 'needs_work' | 'unverified'
   createdAt: number
   answers: { q1: string; q2: string }
   summary: string
@@ -107,6 +107,8 @@ export interface AssessmentRecord {
   concerns: string[]
   evidence: string[]
   toVerify: string[]
+  valid?: boolean
+  verification?: string
 }
 
 export type SpaceView = 'onboarding' | 'planning' | 'route' | 'unit' | 'assessment' | 'result'
@@ -195,6 +197,7 @@ export interface Lesson {
 
 export interface AssessmentSpec {
   abilities: string[]
+  q2Kind?: 'code' | 'reasoning'
   q1: { title: string; prompt: string; code?: string }
   q2: { title: string; prompt: string; starter: string; file: string; expected?: string }
 }
