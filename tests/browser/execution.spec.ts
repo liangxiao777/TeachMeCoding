@@ -13,12 +13,15 @@ test('formal IDE auto-connects real PTY, keeps it through refresh/fullscreen and
   await page.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
   await expect(page.getByText('本机终端 · 非沙箱', { exact: true })).toBeVisible();
   const input = page.getByRole('textbox', { name: '本机终端输入', exact: true });
+  await expect(page.getByText('使用本机账号权限', { exact: false })).toHaveCount(0);
   await expect(page.locator('.xterm-rows')).toHaveCSS('font-size', '13px');
   await expect(page.locator('.xterm-rows')).toHaveCSS('font-family', /monospace/);
   await input.pressSequentially("printf 'REAL_OUTPUT_73\\n'; export TMC_RECONNECT=kept"); await input.press('Enter');
   await expect(page.locator('.xterm-rows')).toContainText('REAL_OUTPUT_73');
   await page.screenshot({ path: `.amp/in/artifacts/terminal-normal-${info.project.name}.png` });
+  await page.getByLabel('本机终端', { exact: true }).locator('..').screenshot({ path: `.amp/in/artifacts/terminal-clean-${info.project.name}.png` });
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await expect(page.getByText('使用本机账号权限', { exact: false })).toHaveCount(0);
   await input.pressSequentially('printf "RECONNECTED_%s\\n" "$TMC_RECONNECT"'); await input.press('Enter');
   await expect(page.locator('.xterm-rows')).toContainText('RECONNECTED_kept');
   await page.reload();

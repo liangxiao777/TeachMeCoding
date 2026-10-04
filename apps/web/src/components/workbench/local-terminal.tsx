@@ -49,7 +49,6 @@ export function LocalTerminalView() {
         <Button variant="ghost" size="icon-xs" aria-label="停止终端" disabled={!!exit} onClick={() => client?.send('stop')}><Square /></Button>
       </div>
     </div>
-    <p className="shrink-0 border-b px-3 py-1.5 text-[11px] text-muted-foreground">使用本机账号权限，非沙箱；不会自动安装工具链（command not found 时请自行检查安装及 PATH）。收起/断线不停止进程，停止不撤销已有修改。</p>
     {!!persistence?.unsavedFiles.length && <div role="status" className="shrink-0 border-b px-3 py-2 text-xs">
       <p className="break-words">未保存：{persistence.unsavedFiles.join('、')}。命令输入暂停，执行只使用磁盘文件。</p>
       <Button size="xs" variant="outline" disabled={persistence.busy} onClick={() => { setError(''); persistence.saveFiles() }}>保存全部文件</Button>
