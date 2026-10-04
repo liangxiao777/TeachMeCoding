@@ -36,3 +36,35 @@ test('token bootstrap requires a local custom-header request and protected check
   assert.equal(preflight.status, 403);
   assert.equal(preflight.headers.get('access-control-allow-origin'), null);
 });
+
+test('preview enables trusted frame documents and module origins without opening cross-site APIs', async () => {
+  const previewOrigin = 'http://127.0.0.1:54492';
+  const normal = createApp(createLocalAccess({ port: 4310 }));
+  const access = createLocalAccess({ port: 4310, previewOrigin });
+  const app = createApp(access);
+  const headers = { host: '127.0.0.1:4310' };
+  const normalPage = await normal.request('/', { headers });
+  assert.equal(normalPage.headers.get('x-frame-options'), 'DENY');
+  assert.match(normalPage.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
+  const page = await app.request('/', { headers });
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get('x-frame-options'), null);
+  assert.ok(page.headers.get('content-security-policy')!.includes(`frame-ancestors 'self' ${previewOrigin} vscode-webview: vscode-file://vscode-app`));
+  assert.equal(page.headers.get('access-control-allow-origin'), null);
+  const html = await page.text();
+  const asset = html.match(/src="([^"]+\.js)"/)![1]!;
+  assert.equal((await app.request(asset, { headers: { ...headers, origin: previewOrigin } })).status, 200);
+  assert.equal((await normal.request(asset, { headers: { ...headers, origin: previewOrigin } })).status, 403);
+  const framed = { ...headers, 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' };
+  assert.equal((await app.request('/', { headers: framed })).status, 200);
+  assert.equal((await normal.request('/', { headers: framed })).status, 403);
+  for (const path of ['/api/health', '/api/access', '/api/access/check']) {
+    assert.equal((await app.request(path, { headers: { ...framed, 'x-tmc-client': 'browser', 'x-tmc-token': access.token } })).status, 403);
+  }
+  const bootstrap = await app.request('/api/access', { headers: { ...headers, origin: previewOrigin, 'x-tmc-client': 'browser' } });
+  assert.equal(bootstrap.status, 200);
+  const { token } = await bootstrap.json();
+  assert.equal((await app.request('/api/access/check', { method: 'POST', headers: { ...headers, origin: previewOrigin, 'x-tmc-token': token } })).status, 200);
+  assert.equal((await app.request('/api/access/check', { method: 'POST', headers: { ...headers, origin: previewOrigin } })).status, 401);
+  assert.equal((await app.request('/api/access', { headers: { ...headers, origin: 'http://evil.test', 'x-tmc-client': 'browser' } })).status, 403);
+});

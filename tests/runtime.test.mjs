@@ -35,11 +35,15 @@ function rawRequest(path, headers = {}, method = 'GET') {
   });
 }
 
-for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: 15000 }, async () => {
+for (const { hostname, previewOrigin } of [
+  { hostname: '127.0.0.1' },
+  { hostname: '0.0.0.0' },
+  { hostname: '127.0.0.1', previewOrigin: 'http://127.0.0.1:15372' },
+]) test(`production ${hostname}${previewOrigin ? ' with preview' : ''} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: 15000 }, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'teach-me-coding-start-'));
   const syntheticSecret = 'server-only-credential-sentinel';
   const child = spawn(process.execPath, [fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url))], {
-    cwd, env: { PATH: process.env.PATH, HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd, env: { PATH: process.env.PATH, HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret, OPENROUTER_MODEL: '', ...(previewOrigin ? { TMC_PREVIEW_ORIGIN: previewOrigin } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');
   let logs = '';
@@ -53,7 +57,16 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
       child.once('error', reject);
     });
     const base = 'http://127.0.0.1:14310';
-    assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), { status: 'ok', service: 'teach-me-coding' });
+    const origin = previewOrigin ?? base;
+    const health = await fetch(`${base}/api/health`);
+    assert.deepEqual(await health.json(), { status: 'ok', service: 'teach-me-coding' });
+    if (previewOrigin) {
+      assert.equal(health.headers.get('x-frame-options'), null);
+      assert.ok(health.headers.get('content-security-policy').includes(`frame-ancestors 'self' ${previewOrigin} vscode-webview: vscode-file://vscode-app`));
+    } else {
+      assert.equal(health.headers.get('x-frame-options'), 'DENY');
+      assert.ok(health.headers.get('content-security-policy').includes("frame-ancestors 'none'"));
+    }
     const lan = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address;
     if (hostname === '0.0.0.0' && lan) {
       const network = `http://${lan}:14310`;
@@ -66,15 +79,16 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
     const html = await (await fetch(`${base}/`)).text();
     assert.match(html, /TeachMeCoding/);
     const asset = html.match(/src="([^"]+\.js)"/)[1];
-    const js = await fetch(`${base}${asset}`);
+    const js = await fetch(`${base}${asset}`, { headers: { Origin: origin } });
     assert.equal(js.status, 200);
     assert.match(js.headers.get('content-type'), /javascript/);
+    assert.equal((await fetch(`${base}${asset}`, { headers: { Origin: 'http://127.0.0.1:15373' } })).status, 403);
     assert.equal(await (await fetch(`${base}/learning/example`)).text(), html);
     assert.equal((await fetch(`${base}/assets/missing.js`)).status, 404);
     const bootstrap = await rawRequest('/api/access', { 'X-TMC-Client': 'browser' });
     assert.equal(bootstrap.status, 200);
     const { token } = JSON.parse(bootstrap.body);
-    const headers = { 'X-TMC-Token': token, Origin: base };
+    const headers = { 'X-TMC-Token': token, Origin: origin };
     assert.equal((await rawRequest('/api/missing', headers)).status, 404);
     assert.equal((await rawRequest('/api/missing')).status, 401);
     const checked = await rawRequest('/api/access/check', headers, 'POST');
@@ -91,7 +105,7 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
       assert.ok(!response.body.includes(syntheticSecret));
     }
     const upgrade = {
-      Connection: 'Upgrade', Upgrade: 'websocket', Origin: base,
+      Connection: 'Upgrade', Upgrade: 'websocket', Origin: origin,
       'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13',
       'Sec-WebSocket-Protocol': `tmc-terminal, tmc-token.${token}`,
     };
@@ -110,7 +124,7 @@ for (const hostname of ['127.0.0.1', '0.0.0.0']) test(`production ${hostname} st
     const created = await fetch(`${base}/api/spaces`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ name: 'Disposable terminal', goal: 'Synthetic local execution' }) });
     const space = await created.json();
     assert.equal(created.status, 200);
-    const socket = new WebSocket(`ws://127.0.0.1:14310/api/terminal/socket?space=${space.id}`, ['tmc-terminal', `tmc-token.${token}`], { origin: base });
+    const socket = new WebSocket(`ws://127.0.0.1:14310/api/terminal/socket?space=${space.id}`, ['tmc-terminal', `tmc-token.${token}`], { origin });
     await new Promise((resolve, reject) => {
       let output = '';
       socket.on('error', reject);

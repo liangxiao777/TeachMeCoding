@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
+import { parsePreviewOrigin, previewFrameAncestors } from '@teach-me-coding/contracts';
+
+const previewOrigin = parsePreviewOrigin(process.env.TMC_PREVIEW_ORIGIN);
 
 export default defineConfig({
   plugins: [tailwindcss()],
@@ -11,7 +14,9 @@ export default defineConfig({
     strictPort: true,
     cors: false,
     headers: {
-      'X-Frame-Options': 'DENY',
+      ...(previewOrigin
+        ? { 'Content-Security-Policy': `frame-ancestors ${previewFrameAncestors(previewOrigin)}` }
+        : { 'X-Frame-Options': 'DENY' }),
       'Cross-Origin-Resource-Policy': 'same-origin',
       'Referrer-Policy': 'no-referrer',
     },

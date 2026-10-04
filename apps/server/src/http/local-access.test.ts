@@ -72,3 +72,55 @@ test('terminal upgrades require an Origin and a protocol token, never a query/he
   headers.set('origin', 'http://evil.test');
   assert.equal(localAccessError(headers, access, { websocket: true }), 403);
 });
+
+test('preview grants one origin while preserving Host, Origin and token boundaries', () => {
+  const previewOrigin = 'http://127.0.0.1:54492';
+  const access = createLocalAccess({ port: 4310, previewOrigin });
+  const headers = new Headers({ host: '127.0.0.1:4310', origin: previewOrigin, 'sec-fetch-site': 'same-origin' });
+  assert.equal(localAccessError(headers, createLocalAccess({ port: 4310 })), 403);
+  assert.equal(localAccessError(headers, access), undefined);
+  assert.equal(localAccessError(headers, access, { requireToken: true }), 401);
+  headers.set('x-tmc-token', access.token);
+  assert.equal(localAccessError(headers, access, { requireToken: true }), undefined);
+  headers.set('host', '127.0.0.1:54492');
+  assert.equal(localAccessError(headers, access, { requireToken: true }), undefined);
+  headers.set('host', '127.0.0.1:4310');
+  for (const origin of ['http://127.0.0.1:54493', 'http://localhost:54492', 'http://evil.test', 'null']) {
+    headers.set('origin', origin);
+    assert.equal(localAccessError(headers, access, { requireToken: true }), 403);
+  }
+  headers.set('origin', previewOrigin);
+  headers.set('host', 'evil.test:4310');
+  headers.set('x-forwarded-host', '127.0.0.1:4310');
+  assert.equal(localAccessError(headers, access, { requireToken: true }), 403);
+  headers.set('host', '127.0.0.1:4310');
+  for (const site of ['same-site', 'cross-site']) {
+    headers.set('sec-fetch-site', site);
+    assert.equal(localAccessError(headers, access, { requireToken: true }), 403);
+  }
+  headers.set('sec-fetch-site', 'same-origin');
+  assert.equal(localAccessError(headers, access, { websocket: true }), 401);
+  headers.set('sec-websocket-protocol', `tmc-terminal, tmc-token.${access.token}`);
+  assert.equal(localAccessError(headers, access, { websocket: true }), undefined);
+  headers.delete('origin');
+  assert.equal(localAccessError(headers, access, { websocket: true }), 403);
+  assert.throws(() => createLocalAccess({ port: 4310, previewOrigin: 'http://evil.test' }), /TMC_PREVIEW_ORIGIN/);
+});
+
+test('preview frame navigation exception never admits API, token or Origin shortcuts', () => {
+  const access = createLocalAccess({ port: 4310, previewOrigin: 'http://127.0.0.1:54492' });
+  const headers = new Headers({ host: '127.0.0.1:4310', 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' });
+  assert.equal(localAccessError(headers, createLocalAccess({ port: 4310 }), { documentNavigation: true }), 403);
+  assert.equal(localAccessError(headers, access), 403);
+  assert.equal(localAccessError(headers, access, { documentNavigation: true }), undefined);
+  assert.equal(localAccessError(headers, access, { documentNavigation: true, requireToken: true }), 403);
+  assert.equal(localAccessError(headers, access, { documentNavigation: true, websocket: true }), 403);
+  headers.set('origin', 'http://evil.test');
+  assert.equal(localAccessError(headers, access, { documentNavigation: true }), 403);
+  headers.delete('origin');
+  headers.set('sec-fetch-dest', 'script');
+  assert.equal(localAccessError(headers, access, { documentNavigation: true }), 403);
+  headers.set('sec-fetch-dest', 'iframe');
+  headers.set('sec-fetch-mode', 'cors');
+  assert.equal(localAccessError(headers, access, { documentNavigation: true }), 403);
+});

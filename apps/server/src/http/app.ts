@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import type { HealthResponse } from '@teach-me-coding/contracts';
+import { previewFrameAncestors, type HealthResponse } from '@teach-me-coding/contracts';
 import { localAccessError, type LocalAccess } from './local-access.js';
 import { workspaceApi } from './workspaces.js';
 import type { Learning } from '../modules/learning.js';
@@ -16,16 +16,19 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
   const app = new Hono();
   app.use('*', async (c, next) => {
     c.header('X-Content-Type-Options', 'nosniff');
-    c.header('X-Frame-Options', 'DENY');
+    if (!access.previewOrigin) c.header('X-Frame-Options', 'DENY');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('Cross-Origin-Resource-Policy', 'same-origin');
     // xterm's DOM renderer generates cell/color styles. Script execution stays
     // same-origin; only styles need the inline allowance.
-    c.header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+    c.header('Content-Security-Policy', `default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors ${previewFrameAncestors(access.previewOrigin)}; base-uri 'none'; form-action 'none'`);
     const api = c.req.path === '/api' || c.req.path.startsWith('/api/');
     if (api) c.header('Cache-Control', 'no-store');
     const publicRead = ['GET', 'HEAD'].includes(c.req.method) && ['/api/health', '/api/access'].includes(c.req.path);
-    const error = localAccessError(c.req.raw.headers, access, { requireToken: api && !publicRead });
+    const error = localAccessError(c.req.raw.headers, access, {
+      requireToken: api && !publicRead,
+      documentNavigation: !api && ['GET', 'HEAD'].includes(c.req.method),
+    });
     if (error) return c.json({ error: error === 401 ? 'Request token required' : 'Local access denied' }, error);
     await next();
   });

@@ -44,6 +44,6 @@ try {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void close().finally(() => server.close()); });
 } catch (error) {
   console.error('Cannot open local data. Check TMC_DATA_DIR, directory permissions and database version.');
-  if (error instanceof Error && (error.message.startsWith('Database ') || error.message.startsWith('Data ') || error.message.startsWith('TMC_DATA_DIR'))) console.error(error.message);
+  if (error instanceof Error && (error.message.startsWith('Database ') || error.message.startsWith('Data ') || error.message.startsWith('TMC_DATA_DIR') || error.message.startsWith('TMC_PREVIEW_ORIGIN'))) console.error(error.message);
   process.exitCode = 1;
 }

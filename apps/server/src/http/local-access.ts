@@ -2,9 +2,10 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import os from 'node:os';
+import { parsePreviewOrigin } from '@teach-me-coding/contracts';
 import type { Terminals } from '../runtime/terminals.js';
 
-export function createLocalAccess({ port, hostname = '127.0.0.1', development = false, webPort = 5173 }: { port: number; hostname?: string; development?: boolean; webPort?: number }) {
+export function createLocalAccess({ port, hostname = '127.0.0.1', development = false, webPort = 5173, previewOrigin }: { port: number; hostname?: string; development?: boolean; webPort?: number; previewOrigin?: string }) {
   const ports = development ? [port, webPort] : [port];
   const addresses = ['127.0.0.1', 'localhost'];
   if (hostname === '0.0.0.0') {
@@ -12,10 +13,15 @@ export function createLocalAccess({ port, hostname = '127.0.0.1', development = 
       (entries ?? []).filter((entry) => entry.family === 'IPv4').map((entry) => entry.address)));
   }
   const hosts = new Set(ports.flatMap((value) => addresses.map((address) => `${address}:${value}`)));
+  previewOrigin = parsePreviewOrigin(previewOrigin);
+  if (previewOrigin) hosts.add(new URL(previewOrigin).host);
+  const origins = new Set([...hosts].map((host) => `http://${host}`));
+  if (previewOrigin) origins.add(previewOrigin);
   return {
     token: randomBytes(32).toString('hex'),
     hosts,
-    origins: new Set([...hosts].map((host) => `http://${host}`)),
+    origins,
+    previewOrigin,
   };
 }
 export type LocalAccess = ReturnType<typeof createLocalAccess>;
@@ -23,7 +29,7 @@ export type LocalAccess = ReturnType<typeof createLocalAccess>;
 export function localAccessError(
   headers: Headers,
   access: LocalAccess,
-  { requireToken = false, websocket = false } = {},
+  { requireToken = false, websocket = false, documentNavigation = false } = {},
 ): 401 | 403 | undefined {
   // Do not trust X-Forwarded-Host/Origin: the Vite proxy preserves actual headers.
   if (!access.hosts.has(headers.get('host') ?? '')) return 403;
@@ -31,7 +37,12 @@ export function localAccessError(
   if (origin !== null && !access.origins.has(origin)) return 403;
   if (websocket && origin === null) return 403;
   const site = headers.get('sec-fetch-site');
-  if (site === 'cross-site' || site === 'same-site') return 403;
+  // Editor frame navigation may be cross-site. Only a public document may
+  // bypass this metadata check; CSP still restricts who can embed it.
+  const previewNavigation = !!access.previewOrigin && documentNavigation && !requireToken && !websocket
+    && origin === null && headers.get('sec-fetch-mode') === 'navigate'
+    && ['iframe', 'frame'].includes(headers.get('sec-fetch-dest') ?? '');
+  if ((site === 'cross-site' || site === 'same-site') && !previewNavigation) return 403;
   if (!requireToken && !websocket) return;
 
   const protocols = (headers.get('sec-websocket-protocol') ?? '').split(',').map((value) => value.trim());
