@@ -124,9 +124,6 @@ export type ToolInputProps = ComponentProps<"div"> & {
 
 export const ToolInput = ({ className, input, inputText, ...props }: ToolInputProps) => (
   <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
-    <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-      调用参数
-    </h4>
     <div className="rounded-md bg-muted/50">
       <CodeBlock code={inputText ?? JSON.stringify(input, null, 2)} language="json" />
     </div>

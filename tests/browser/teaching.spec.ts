@@ -346,7 +346,7 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(page.getByText('我会先整理目标。', { exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: /整理学习需求.*已返回/ }).click();
-  await expect(page.getByText('submit_requirement_draft', { exact: true })).toBeVisible();
+  await expect(page.getByText('submit_requirement_draft', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('tool-call').locator('pre')).toContainText('已有变量基础');
   await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"schedule": "每周两次"');
   await page.getByTestId('tool-call').screenshot({ path: `.amp/in/artifacts/tool-arguments-${info.project.name}.png`, animations: 'disabled' });
@@ -445,7 +445,7 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   const tool = page.getByTestId('tool-call');
   await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
   await tool.getByRole('button').click();
-  await expect(tool.getByText('add_route_stage', { exact: true })).toBeVisible();
+  await expect(tool.getByText('add_route_stage', { exact: true })).toHaveCount(0);
   await expect(tool.locator('pre')).toContainText('工具基础：参数、错误与输出');
   await expect(tool).not.toContainText(/已接收|字符|尚未执行|尚未调用/);
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);

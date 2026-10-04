@@ -66,7 +66,6 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
               state={part.status === 'generating' || part.status === 'ready' ? 'input-streaming' : part.status === 'running' ? 'input-available' : part.status === 'done' ? 'output-available' : 'output-error'}
               statusLabel={part.status === 'generating' ? '准备中' : part.status === 'ready' ? '等待执行' : part.status === 'interrupted' ? '已中断' : undefined} />
             <ToolContent className="text-xs text-muted-foreground">
-              <code className="break-all">{part.name}</code>
               {(part.input !== undefined || part.inputText !== undefined) && (
                 <ToolInput input={part.input} inputText={part.inputText} className="max-h-96 overflow-y-auto overscroll-contain" />
               )}
