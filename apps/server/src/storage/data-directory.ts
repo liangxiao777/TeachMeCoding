@@ -14,7 +14,7 @@ export function dataDirectory(environment: NodeJS.ProcessEnv = process.env) {
 export function openDataDirectory(directory: string) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const root = realpathSync(directory);
-  for (const name of ['app.db', 'app.db-wal', 'app.db-shm', 'app.db-journal', 'app.lock', 'app.lock-journal']) {
+  for (const name of ['app.db', 'app.db-wal', 'app.db-shm', 'app.db-journal', 'app.lock', 'app.lock-journal', 'credentials.json']) {
     const info = lstatSync(join(root, name), { throwIfNoEntry: false });
     if (info && (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)) throw new Error('Data files must be regular files, not links.');
   }

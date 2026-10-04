@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react'
 import { LessonReader } from '@/components/workbench/lesson-reader'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Brand } from '@/components/shared'
+import { SettingsButton } from '@/components/settings/settings-page'
 import { Badge } from '@/components/ui/badge'
 import {
   Breadcrumb,
@@ -265,6 +266,7 @@ export function TopBar() {
           </TooltipTrigger>
           <TooltipContent>{capabilities.agent ? '显示或收起 Agent 面板' : '显示或收起会话面板 · Agent 暂不可用，仅保存问题'}</TooltipContent>
         </Tooltip>
+        <SettingsButton iconOnly />
       </div>
     </header>
   )

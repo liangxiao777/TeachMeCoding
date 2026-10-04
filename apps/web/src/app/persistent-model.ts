@@ -468,6 +468,7 @@ export function usePersistentModel(): AppModel {
   return {
     state: { spaces, currentSpaceId: currentId, globalView }, current: uiCurrent, session,
     capabilities, localTerminal,
+    refreshCapabilities: () => { void api<AppModel['capabilities']>('/capabilities').then(setCapabilities).catch(() => {}) },
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null

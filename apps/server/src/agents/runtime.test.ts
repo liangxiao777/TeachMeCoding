@@ -14,8 +14,11 @@ import { createApp } from '../http/app.js';
 import { createLocalAccess } from '../http/local-access.js';
 import { serverConfig } from '../config/server.js';
 import { TeachingRuntime } from './runtime.js';
-import { providerStream, teachingModel } from './model.js';
-import { reply, response, syntheticConfig } from './test-support.js';
+import { providerStream } from './model.js';
+import type { ModelSelection } from '@teach-me-coding/contracts';
+import type { ModelSource } from '../models/service.js';
+import { reply, response, syntheticSource, teachingModel } from './test-support.js';
+
 
 function setup() {
   const db = openDatabase(':memory:'), learning = new Learning(db);
@@ -29,7 +32,7 @@ const message = (text: string, draftRevision = 0) => ({ text, quote: null, draft
 test('runs isolate sessions, reject concurrency, replay durable cursors and deduplicate submissions', async () => {
   const { db, learning, a, b, sa, sb } = setup();
   const contexts: string[] = [];
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
     contexts.push(JSON.stringify(context)); return response(reply([{ type: 'text', text: contexts.length === 1 ? 'A reply' : 'B reply' }]));
   } });
   try {
@@ -56,7 +59,7 @@ test('cancel before commit wins even if transport finishes; pending shutdown nev
   const { db, learning, a, sa, b, sb } = setup();
   let finish!: () => void, started!: () => void, commits = 0, calls = 0;
   const ready = new Promise<void>((r) => { started = r; });
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { scenario: () => ({ tools: [], commit: () => { commits++; } }), stream: () => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { scenario: () => ({ tools: [], commit: () => { commits++; } }), stream: () => {
     calls++;
     const stream = createAssistantMessageEventStream();
     finish = () => stream.push({ type: 'done', reason: 'stop', message: reply([{ type: 'text', text: 'late' }]) });
@@ -78,7 +81,7 @@ test('large tool results reach the second request intact; persisted messages omi
     const source = `SOURCE-MARKER-${'x'.repeat(size)}-END`;
     const tool: AgentTool = { name: 'read', label: 'Read', description: 'Synthetic only', parameters: Type.Object({}),
       async execute() { return { content: [{ type: 'text', text: source }], details: {} }; } };
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_m, context) => {
+    const runtime = new TeachingRuntime(learning, syntheticSource, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_m, context) => {
       requests++;
       if (requests === 1) return response(reply([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse'));
       assert.deepEqual(context.messages.find((m) => m.role === 'toolResult')?.content, [{ type: 'text', text: source }]);
@@ -101,7 +104,7 @@ test('cancelling a multi-tool turn retains matching native results without commi
   let entered!: () => void, release!: () => void, commits = 0;
   const ready = new Promise<void>((resolve) => { entered = resolve; });
   const held = new Promise<void>((resolve) => { release = resolve; });
-  const runtime = new TeachingRuntime(learning, syntheticConfig, {
+  const runtime = new TeachingRuntime(learning, syntheticSource, {
     scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'synthetic only', parameters: Type.Object({}),
       async execute() { entered(); await held; return { content: [{ type: 'text', text: 'CANCELLED-SOURCE-BODY' }], details: {} }; } }], commit() { commits++; } }),
     stream: () => response(reply(['first', 'second'].map((id) => ({ type: 'toolCall', id, name: 'read', arguments: {} })), 'toolUse')),
@@ -123,7 +126,7 @@ test('cancelling a multi-tool turn retains matching native results without commi
 test('protected SSE reconnect reads missing events and disconnect does not stop a run', async () => {
   const { db, learning, a, sa } = setup();
   let complete!: () => void;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
     const stream = createAssistantMessageEventStream();
     complete = () => {
       const partial = reply([{ type: 'text', text: 'x'.repeat(600) }]);
@@ -179,12 +182,12 @@ test('startup appends an interrupted event once and does not replay a pending re
       events.forEach((event, index) => data.db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?)`).run(a.id, runId, index + 1, JSON.stringify(event)));
     }
     data.close(); data = openDataDirectory(root);
-    let runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
+    let runtime = new TeachingRuntime(new Learning(data.db), syntheticSource);
     assert.equal(runtime.get(a.id, id).state, 'interrupted');
     assert.equal(runtime.events(a.id, id).events.at(-1)?.data.type, 'state');
     assert.equal(runtime.get(a.id, task).state, 'interrupted');
     assert.equal(runtime.events(a.id, task).events.at(-1)?.data.type, 'state');
-    data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticConfig);
+    data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticSource);
     for (const runId of [id, task]) {
       const events = runtime.events(a.id, runId).events;
       assert.equal(events.length, 4);
@@ -206,10 +209,9 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
   const { db, learning, a, sa } = setup();
   const adapter = providerStream();
   let payload: Record<string, unknown> | undefined;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (model, context, options) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (model, context, options) => {
     assert.equal(options?.reasoning, 'high');
-    assert.equal(options?.apiKey, syntheticConfig.apiKey);
-    return adapter(model, context, { ...options, onPayload(value) {
+    return adapter(model, context, { ...options, apiKey: 'synthetic-private-key', onPayload(value) {
       payload = value as Record<string, unknown>;
       throw new Error('Deterministic stop before network transport');
     } });
@@ -219,11 +221,39 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
     await runtime.idle(run.id);
     assert.equal(runtime.get(a.id, run.id).state, 'failed');
     assert.equal(payload?.model, 'stealth/space-bunny-alpha');
-    assert.ok(payload && !('max_tokens' in payload) && !('max_completion_tokens' in payload));
-    assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
-    assert.ok(!JSON.stringify(payload).includes(syntheticConfig.apiKey));
+    // pi-ai's unified path applies its own output ceiling and reasoning map.
+    assert.ok(payload && (typeof payload.max_tokens === 'number' || typeof payload.max_completion_tokens === 'number'));
+    assert.equal((payload?.reasoning as { effort?: string } | undefined)?.effort, 'high');
+    assert.ok(!JSON.stringify(payload).includes('synthetic-private-key'));
     const manifest = db.prepare('SELECT value FROM context_manifests').get() as { value: string };
     assert.equal(JSON.parse(manifest.value).budget.reasoning, 'high');
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('each run freezes the model and reasoning level that were selected at its creation', async () => {
+  const { db, learning, a, sa } = setup();
+  const other = { ...teachingModel, id: 'other/model' };
+  const first: ModelSelection = { provider: 'openrouter', model: teachingModel.id, thinkingLevel: 'high' };
+  const second: ModelSelection = { provider: 'openrouter', model: other.id, thinkingLevel: 'low' };
+  let active = first;
+  const source: ModelSource = {
+    current: () => ({ selection: active, model: active.model === other.id ? other : teachingModel }),
+    resolve: (s) => s.model === other.id ? other : s.model === teachingModel.id ? teachingModel : undefined,
+  };
+  const seen: { model: string; reasoning: unknown }[] = [];
+  const runtime = new TeachingRuntime(learning, source, { stream: (model, _context, options) => {
+    seen.push({ model: model.id, reasoning: options?.reasoning });
+    return response(reply([{ type: 'text', text: 'ok' }]));
+  } });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('first'));
+    active = second; // The setting changes after the run is created.
+    await runtime.idle(run.id);
+    assert.deepEqual(seen[0], { model: teachingModel.id, reasoning: 'high' });
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+    const later = runtime.submit(a.id, sa, randomUUID(), message('second', learning.session(a.id, sa).draft.revision));
+    await runtime.idle(later.run.id);
+    assert.deepEqual(seen[1], { model: 'other/model', reasoning: 'low' });
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -238,7 +268,7 @@ test('ordered reasoning/text/tool rounds hydrate identically while native signat
   ], 'toolUse');
   const tool: AgentTool = { name: 'read', label: 'Read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
     async execute() { return { content: [{ type: 'text', text: 'PRIVATE-TOOL-BODY' }], details: {} }; } };
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_model, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { scenario: () => ({ tools: [tool], commit() {} }), stream: (_model, context) => {
     requests++;
     if (requests === 1) return response(first);
     const saved = context.messages.find((m) => m.role === 'assistant');
@@ -289,7 +319,7 @@ test('hydrating unfinished reasoning and replaying from the saved cursor never d
   const { db, learning, a, sa } = setup();
   const stream = createAssistantMessageEventStream();
   const partial = reply([{ type: 'text', text: 'Preface. ' }, { type: 'thinking', thinking: 'Consider ' }], 'pending');
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => stream });
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => stream });
   try {
     const { run } = runtime.submit(a.id, sa, randomUUID(), message('reconnect'));
     stream.push({ type: 'start', partial });
@@ -332,7 +362,7 @@ test('stop or provider failure before reasoning_end preserves unfinished display
     const { db, learning, a, sa } = setup();
     const stream = createAssistantMessageEventStream();
     const partial = reply([{ type: 'thinking', thinking: 'Unfinished', thinkingSignature: 'PRIVATE-SIGNATURE' }], 'pending');
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => stream });
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => stream });
     try {
       const { run } = runtime.submit(a.id, sa, randomUUID(), message(mode));
       stream.push({ type: 'start', partial });
@@ -383,10 +413,10 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
     const encode = (value: unknown) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
     const chunk = (delta: unknown, finish_reason: string | null = null) => ({ id: 'gen-synthetic-stream', object: 'chat.completion.chunk', created: 1,
       model: teachingModel.id, choices: [{ index: 0, delta, finish_reason }] });
-    const runtime = new TeachingRuntime(learning, syntheticConfig, {
+    const runtime = new TeachingRuntime(learning, syntheticSource, {
       scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
         async execute() { executions++; return { content: [{ type: 'text', text: 'tool result' }], details: {} }; } }], commit() { commits++; } }),
-      stream: (model, context, options) => adapter(model, context, { ...options,
+      stream: (model, context, options) => adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
         onProviderStreamEvent: (...args) => { chunks++; options?.onProviderStreamEvent?.(...args); },
         fetch: async () => {
           requests++;

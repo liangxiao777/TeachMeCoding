@@ -7,7 +7,7 @@ import { createRouteTools } from './route-tools.js';
 import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { TeachingRuntime } from './runtime.js';
-import { reply, response, routeReply, syntheticConfig } from './test-support.js';
+import { reply, response, routeReply, syntheticSource } from './test-support.js';
 
 function caller(draft: ReturnType<typeof createRouteTools>) {
   return async (name: string, args: ToolCall['arguments']) => {
@@ -70,7 +70,7 @@ test('granular planning crosses old request/tool/token ceilings and commits only
     { title: 'Application', units: Array.from({ length: 8 }, (_, i) => ({ title: `A${i}`, summary: `Application ${i}`, goals: [`Build ${i}`] })) },
   ] };
   let requests = 0;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context, options) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context, options) => {
     requests++;
     assert.equal(options?.maxTokens, undefined);
     assert.equal(learning.space(space.id).route.content, null, 'Incremental calls must not publish a partial route');
@@ -97,7 +97,7 @@ test('a rejected route tool can be corrected, but edits after submission cannot 
   for (const finalEdit of [false, true]) {
     const db = openDatabase(':memory:'), learning = new Learning(db), space = learning.create({ name: 'Repair', goal: 'synthetic' });
     let requests = 0, stageId = '';
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
       const last = context.messages.at(-1);
       if (last?.role === 'toolResult' && last.toolName === 'add_route_stage') stageId = JSON.parse(last.content[0]!.type === 'text' ? last.content[0]!.text : '{}').stageId;
       const steps: Pick<ToolCall, 'name' | 'arguments'>[] = [

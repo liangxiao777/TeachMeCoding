@@ -4,11 +4,18 @@ import { type AgentEvent, type AgentTool, type StreamFn } from '@earendil-works/
 import { createAssistantMessageEventStream, normalizeContext, Type, type AssistantMessage } from '@earendil-works/pi-ai';
 import { createProviderAgent } from './provider.js';
 import { providerStream } from './model.js';
+import type { ModelSource } from '../models/service.js';
+import { teachingModel } from './test-support.js';
 
-const config = { apiKey: 'synthetic-private-key', model: 'exact/configured-id' };
+const selection = { provider: 'openrouter', model: 'exact/configured-id', thinkingLevel: 'high' as const };
+const exact = { ...teachingModel, id: selection.model, name: selection.model };
+const source: ModelSource = {
+  current: () => ({ selection, model: exact }),
+  resolve: (s) => s.provider === selection.provider && s.model === selection.model ? exact : undefined,
+};
 function message(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
   return {
-    role: 'assistant', api: 'openai-completions', provider: 'openrouter', model: config.model,
+    role: 'assistant', api: 'openai-completions', provider: 'openrouter', model: selection.model,
     content, stopReason, timestamp: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
@@ -35,10 +42,9 @@ function stream(message: AssistantMessage) {
 
 test('exact model and private key reach the stream; text and terminal lifecycle reach the subscriber', async () => {
   const events: AgentEvent[] = [];
-  const agent = createProviderAgent(config, { streamFn: (model, _context, options) => {
+  const agent = createProviderAgent(source, selection, { streamFn: (model, _context, options) => {
     assert.equal(model.id, 'exact/configured-id');
     assert.equal(model.provider, 'openrouter');
-    assert.equal(options?.apiKey, 'synthetic-private-key');
     assert.equal(options?.reasoning, 'high');
     assert.ok(options?.signal);
     return stream(message([{ type: 'text', text: 'hello 42' }]));
@@ -50,17 +56,17 @@ test('exact model and private key reach the stream; text and terminal lifecycle 
   assert.equal(events[0]?.type, 'agent_start');
   assert.equal(events.at(-1)?.type, 'agent_end');
   assert.equal(agent.state.isStreaming, false);
-  assert.ok(!JSON.stringify(events).includes(config.apiKey));
+  assert.ok(!JSON.stringify(events).includes('synthetic-private-key'));
 });
 
-test('smoke leaves token limits unset and preserves mandatory high reasoning before transport', async () => {
+test('smoke keeps selected reasoning while pi-ai applies its output ceiling before transport', async () => {
   let payload: Record<string, unknown> | undefined;
-  const agent = createProviderAgent(config);
+  const agent = createProviderAgent(source, selection);
   const input = 'Preserve this entire input. '.repeat(2000);
   const stream = await providerStream()({ ...agent.state.model, contextWindow: 8, maxTokens: 2 }, normalizeContext({
     messages: [{ role: 'user', content: input, timestamp: 0 }],
   }), {
-    apiKey: config.apiKey, reasoning: 'high',
+    apiKey: 'synthetic-private-key', reasoning: 'high',
     onPayload(value) {
       payload = value as Record<string, unknown>;
       throw new Error('Test stops before network transport');
@@ -70,9 +76,11 @@ test('smoke leaves token limits unset and preserves mandatory high reasoning bef
   assert.equal(result.stopReason, 'error');
   assert.equal(result.errorMessage, 'Test stops before network transport');
   assert.equal(payload?.model, 'exact/configured-id');
-  assert.ok(payload && !('max_tokens' in payload) && !('max_completion_tokens' in payload));
+  // streamSimple owns the reasoning map and an output ceiling clamped to context.
+  assert.ok(payload && (payload.max_tokens === 1 || payload.max_completion_tokens === 1));
   assert.ok(JSON.stringify(payload.messages).includes(input));
-  assert.deepEqual(payload?.reasoning, { enabled: true, effort: 'high' });
+  assert.equal((payload?.reasoning as { effort?: string } | undefined)?.effort, 'high');
+  assert.ok(!JSON.stringify(payload).includes('synthetic-private-key'));
 });
 
 test('one validated tool call returns its result to the next model turn', async () => {
@@ -96,7 +104,7 @@ test('one validated tool call returns its result to the next model turn', async 
       return { content: [{ type: 'text', text: String(args.left + args.right) }], details: {} };
     },
   };
-  const agent = createProviderAgent(config, { streamFn, tools: [tool] });
+  const agent = createProviderAgent(source, selection, { streamFn, tools: [tool] });
   agent.subscribe((event) => { events.push(event.type); });
   await agent.prompt('use the test tool');
   assert.equal(calls, 2);
@@ -106,7 +114,7 @@ test('one validated tool call returns its result to the next model turn', async 
 });
 
 test('provider failure is a terminal assistant error, not a successful empty reply', async () => {
-  const agent = createProviderAgent(config, { streamFn: () => stream({
+  const agent = createProviderAgent(source, selection, { streamFn: () => stream({
     ...message([], 'error'), errorMessage: 'synthetic provider unavailable',
   }) });
   const events: AgentEvent[] = [];
@@ -124,7 +132,7 @@ test('abort reaches the active stream, prevents concurrent prompt, and settles i
   let started!: () => void;
   const ready = new Promise<void>((resolve) => { started = resolve; });
   let signal: AbortSignal | undefined;
-  const agent = createProviderAgent(config, { streamFn: (_model, _context, options) => {
+  const agent = createProviderAgent(source, selection, { streamFn: (_model, _context, options) => {
     const result = createAssistantMessageEventStream();
     signal = options?.signal;
     const abort = () => result.push({ type: 'error', reason: 'aborted', error: message([], 'aborted') });

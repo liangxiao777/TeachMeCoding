@@ -9,7 +9,7 @@ import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contrac
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
-import { populated, reply, response, syntheticConfig } from './test-support.js';
+import { populated, reply, response, syntheticSource } from './test-support.js';
 import { readTools } from './read-tools.js';
 
 test('a large lesson tool call reaches the final reply and commits the complete lesson', async () => {
@@ -19,7 +19,7 @@ test('a large lesson tool call reaches the final reply and commits the complete 
     { type: 'code', file: 'greet.py', language: 'python', code: 'def greet(name="Ada"):\n    return "Hi " + name' },
   ] };
   let requests = 0;
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context, options) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context, options) => {
     assert.equal(options?.reasoning, 'high');
     requests++;
     if (requests === 1) return response(reply([
@@ -59,7 +59,7 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
   l.saveLesson(space.id, unit, { title: 'legacy', content: 'original text' });
   let mode = 'good';
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     assert.ok(!JSON.stringify(context).includes('private-chat-marker'));
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments:
       { title: 'structured', intro: 'intro', blocks: [{ type: 'h2', id: 'arguments', text: 'Arguments' }, { type: 'code', file: 'example.py', language: 'python', code: 'print(13)' }] },
@@ -91,7 +91,7 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
 test('only same-space adopted valid conclusions enter new sessions; revoke and source changes invalidate them', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), a = populated(l, 'A'), b = populated(l, 'B');
   let propose = true, saw = '';
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     saw = JSON.stringify(context);
     if (propose && context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'conclusion', name: 'submit_learning_conclusion', arguments: { text: 'ADOPTED-ARGUMENT-FACT' } }], 'toolUse'));
     return response(reply([{ type: 'text', text: 'explanation' }]));
@@ -139,7 +139,7 @@ test('automatic source body is not copied to native history or manifests but pro
   const root = mkdtempSync(join(tmpdir(), 'tmc-retention-')); writeFileSync(join(root, 'sample.py'), 'SYNTHETIC-SOURCE-BODY');
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l);
   const s = l.createSession(space.id, { scope: 'unit', unitId: units[0]!.id, title: 'read' }); let observed = false;
-  const runtime = new TeachingRuntime(l, syntheticConfig, { projectDirectory: () => root, stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { projectDirectory: () => root, stream: (_m, context) => {
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'sample.py' } }], 'toolUse'));
     observed = JSON.stringify(context).includes('SYNTHETIC-SOURCE-BODY');
     return response(reply([{ type: 'text', text: 'Read completed without copying source.' }]));

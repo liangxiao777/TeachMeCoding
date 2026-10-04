@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, ModelSelection, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
 import type { FixedAssessment } from '../modules/assessments.js';
 
 export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' | 'evaluation';
@@ -10,6 +10,8 @@ export interface FrozenContext {
   sessionId: string | null;
   unitId: string | null;
   scenario: Scenario;
+  /** Model choice frozen when the run was created; absent on runs from before settings existed. */
+  model?: ModelSelection;
   requirement: RequirementState;
   route: Workspace['route'] | null;
   unit: RouteContent['stages'][number]['units'][number] | null;
@@ -26,7 +28,7 @@ export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
 export const compilerVersion = '4';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
-export const budget = { reasoning: 'high' as const, milliseconds: 300_000 };
+export const budget = { milliseconds: 300_000 };
 
 export function xmlText(text: string) {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udfff]/gu, '�')
@@ -71,7 +73,8 @@ export function compileRequest(input: FrozenContext, history: HistoryGroup[], cu
   return { messages: structuredClone([...prefix, ...previous.flatMap((g) => g.messages), ...active]),
     manifest: { schemaVersion: contextVersion, compilerVersion, promptHash: hash(prompt), contextHash: hash(xml),
       sources, selectedHistory: previous.map((g) => ({ id: g.id, hash: hash(g.messages) })),
-      budget: { ...budget }, retention: 'tool bodies omitted; explicit references retained' },
+      budget: { reasoning: input.model?.thinkingLevel ?? null, milliseconds: budget.milliseconds },
+      retention: 'tool bodies omitted; explicit references retained' },
   };
 }
 

@@ -11,7 +11,7 @@ import { TeachingRuntime } from './runtime.js';
 import { type FrozenContext, systemPrompt } from './context.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
-import { populated, reply, response, syntheticConfig } from './test-support.js';
+import { populated, reply, response, syntheticSource } from './test-support.js';
 import { XMLValidator } from 'fast-xml-parser';
 
 test('real scene and task tool sets never include side effects, cross-scene artifacts or private rubric queries', () => {
@@ -52,7 +52,7 @@ test('lesson tools reject section bodies in headings and accept a corrected stru
 test('Pi rejects unknown write/execute and cross-scene tool calls without changing artifacts', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l);
   let tool = 'write';
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => context.messages.at(-1)?.role === 'toolResult'
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => context.messages.at(-1)?.role === 'toolResult'
     ? response(reply([{ type: 'text', text: 'claimed done' }]))
     : response(reply([{ type: 'toolCall', id: 'forbidden', name: tool, arguments: { path: '/synthetic', command: 'touch /synthetic', text: 'fake conclusion' } }], 'toolUse')) });
   try {
@@ -70,7 +70,7 @@ test('endless valid tools and a stalled provider time out without a commit', asy
   for (const mode of ['loop', 'timeout'] as const) {
     const db = openDatabase(':memory:'), l = new Learning(db), space = l.create({ name: mode, goal: 'test' });
     let requests = 0, committed = 0;
-    const runtime = new TeachingRuntime(l, syntheticConfig, { milliseconds: 100,
+    const runtime = new TeachingRuntime(l, syntheticSource, { milliseconds: 100,
       scenario: () => ({ tools: [{ name: 'ping', label: 'ping', description: 'no effect', parameters: Type.Object({}), async execute() { return { content: [], details: {} }; } }], commit() { committed++; } }),
       stream: async (_m, _c, options) => {
         requests++;
@@ -97,7 +97,7 @@ test('explicit debug snapshots contain synthetic tool body with private modes; d
   writeFileSync(join(root, 'code.txt'), 'SYNTHETIC-DEBUG-BODY');
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l);
   const session = l.createSession(space.id, { scope: 'unit', unitId: units[0]!.id, title: 'debug' });
-  const runtime = new TeachingRuntime(l, syntheticConfig, { debugDirectory: debug, projectDirectory: () => root, stream: (_m, context) =>
+  const runtime = new TeachingRuntime(l, syntheticSource, { debugDirectory: debug, projectDirectory: () => root, stream: (_m, context) =>
     context.messages.at(-1)?.role === 'toolResult' ? response(reply([{ type: 'text', text: 'read complete' }]))
       : response(reply([{ type: 'toolCall', id: 'read', name: 'read', arguments: { path: 'code.txt' } }], 'toolUse')) });
   try {

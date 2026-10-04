@@ -91,6 +91,14 @@ for (const { hostname, previewOrigin } of [
     const headers = { 'X-TMC-Token': token, Origin: origin };
     assert.equal((await rawRequest('/api/missing', headers)).status, 404);
     assert.equal((await rawRequest('/api/missing')).status, 401);
+    const settings = await rawRequest('/api/settings/model', headers);
+    assert.equal(settings.status, 200, 'a newly started production server must expose model settings');
+    const modelSettings = JSON.parse(settings.body);
+    assert.equal(modelSettings.selection, null);
+    assert.equal(modelSettings.ready, false);
+    assert.ok(modelSettings.providers.some((provider) => provider.id === 'openrouter'));
+    assert.ok(!settings.body.includes(syntheticSecret));
+    assert.equal((await rawRequest('/api/settings/model')).status, 401);
     const checked = await rawRequest('/api/access/check', headers, 'POST');
     assert.deepEqual(JSON.parse(checked.body), { ok: true });
     assert.equal(checked.headers['access-control-allow-origin'], undefined);

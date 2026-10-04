@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
-import type { ModelConfig } from '../config/model.js';
 import { BusinessError, Learning } from '../modules/learning.js';
+import type { ModelSource } from '../models/service.js';
 import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
-import { failureStream, providerStream, teachingModel } from './model.js';
+import { failureStream, providerStream } from './model.js';
 import { createScenario } from './scenarios.js';
 import { createTask } from './tasks.js';
 import { Assessments } from '../modules/assessments.js';
@@ -30,10 +30,10 @@ export class TeachingRuntime {
   private live = new Map<string, { space: string; agent?: Agent; done: Promise<void> }>();
   private closing = false;
   private stream: StreamFn;
-  constructor(readonly learning: Learning, private config: ModelConfig | null, private options: RuntimeOptions = {}) {
-    this.stream = options.stream ?? providerStream();
+  constructor(readonly learning: Learning, private models: ModelSource | null, private options: RuntimeOptions = {}) {
+    this.stream = options.stream ?? models?.stream ?? providerStream();
   }
-  get available() { return this.config !== null && this.config.model === teachingModel.id; }
+  get available() { return this.models !== null && this.models.current() !== null; }
   get actions() { return this.options.actions; }
   get executions() { return this.options.executions; }
 
@@ -67,6 +67,7 @@ export class TeachingRuntime {
     const s = this.learning.session(space, session), w = this.learning.space(space);
     if (s.scope !== 'intake' && !w.requirement.confirmed) throw new BusinessError(422, '请先确认学习需求。');
     return structuredClone({ spaceId: space, sessionId: session, unitId: s.unitId,
+      model: this.models?.current()?.selection,
       scenario: s.scope === 'route' ? 'roadmap' : s.scope === 'unit' ? 'tutor' : 'intake',
       requirement: w.requirement, route: s.scope === 'intake' ? null : w.route,
       unit: w.route.content?.stages.flatMap((stage) => stage.units).find((unit) => unit.id === s.unitId) ?? null,
@@ -90,6 +91,7 @@ export class TeachingRuntime {
       if (input.kind !== 'lesson' && !u.lesson) throw new BusinessError(422, '请先生成课件。');
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, unit, input.kind)) throw new BusinessError(409, '当前单元已有相同生成任务。');
       const frozen: FrozenContext = { spaceId: space, sessionId: null, unitId: unit, scenario: input.kind,
+        model: this.models?.current()?.selection,
         requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
         lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
         assessmentRevision: u.assessment?.revision ?? 0,
@@ -164,7 +166,7 @@ export class TeachingRuntime {
   private begin(space: string, session: string, key: string, raw: unknown, retryOf?: string): RunSubmission {
     const input = messageInputSchema.parse(raw);
     if (this.closing) throw new BusinessError(503, '服务正在关闭。');
-    if (!this.available) throw new BusinessError(503, '教学模型未配置或模型不匹配；请检查服务端配置。');
+    if (!this.available) throw new BusinessError(503, '教学模型不可用，请在应用设置中检查模型与凭据。');
     const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => this.recordRun(space, session, input, retryOf));
     this.launch(space, id, input.text);
     return { run: this.get(space, id), session: this.learning.session(space, session) };
@@ -236,6 +238,13 @@ export class TeachingRuntime {
     const tables = this.tables(space, id);
     const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
     const frozen = JSON.parse(input) as FrozenContext;
+    const model = frozen.model && this.models?.resolve(frozen.model);
+    const choice = model ? { selection: frozen.model!, model } : this.models?.current() ?? null;
+    if (!choice) {
+      this.learning.db.transaction(() => this.finish(space, id, 'failed', '所选教学模型已不可用，请在设置中重新选择后重试。'))();
+      return;
+    }
+    frozen.model = choice.selection;
     const history = frozen.sessionId ? this.history(space, frozen.sessionId, id) : [];
     // Assessment/evaluation reasoning can contain private reference answers.
     // Publish real phase/tool activity, but never their unvalidated model prose.
@@ -268,9 +277,8 @@ export class TeachingRuntime {
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
       const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
       const agent = new Agent({
-        initialState: { model: teachingModel, tools: scenario.tools, thinkingLevel: budget.reasoning },
+        initialState: { model: choice.model, tools: scenario.tools, thinkingLevel: choice.selection.thinkingLevel },
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
-        getApiKey: () => this.config?.apiKey,
         beforeToolCall: async () => {
           if (failure) return { block: true, reason: failure, terminate: true };
           if (!active(this.get(space, id))) {
@@ -282,10 +290,11 @@ export class TeachingRuntime {
         streamFn: async (model, context, options) => {
           try {
             request++;
-            if (!active(this.get(space, id))) return failureStream('运行已停止。', true);
+            if (!active(this.get(space, id))) return failureStream(model, '运行已停止。', true);
             const compiled = compileRequest(frozen, history, context.messages, tools);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
-              model: teachingModel.id, provider: teachingModel.provider, modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
+              model: choice.model.id, provider: choice.model.provider, thinkingLevel: choice.selection.thinkingLevel,
+              modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
               toolSources, actualUsage: null };
             this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
             if (this.options.debugDirectory) {
@@ -300,7 +309,7 @@ export class TeachingRuntime {
             });
           } catch (error) {
             failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
-            return failureStream(failure);
+            return failureStream(model, failure);
           }
         },
       });

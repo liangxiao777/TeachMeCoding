@@ -8,7 +8,7 @@ import { openDataDirectory } from '../storage/data-directory.js';
 import { Learning } from './learning.js';
 import { Projects } from './projects.js';
 import { Actions } from './actions.js';
-import { populated, reply, response, syntheticConfig } from '../agents/test-support.js';
+import { populated, reply, response, syntheticSource } from '../agents/test-support.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { runCommand } from '../runtime/commands.js';
 
@@ -77,7 +77,7 @@ test('Pi proposes without side effects, discards failed turns and gets original-
   const { space, units } = populated(learning);
   const session = learning.createSession(space.id, { scope: 'unit', unitId: units[0]!.id, title: 'Actions' }).id;
   let failed = true, evidence = '';
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { actions, projectDirectory: (s) => projects.root(s), stream: async (_m, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { actions, projectDirectory: (s) => projects.root(s), stream: async (_m, context) => {
     if (context.messages.at(-1)?.role === 'toolResult') return response(reply([{ type: 'text', text: '请确认。' }], failed ? 'error' : 'stop'));
     evidence = JSON.stringify(context.messages);
     return response(reply([{ type: 'toolCall', id: randomUUID(), name: 'propose_command', arguments: { command: 'echo verified > proof', reason: '验证提案' } }], 'toolUse'));

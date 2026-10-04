@@ -8,7 +8,7 @@ import { openDataDirectory } from '../storage/data-directory.js';
 import { Learning } from './learning.js';
 import { Assessments } from './assessments.js';
 import { Executions } from './executions.js';
-import { populated, reply, response, syntheticConfig } from '../agents/test-support.js';
+import { populated, reply, response, syntheticSource } from '../agents/test-support.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { executionFeedback, type CodePlan } from '@teach-me-coding/contracts';
 
@@ -26,7 +26,7 @@ function fixture(plan = defaultPlan, limits = { milliseconds: 3000, outputBytes:
 
 test('fixed real submission survives new drafts and failed-model retry without repeating code', async () => {
   const f = fixture(), marker = join(f.root, 'count'); let fail = true, requestText = '';
-  const runtime = new TeachingRuntime(f.l, syntheticConfig, { executions: f.executions, stream: (_m, context) => {
+  const runtime = new TeachingRuntime(f.l, syntheticSource, { executions: f.executions, stream: (_m, context) => {
     requestText = JSON.stringify(context);
     if (fail) return response(reply([], 'error'));
     return response(context.messages.at(-1)?.role === 'toolResult' ? reply([{ type: 'text', text: 'done' }]) : reply([{ type: 'toolCall', id: 'grade', name: 'submit_evaluation', arguments: grade }], 'toolUse'));
@@ -188,7 +188,7 @@ test('limits apply across cases and setup failure leaves explicit failed evidenc
 test('cancellation before launch and during code execution is durable; retries and reboot do not execute it again', async () => {
   const f = fixture();
   let requests = 0;
-  const runtime = new TeachingRuntime(f.l, syntheticConfig, { executions: f.executions, stream: (_m, context) => {
+  const runtime = new TeachingRuntime(f.l, syntheticSource, { executions: f.executions, stream: (_m, context) => {
     requests++; return response(context.messages.at(-1)?.role === 'toolResult' ? reply([]) : reply([{ type: 'toolCall', id: 'grade', name: 'submit_evaluation', arguments: grade }], 'toolUse'));
   } });
   try {

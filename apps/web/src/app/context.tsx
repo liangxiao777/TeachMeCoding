@@ -13,6 +13,8 @@ export interface AppModel {
   session?: Session
   localTerminal?: LocalTerminal
   capabilities: { agent: boolean; terminal: boolean; assessment: boolean }
+  /** Re-read server capabilities after model settings change. Absent in the isolated preview. */
+  refreshCapabilities?: () => void
   lesson: (unit: Unit) => Lesson | null
   assessment: (unit: Unit) => AssessmentSpec | null
   goHome: Action

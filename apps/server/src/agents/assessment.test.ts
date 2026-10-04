@@ -6,7 +6,7 @@ import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { Assessments } from '../modules/assessments.js';
 import { TeachingRuntime } from './runtime.js';
-import { populated, reply, response, syntheticConfig } from './test-support.js';
+import { populated, reply, response, syntheticSource } from './test-support.js';
 
 const spec = { public: { q1: '解释参数的来源', q2: '读取参数并显示数量', starter: '', q2Kind: 'code' as const },
   rubric: { q1: { answer: 'PRIVATE-RUBRIC-ONE', criteria: ['明确调用者'] }, q2: { answer: 'PRIVATE-RUBRIC-TWO', criteria: ['排除程序名'] } } };
@@ -19,7 +19,7 @@ function fixture() {
 
 test('private rubric is separated from public unit, tutor context and task event text; stale generation preserves versions', async () => {
   const { db, l, space, unit } = fixture(); let late = false, tutor = false;
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     if (tutor) {
       const value = JSON.stringify(context);
       assert.match(value, /解释参数的来源/); assert.doesNotMatch(value, /PRIVATE-RUBRIC/);
@@ -105,7 +105,7 @@ test('missing execution and succeeded/failed execution fixtures never award code
 test('evaluation failures create no result; retries keep one fixed submission and exclude mutable profile and draft', async () => {
   const { db, l, space, unit, a, sources } = fixture(); a.saveSpec(space.id, unit, spec, sources, 0);
   let fail = true;
-  const runtime = new TeachingRuntime(l, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     const value = JSON.stringify(context);
     assert.match(value, /PRIVATE-RUBRIC-ONE/); assert.match(value, /FIXED-ANSWER/); assert.doesNotMatch(value, /NEW-DRAFT|学习 Rust|公开课件/);
     if (fail) return response(reply([], 'error'));

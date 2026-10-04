@@ -5,7 +5,9 @@ import { createLocalAccess, terminalUpgradeGate } from './http/local-access.js';
 import { dataDirectory, openDataDirectory } from './storage/data-directory.js';
 import { Learning } from './modules/learning.js';
 import { Projects } from './modules/projects.js';
-import { loadModelConfig, type ModelConfig } from './config/model.js';
+import { defaultModel, serverEnvironment } from './config/model.js';
+import { FileCredentialStore } from './models/credentials.js';
+import { ModelService } from './models/service.js';
 import { TeachingRuntime } from './agents/runtime.js';
 import { join } from 'node:path';
 import { Terminals } from './runtime/terminals.js';
@@ -17,24 +19,28 @@ try {
   const { port, hostname } = config;
   const data = openDataDirectory(dataDirectory());
   const access = createLocalAccess(config);
-  let model: ModelConfig | null = null;
-  try { model = loadModelConfig(); } catch { /* Missing model configuration must not block saved learning data. */ }
+  const env = serverEnvironment();
+  let models: ModelService | null = null;
+  try {
+    models = new ModelService(data.db, { env, credentials: new FileCredentialStore(join(data.root, 'credentials.json')), fallback: defaultModel(env) });
+    await models.refresh();
+  } catch { /* Missing or unreadable model configuration must not block saved learning data. */ }
   const learning = new Learning(data.db);
   const projects = new Projects(data.root);
   const terminals = new Terminals((space) => projects.root(space));
   const actions = new Actions(learning, projects);
   const executions = new Executions(learning);
-  const agents = new TeachingRuntime(learning, model, {
+  const agents = new TeachingRuntime(learning, models, {
     actions, executions,
     projectDirectory: (space) => projects.root(space),
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
-  const server = serve({ fetch: createApp(access, learning, projects, agents).fetch, hostname, port }, () => {
+  const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined).fetch, hostname, port }, () => {
     console.log(`TeachMeCoding listening on http://${hostname}:${port}`);
     if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
-  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close()]);
+  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close()]).then(() => models?.close());
   server.on('error', () => {
     void close().finally(() => data.close());
     console.error('Cannot start local server. Check whether PORT is already in use.');

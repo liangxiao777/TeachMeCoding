@@ -1,12 +1,18 @@
 import { createProviderAgent } from '../agents/provider.js';
-import { loadModelConfig } from '../config/model.js';
+import { defaultModel, serverEnvironment } from '../config/model.js';
+import { ModelService } from '../models/service.js';
 
 let apiKey = '';
 try {
-  const config = loadModelConfig();
-  apiKey = config.apiKey;
+  const env = serverEnvironment();
+  apiKey = env('OPENROUTER_API_KEY') ?? '';
+  const fallback = defaultModel(env);
+  if (!fallback) throw new Error('Set OPENROUTER_MODEL explicitly; no fallback model is selected.');
+  const models = new ModelService(null, { env, fallback });
+  await models.refresh();
+  const selection = { ...fallback, thinkingLevel: 'high' as const };
   for (const cancel of [false, true]) {
-    const agent = createProviderAgent(config);
+    const agent = createProviderAgent(models, selection);
     let deltas = 0;
     let characters = 0;
     let timedOut = false;
@@ -31,7 +37,7 @@ try {
       if (!cancel && !result.content.some((part) => part.type === 'text' && part.text.includes('42'))) {
         throw new Error('Provider reply did not contain the requested number.');
       }
-      console.log(JSON.stringify({ provider: 'openrouter', model: config.model,
+      console.log(JSON.stringify({ provider: 'openrouter', model: selection.model,
         check: cancel ? 'live-cancellation' : 'live-stream', deltas, characters, stopReason: result.stopReason }));
     } finally {
       clearTimeout(timer);

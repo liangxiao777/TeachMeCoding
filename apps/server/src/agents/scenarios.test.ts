@@ -5,7 +5,7 @@ import type { RouteContent } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
-import { reply, response, routeReply, syntheticConfig } from './test-support.js';
+import { reply, response, routeReply, syntheticSource } from './test-support.js';
 
 test('the opening request starts intake once, and only its tool fills the editable requirement', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
@@ -13,7 +13,7 @@ test('the opening request starts intake once, and only its tool fills the editab
   const input = { name: 'intake', goal: opening }, key = randomUUID();
   const expected = { goal: '制作字数统计工具', background: '只会 Python', outcome: '处理三个文件', schedule: '每周 3 小时，6 周' };
   let turns = 0;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
     assert.ok(context.messages.some((m) => m.role === 'user' && m.content === opening));
     return turns++ === 0 ? response(reply([{ type: 'toolCall', name: 'submit_requirement_draft', id: 'draft', arguments: expected }], 'toolUse')) : response(reply([{ type: 'text', text: '请确认时间。' }]));
   } });
@@ -39,7 +39,7 @@ test('the opening request starts intake once, and only its tool fills the editab
 test('opening submission rolls back creation on failure and preserves the message when the model is unavailable', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
   let calls = 0;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => { calls++; return response(reply([])); } });
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => { calls++; return response(reply([])); } });
   const offline = new TeachingRuntime(learning, null);
   const key = randomUUID(), input = { name: 'opening', goal: '学习 SQL，每周两小时' };
   try {
@@ -67,7 +67,7 @@ test('invalid, truncated and late intake artifacts preserve valid drafts and new
     learning.saveRequirement(created.id, { ...created.requirement, value: { ...created.requirement.value, goal: 'keep goal' } });
     const space = learning.space(created.id), session = space.sessions[0]!.id;
     let calls = 0;
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: () => {
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
       if (calls++ === 0) return response(reply([{ type: 'toolCall', name: 'submit_requirement_draft', id: 'draft', arguments:
         variant === 'invalid' ? { goal: 'bad', confirmed: true } : { goal: 'new model goal', background: 'model', outcome: '', schedule: '' },
       }], 'toolUse'));
@@ -90,7 +90,7 @@ test('retry reuses the fixed original input, does not duplicate users or clear a
   const db = openDatabase(':memory:'), learning = new Learning(db);
   const space = learning.create({ name: 'retry', goal: 'retry' }), session = space.sessions[0]!.id;
   let fail = true;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
     assert.equal(context.messages.at(-1)?.content, 'original question');
     return response(reply([{ type: 'text', text: 'answer' }], fail ? 'error' : 'stop'));
   } });
@@ -114,7 +114,7 @@ test('initial roadmap applies on success while adjustments require confirmation 
     const space = learning.create({ name: change, goal: 'learn A not B' }), session = space.sessions[1]!.id;
     learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A not B' }, confirmed: true });
     let content: RouteContent = { note: 'plan', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
       assert.match(JSON.stringify(context), /learn A not B/);
       const adjustment = !!learning.space(space.id).route.content;
       const next = routeReply(context.messages, { ...content, note: adjustment ? 'adjusted' : 'plan' }, adjustment);
@@ -168,7 +168,7 @@ test('confirmation and planning commit atomically, retry once, and persist the i
   const input = { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A' }, confirmed: true }, key = randomUUID();
   const content = { note: 'A before B', stages: [{ id: randomUUID(), title: 'first', units: [{ id: randomUUID(), title: 'A', summary: 'intro', goals: ['A'] }] }] };
   let calls = 0;
-  const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
     calls++;
     return response(routeReply(context.messages, content) ?? reply([]));
   } });
@@ -202,7 +202,7 @@ test('missing, invalid, truncated and cancelled initial routes cannot be publish
     const space = learning.create({ name: variant, goal: 'learn' });
     const content = { note: 'retry', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
     let retrying = false;
-    const runtime = new TeachingRuntime(learning, syntheticConfig, { stream: (_m, context) => {
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
       if (!retrying && variant === 'missing') return response(reply([{ type: 'text', text: 'I made a plan without submitting it' }]));
       if (!retrying && variant === 'invalid') return response(context.messages.at(-1)?.role === 'toolResult' ? reply([])
         : reply([{ type: 'toolCall', id: 'invalid', name: 'submit_route_proposal', arguments: { note: 'empty draft' } }], 'toolUse'));

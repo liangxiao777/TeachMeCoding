@@ -1,11 +1,13 @@
 'use client'
 
+import { Activity, useRef, useState } from 'react'
 import { motion, MotionConfig, useReducedMotion } from 'motion/react'
 import { AgentPanel } from '@/components/agent/agent-panel'
 import { AssessmentView } from '@/components/assessment/assessment-view'
 import { ResultView } from '@/components/assessment/result-view'
 import { Onboarding } from '@/components/onboarding'
 import { RouteView } from '@/components/route-view'
+import { SettingsNavigation, SettingsPage } from '@/components/settings/settings-page'
 import { SpaceList } from '@/components/space-list'
 import { TopBar } from '@/components/top-bar'
 import { Workbench } from '@/components/workbench/workbench'
@@ -44,31 +46,46 @@ function SpaceBody() {
 
 export function AppShell() {
   const { current, persistence, capabilities } = useApp()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsTrigger = useRef<HTMLElement | null>(null)
+  const openSettings = () => {
+    settingsTrigger.current = document.activeElement as HTMLElement | null
+    setSettingsOpen(true)
+  }
+  const closeSettings = () => {
+    setSettingsOpen(false)
+    requestAnimationFrame(() => settingsTrigger.current?.focus())
+  }
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider delay={300}>
-        <div className="app-layout">
-          {current ? <SpaceBody key={current.id} /> : <SpaceList />}
-          {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
-            <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
-              {persistence.error ? (
-                <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
-                  <span className="flex-1">{persistence.error}</span>
-                  <Button variant="outline" size="sm" disabled={persistence.busy} onClick={persistence.retry}>重试</Button>
+        <SettingsNavigation value={persistence ? openSettings : null}>
+          <Activity mode={settingsOpen ? 'hidden' : 'visible'}>
+            <div className="app-layout">
+              {current ? <SpaceBody key={current.id} /> : <SpaceList />}
+              {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
+                <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
+                  {persistence.error ? (
+                    <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
+                      <span className="flex-1">{persistence.error}</span>
+                      <Button variant="outline" size="sm" disabled={persistence.busy} onClick={persistence.retry}>重试</Button>
+                    </div>
+                  ) : (
+                    <p role="status" className="text-xs text-muted-foreground">正在读取或保存…</p>
+                  )}
                 </div>
-              ) : (
-                <p role="status" className="text-xs text-muted-foreground">正在读取或保存…</p>
               )}
+              <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
+                {persistence ? (
+                  <span data-testid="workspace-notice">真实工作区 · {capabilities.agent ? '教学 Agent 已接入' : 'Agent 暂不可用'} · {capabilities.terminal ? '本机执行 · 非沙箱' : '终端暂不可用'}</span>
+                ) : (
+                  <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
+                )}
+              </footer>
             </div>
-          )}
-          <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
-            {persistence ? (
-              <span data-testid="workspace-notice">真实工作区 · {capabilities.agent ? '教学 Agent 已接入' : 'Agent 暂不可用'} · {capabilities.terminal ? '本机执行 · 非沙箱' : '终端暂不可用'}</span>
-            ) : (
-              <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
-            )}
-          </footer>
-        </div>
+          </Activity>
+          {settingsOpen && <SettingsPage onBack={closeSettings} />}
+        </SettingsNavigation>
       </TooltipProvider>
     </MotionConfig>
   )

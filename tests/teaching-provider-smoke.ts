@@ -5,13 +5,19 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TeachingRuntime } from '../apps/server/src/agents/runtime.js';
-import { loadModelConfig } from '../apps/server/src/config/model.js';
+import { defaultModel, serverEnvironment } from '../apps/server/src/config/model.js';
+import { ModelService } from '../apps/server/src/models/service.js';
 import { openDatabase } from '../apps/server/src/storage/database.js';
 import { Learning } from '../apps/server/src/modules/learning.js';
 
 const root = mkdtempSync(join(tmpdir(), 'tmc-real-teaching-'));
-const db = openDatabase(join(root, 'app.db')), learning = new Learning(db), config = loadModelConfig();
-const runtime = new TeachingRuntime(learning, config, { projectDirectory: () => root });
+const db = openDatabase(join(root, 'app.db')), learning = new Learning(db);
+const env = serverEnvironment(), fallback = defaultModel(env);
+if (!fallback) throw new Error('Set OPENROUTER_MODEL explicitly; no fallback model is selected.');
+const models = new ModelService(db, { env, fallback });
+await models.refresh();
+const config = { model: fallback.model };
+const runtime = new TeachingRuntime(learning, models, { projectDirectory: () => root });
 const space = learning.create({ name: '合成教学验证', goal: '学习 Python 函数参数' });
 const ask = async (session: string, text: string) => {
   const { run } = runtime.submit(space.id, session, randomUUID(), { text, quote: null, draftRevision: learning.session(space.id, session).draft.revision });

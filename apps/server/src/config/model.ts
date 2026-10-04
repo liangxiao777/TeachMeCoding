@@ -1,25 +1,25 @@
 import { readFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 
-export interface ModelConfig {
-  apiKey: string;
-  model: string;
-}
+export type EnvLookup = (name: string) => string | undefined;
 
-// Parse into a private object: never populate process.env or a Vite env object.
-export function loadModelConfig(
+// Parse into a private lookup: never populate process.env or a Vite env object.
+// A variable present in the server environment, even empty, overrides the file.
+export function serverEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
   envFile: string | URL = new URL('../../../../.env', import.meta.url),
-): ModelConfig {
+): EnvLookup {
   let file: NodeJS.ProcessEnv = {};
   try {
     file = parseEnv(readFileSync(envFile, 'utf8'));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Cannot read server .env file.');
   }
-  const apiKey = (environment.OPENROUTER_API_KEY ?? file.OPENROUTER_API_KEY)?.trim();
-  const model = (environment.OPENROUTER_MODEL ?? file.OPENROUTER_MODEL)?.trim();
-  if (!apiKey) throw new Error('Set OPENROUTER_API_KEY in the server environment or root .env.');
-  if (!model) throw new Error('Set OPENROUTER_MODEL explicitly; no fallback model is selected.');
-  return { apiKey, model };
+  return (name) => (Object.hasOwn(environment, name) ? environment[name] : file[name])?.trim() || undefined;
+}
+
+/** Initial choice before any saved setting: the previously required OpenRouter model. */
+export function defaultModel(env: EnvLookup) {
+  const model = env('OPENROUTER_MODEL');
+  return model ? { provider: 'openrouter', model } : null;
 }

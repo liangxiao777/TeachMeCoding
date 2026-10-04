@@ -1,6 +1,7 @@
 import { createAssistantMessageEventStream, type AssistantMessage, type Message } from '@earendil-works/pi-ai';
+import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
 import type { RouteContent } from '@teach-me-coding/contracts';
-import { teachingModel } from './model.js';
+import type { ModelSource } from '../models/service.js';
 import { randomUUID } from 'node:crypto';
 import type { Learning } from '../modules/learning.js';
 
@@ -15,7 +16,12 @@ export function populated(learning: Learning, name = 'Rust') {
   return { space: learning.space(space.id), units, routeSession };
 }
 
-export const syntheticConfig = { model: teachingModel.id, apiKey: 'synthetic-test-only' };
+export const teachingModel = getBuiltinModel('openrouter', 'stealth/space-bunny-alpha');
+export const syntheticSelection = { provider: 'openrouter', model: teachingModel.id, thinkingLevel: 'high' as const };
+export const syntheticSource: ModelSource = {
+  current: () => ({ selection: syntheticSelection, model: teachingModel }),
+  resolve: (selection) => selection.provider === syntheticSelection.provider && selection.model === syntheticSelection.model ? teachingModel : undefined,
+};
 // Follow the actual host-generated stage IDs, never manufacture IDs in model arguments.
 export function routeReply(messages: Message[], content: { note: string; stages: { title: string; units: Omit<RouteContent['stages'][number]['units'][number], 'id'>[] }[] }, adjustment = false) {
   const current = messages.slice(messages.findLastIndex((m) => m.role === 'user') + 1);

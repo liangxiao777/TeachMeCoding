@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
 import { compileContext, compileRequest, retainedMessage, systemPrompt, type FrozenContext, type HistoryGroup } from './context.js';
-import { providerStream, teachingModel } from './model.js';
+import { providerStream } from './model.js';
+import { teachingModel } from './test-support.js';
 import { reply } from './test-support.js';
 
 const input: FrozenContext = { spaceId: 'space', sessionId: 'session', unitId: null, scenario: 'intake',

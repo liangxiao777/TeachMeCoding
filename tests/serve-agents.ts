@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { serve } from '../apps/server/node_modules/@hono/node-server/dist/index.mjs';
-import { syntheticConfig } from '../apps/server/src/agents/test-support.js';
+import { syntheticSource } from '../apps/server/src/agents/test-support.js';
 import { agentTransport } from './agent-transport.js';
 
 const mode = process.argv[2];
@@ -24,7 +24,7 @@ const data = openDataDirectory(root), learning = new Learning(data.db);
 const projects = new Projects(root), terminals = new Terminals((space) => projects.root(space));
 const actions = new Actions(learning, projects);
 const executions = new Executions(learning);
-const agents = new TeachingRuntime(learning, syntheticConfig, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions, executions });
+const agents = new TeachingRuntime(learning, syntheticSource, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions, executions });
 const config = serverConfig({ NODE_ENV: mode, PORT: mode === 'production' ? '14320' : '14321', TMC_WEB_PORT: '15173' });
 const access = createLocalAccess(config);
 const server = serve({ hostname: config.hostname, port: config.port, fetch: createApp(access, learning, projects, agents).fetch });

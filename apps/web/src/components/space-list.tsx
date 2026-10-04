@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
+import { SettingsButton } from '@/components/settings/settings-page'
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { allUnits, findUnit, relativeTime } from '@/app/selectors'
 import { useApp } from '@/app/context'
@@ -142,17 +143,20 @@ export function SpaceList() {
       <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <Brand onClick={goHome} />
-          {onHome ? (
-            <Button variant="outline" onClick={goSpaces}>
-              <LayoutGrid data-icon="inline-start" />
-              我的学习空间
-            </Button>
-          ) : (
-            <Button onClick={goHome}>
-              <Plus data-icon="inline-start" />
-              创建学习空间
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            <SettingsButton />
+            {onHome ? (
+              <Button variant="outline" onClick={goSpaces}>
+                <LayoutGrid data-icon="inline-start" />
+                我的学习空间
+              </Button>
+            ) : (
+              <Button onClick={goHome}>
+                <Plus data-icon="inline-start" />
+                创建学习空间
+              </Button>
+            )}
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6">
