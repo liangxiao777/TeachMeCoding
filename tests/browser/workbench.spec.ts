@@ -97,7 +97,7 @@ test('assessment keeps answers, offers advice quotes and records needs-work then
   await expect(page.getByText('error[E0382]: borrow of moved value: `name`', { exact: true })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/assessment-${info.project.name}.png` });
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('再巩固一下会更扎实', { exact: true })).toBeVisible();
+  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/needs-work-${info.project.name}.png` });
   await page.getByRole('button', { name: '就此提问', exact: true }).first().click();
   const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
@@ -111,8 +111,13 @@ test('assessment keeps answers, offers advice quotes and records needs-work then
   await page.getByRole('button', { name: '运行', exact: true }).click();
   await expect(page.getByText('ferris -> FERRIS', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible();
+  await expect(page.getByText('本次测评通过', { exact: true })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/passed-${info.project.name}.png` });
+  await expect(page.getByText('本次做对的地方', { exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '补充反馈', exact: true }).click();
+  await expect(page.getByText('本次做对的地方', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '补充反馈', exact: true }).locator('..').screenshot({ path: `.amp/in/artifacts/feedback-supplementary-${info.project.name}.png` });
+  await page.getByRole('button', { name: '补充反馈', exact: true }).click();
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('let b = a 将所有权转移给 b，a 失效；用 clone 复制或借用 &a 保持 a 可用。', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '返回单元', exact: true }).click();

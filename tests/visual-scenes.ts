@@ -78,7 +78,7 @@ export async function visualScenes(page: Page, source: 'preview' | 'prototype', 
   await expect(page.getByText('error[E0382]: borrow of moved value: `name`', { exact: true })).toBeVisible();
   await shot('assessment');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('再巩固一下会更扎实', { exact: true })).toBeVisible();
+  await expect(page.getByText(source === 'prototype' ? '再巩固一下会更扎实' : '这次还有需要修改的地方', { exact: true })).toBeVisible();
   await shot('needs-work');
   // Prototype record IDs use Date.now(); keep distinct attempts distinct without nondeterministic dates.
   await page.clock.setFixedTime(new Date('2026-10-02T10:01:00Z'));
@@ -86,7 +86,7 @@ export async function visualScenes(page: Page, source: 'preview' | 'prototype', 
   await page.getByLabel('你的回答', { exact: true }).fill('let b = a 将所有权转移给 b，a 失效；用 clone 复制或借用 &a 保持 a 可用。');
   await page.getByLabel('编辑 assessment_fix.rs', { exact: true }).fill('fn shout(s: &String) -> String {\n    s.to_uppercase()\n}\n\nfn main() {\n    let name = String::from("ferris");\n    let loud = shout(&name);\n    println!("{} -> {}", name, loud);\n}');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible();
+  await expect(page.getByText(source === 'prototype' ? '你已经掌握了这个单元' : '本次测评通过', { exact: true })).toBeVisible();
   await shot('passed');
 
   await open('route', 'lesson');

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { assessmentResultSchema, assessmentSpecSchema, generationInputSchema, type AssessmentSpec, type CodeExecution } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, executionFeedback, generationInputSchema, type AssessmentSpec, type CodeExecution } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from './learning.js';
 import { hash } from '../agents/context.js';
 
@@ -67,15 +67,18 @@ export class Assessments {
       const checked = execution?.state === 'succeeded' && execution.results.length === execution.plan.cases.length && execution.results.every((r) => r.result.status === 'succeeded');
       const matched = checked && execution?.results.every((r) => r.matches);
       const unverified = code && !checked;
+      // Do not show a model's passing claims beside a host-enforced failure or incomplete check.
+      const overridden = code && !matched && proposed.result === 'pass';
       const verification = !code ? 'non-execution' : checked ? 'execution-verified' : execution || fixed.submission.evidence.kind === 'fixture' && fixed.submission.evidence.status === 'failed' ? 'execution-failed' : 'execution-unverified';
       const result = { ...proposed, result: unverified ? 'unverified' as const : code && !matched ? 'needs_work' as const : proposed.result, verification, execution,
         specRevision: fixed.revision, lessonRevision: fixed.sources.lesson, answerHash: fixed.submission.answerHash,
         sources: fixed.sources, q2Kind: fixed.public.q2Kind,
         mastered: code && !matched ? [] : proposed.mastered,
-        summary: unverified ? `代码尚未通过真实执行验证。${execution ? '本机执行未完成或失败，不能据此判定掌握。' : ''}${proposed.summary}` : code && !matched ? `实际输出与测试期望不符。${proposed.summary}` : proposed.summary,
-        evidence: [execution ? `执行 ${execution.id}，代码 SHA-256 ${execution.codeHash}；${execution.state}，匹配 ${execution.results.filter((r) => r.matches).length}/${execution.plan.cases.length} 个公开用例。`
-          : code ? '只进行了静态模型评估；未运行所提交代码。' : '基于固定题目、rubric 和提交答案的非执行模型评估。', ...proposed.evidence],
-        toVerify: unverified ? ['需要完整的真实执行证据；缺工具链请自行配置，不自动安装。', ...proposed.toVerify] : proposed.toVerify };
+        summary: unverified || overridden ? execution ? executionFeedback(execution).summary : '本次没有可用的代码运行结果，尚不能判断代码是否符合要求。'
+          : proposed.result === 'pass' ? '本次作答符合题目要求。' : proposed.summary,
+        evidence: overridden ? [] : proposed.evidence,
+        concerns: overridden ? [] : proposed.concerns,
+        toVerify: overridden ? [] : proposed.toVerify };
       l.db.prepare('INSERT INTO assessments VALUES (?,?,?,?,?,?,?)').run(space, unit, fixed.submission.id, fixed.submission.attempt,
         JSON.stringify(fixed.submission.answers), JSON.stringify(result), Date.now());
       const current = l.unit(space, unit), record = current.records.find((r) => r.id === fixed.submission.id)!;

@@ -86,10 +86,10 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
     await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
     await page.screenshot({ path: `.amp/in/artifacts/teaching-evaluating-${info.project.name}.png`, animations: 'disabled' });
   } finally { release(); }
-  await expect(page.getByText('代码尚未通过真实执行验证', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('本次代码检查未完成', { exact: true })).toBeVisible({ timeout: 15000 });
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('固定提交：由程序的调用者传入', { exact: true })).toBeVisible();
-  await expect(page.getByText('已经掌握', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('本次做对的地方', { exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1200 });
   await page.screenshot({ path: `.amp/in/artifacts/teaching-unverified-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
@@ -139,7 +139,7 @@ test('reasoning assessment failure retries the same attempt; expired evidence st
   await page.screenshot({ path: `.amp/in/artifacts/teaching-task-failure-${info.project.name}.png`, animations: 'disabled' });
   await page.getByLabel('你的回答', { exact: true }).fill('NEW-DRAFT');
   await page.getByRole('button', { name: info.project.name === 'development' ? '重试' : '重试原任务', exact: true }).click();
-  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('本次测评通过', { exact: true })).toBeVisible({ timeout: 15000 });
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('FAIL-ONCE：调用者', { exact: true })).toBeVisible();
   await expect(page.getByText(/第 1 次测评/)).toBeVisible();
@@ -613,8 +613,10 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await page.getByRole('button', { name: '运行', exact: true }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(result).toContainText('SyntaxError');
-  await expect(result).toContainText('执行失败');
+  await expect(result).toContainText('程序报错，尚未完成这道题的运行检查。');
+  await expect(result.locator('pre')).toBeHidden();
+  await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
+  await expect(result.locator('pre')).toContainText('SyntaxError');
   const stderr = result.locator('pre');
   await expect.poll(() => stderr.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
   await stderr.evaluate((e) => { e.scrollTop = e.scrollHeight; });
@@ -640,18 +642,31 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await page.getByRole('button', { name: '运行', exact: true }).click();
   await expect.poll(() => staleListDelivered).toBe(true);
   await page.waitForTimeout(200); // Allow the stale business refresh to render.
-  await expect(result).toContainText('执行中');
+  await expect(result).toContainText('正在检查代码');
+  await expect(result.locator('details')).not.toHaveAttribute('open');
   await page.getByRole('button', { name: '停止代码运行', exact: true }).click();
-  await expect(result).toContainText('已取消或中断');
+  await expect(result).toContainText('本次运行已停止，代码检查未完成。');
+  await expect(result).toContainText('不会自动重跑');
+  await result.screenshot({ path: `.amp/in/artifacts/feedback-cancel-${info.project.name}.png` });
   const correct = 'console.log(process.argv.slice(2).length)';
+  await code.fill('process.stdout.write("2 ")');
+  await page.getByRole('button', { name: '运行', exact: true }).click();
+  await expect(result.locator('li').first()).toContainText('题目要求输出：2');
+  await expect(result.locator('li').first()).toContainText('实际输出："2 "');
+  await expect(result.locator('pre').first()).toBeHidden();
   await code.fill('console.log(2)');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
   await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
   await code.fill(correct);
   await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
-  await expect(page.getByText('再巩固一下会更扎实', { exact: true })).toBeVisible({ timeout: 15000 });
-  await expect(result).toContainText('用例 2 · succeeded · 退出码 0 · 未匹配');
-  await expect(page.getByText('已经掌握', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible({ timeout: 15000 });
+  const noArgs = result.locator('li').filter({ hasText: '不传入参数' });
+  await expect(noArgs).toContainText('题目要求输出：0');
+  await expect(noArgs).toContainText('实际输出：2');
+  await expect(result.locator('pre').first()).toBeHidden();
+  await expect(page.getByText('本次做对的地方', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('本次提交符合题目要求。', { exact: true })).toHaveCount(0);
+  expect(await page.getByRole('main').innerText()).not.toMatch(/SHA-256|执行 ID|succeeded|退出码/);
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('console.log(2)', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
@@ -660,18 +675,25 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
   await code.fill('// 第三份新草稿，不属于已提交代码');
   await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
-  await expect(page.getByText('你已经掌握了这个单元', { exact: true })).toBeVisible({ timeout: 15000 });
-  await expect(result).toContainText('用例 1 · succeeded · 退出码 0 · 输出匹配');
-  await expect(result).toContainText('用例 2 · succeeded · 退出码 0 · 输出匹配');
+  await expect(page.getByText('本次测评通过', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(result).toContainText('2 项运行检查');
+  await expect(result.locator('li').first()).toContainText('输出：2，符合题目要求。');
+  await expect(result.locator('li').last()).toContainText('输出：0，符合题目要求。');
+  await expect(page.getByText('下一步怎么改', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('本次未覆盖', { exact: true })).toHaveCount(0);
+  expect(await page.getByRole('main').innerText()).not.toMatch(/SHA-256|执行 ID|succeeded|退出码|还需验证边界输入/);
+  await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
+  await expect(result.locator('pre').first()).toContainText("$ node answer.js 'red' 'blue'");
+  await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1400 });
-  await page.getByText('你已经掌握了这个单元', { exact: true }).scrollIntoViewIfNeeded();
+  await page.getByText('本次测评通过', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `.amp/in/artifacts/code-verified-${info.project.name}.png` });
   const saved = await workspace(page, name), unit = saved.route.content.stages[0].units[0].id;
   const evidence = await page.evaluate(async ({ space, unit }) => {
     const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
     return (await fetch(`/api/spaces/${space}/units/${unit}/executions`, { headers: { 'X-TMC-Token': token } })).json();
   }, { space: saved.id, unit });
-  expect(evidence).toHaveLength(4); // Lost-response retry did not rerun the first program.
+  expect(evidence).toHaveLength(5); // Lost-response retry did not rerun the first program.
   expect(evidence.at(-1).code).toBe(correct);
   expect(evidence.at(-1).results.map((r: { result: { stdout: string } }) => r.result.stdout)).toEqual(['2\n', '0\n']);
   await page.getByRole('button', { name: '返回单元', exact: true }).click();

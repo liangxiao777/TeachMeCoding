@@ -64,8 +64,10 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         ...(all.includes('真实代码测评') ? { execution: { language: 'javascript', cases: [{ args: ['red', 'blue'], expected: '2' }, { args: [], expected: '0' }] } } : {}) },
       rubric: { q1: { answer: 'PRIVATE-RUBRIC', criteria: ['调用者'] }, q2: { answer: 'PRIVATE-CODE', criteria: ['正确计数'] } },
     } }], 'toolUse'));
+    // Intentionally proposes pass even for wrong code: browser tests must exercise the host's override.
+    // Real-provider UX verification is separate; this fixture cannot prove evaluation quality.
     if (has('submit_evaluation')) return response(reply([{ type: 'toolCall', id: 'evaluation-call', name: 'submit_evaluation', arguments: {
-      result: 'pass', summary: all.includes('codeHash') ? '已核对固定作答与本机执行证据。' : '静态分析已完成。', mastered: ['参数读取'], concerns: ['还需验证边界输入'], evidence: ['答案提到程序的调用者'], toVerify: [all.includes('codeHash') ? '公开用例之外的输入' : '实际执行'],
+      result: 'pass', summary: '本次提交符合题目要求。', mastered: [], concerns: [], evidence: ['解释题说明参数是在启动程序时传入的，不是程序自己产生的。'], toVerify: [],
     } }], 'toolUse'));
     if (has('submit_lesson')) return response(reply([{ type: 'toolCall', id: 'lesson-call', name: 'submit_lesson', arguments: {
       title: '参数与输入', intro: '从一个小工具开始理解命令行参数。', blocks: [

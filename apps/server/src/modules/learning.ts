@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
+  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
   type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 
@@ -146,6 +146,15 @@ export class Learning {
     const submitted = this.db.prepare('SELECT MAX(attempt) AS n FROM submissions WHERE space_id=? AND unit_id=?').get(space, id) as { n: number | null };
     const evaluated: AssessmentRecord[] = records.map(({ result, answers, ...r }) => {
       const value = JSON.parse(result);
+      // Hide only our exact legacy diagnostic strings; keep stored evidence and learner content intact.
+      const execution = value.execution as AssessmentRecord['execution'];
+      const diagnostic = execution ? `执行 ${execution.id}，代码 SHA-256 ${execution.codeHash}；${execution.state}，匹配 ${execution.results.filter((r) => r.matches).length}/${execution.plan.cases.length} 个公开用例。`
+        : value.q2Kind === 'code' ? '只进行了静态模型评估；未运行所提交代码。' : '基于固定题目、rubric 和提交答案的非执行模型评估。';
+      value.evidence = value.evidence.filter((text: string) => text !== diagnostic);
+      value.toVerify = value.toVerify.filter((text: string) => text !== '需要完整的真实执行证据；缺工具链请自行配置，不自动安装。');
+      if (value.result === 'pass') value.summary = '本次作答符合题目要求。';
+      if (value.result === 'unverified') value.summary = execution ? executionFeedback(execution).summary : '本次没有可用的代码运行结果，尚不能判断代码是否符合要求。';
+      if (execution && value.result === 'needs_work' && value.summary.startsWith('实际输出与测试期望不符。')) value.summary = executionFeedback(execution).summary;
       const valid = ['non-execution', 'execution-verified'].includes(value.verification) && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
         && value.sources?.requirement === versions.requirement && value.sources?.route === versions.route;
       return { ...r, ...value, valid, answers: JSON.parse(answers) };

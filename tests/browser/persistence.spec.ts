@@ -218,7 +218,7 @@ test('unit sessions, references, assessment drafts, historical records and confi
   const materials = page.getByRole('complementary', { name: '单元材料', exact: true });
   await materials.locator('summary').filter({ hasText: /^测评记录/ }).click();
   await materials.getByRole('button', { name: /所有权与借用.*加强.*第 1 次/ }).click();
-  await expect(page.getByText('再巩固一下会更扎实', { exact: true })).toBeVisible();
+  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible();
   await expect(page.getByText('验收记录：需要更多证据', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('历史解释', { exact: true })).toBeVisible();
