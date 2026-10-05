@@ -41,6 +41,7 @@ import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
+import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
 
 function SpaceSwitcher() {
@@ -132,6 +133,7 @@ export function TopBar() {
         <span className="text-muted-foreground">/</span>
         <span className="truncate text-xs text-muted-foreground">{unit?.title}</span>
         <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
           <Button variant="ghost" size="sm" onClick={() => setLessonOpen(true)}>
             <BookOpen data-icon="inline-start" />
             查看课件
@@ -215,6 +217,7 @@ export function TopBar() {
       </Breadcrumb>
 
       <div className="ml-auto flex items-center gap-1.5">
+        <ThemeToggle />
         {space.view === 'unit' && (
           <>
             <Button

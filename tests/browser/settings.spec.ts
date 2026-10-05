@@ -155,17 +155,27 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await expect(page.getByRole('button', { name: '停止终端', exact: true })).toBeEnabled();
   await editor.fill('// unsaved settings navigation');
   await composer.fill('保留本单元未发送的问题');
+  await page.getByRole('button', { name: /切换到.*色主题/ }).click();
+  await expect(editor).toHaveValue('// unsaved settings navigation');
+  await expect(composer).toHaveValue('保留本单元未发送的问题');
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
   await expect(editor).toBeHidden();
   const settingsPage = page.getByRole('region', { name: '应用设置', exact: true });
   await settingsPage.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '保存 Skills 路径', exact: true })).toBeVisible();
+  await settingsPage.getByRole('button', { name: /切换到.*色主题/ }).click();
   await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
   await expect(editor).toHaveValue('// unsaved settings navigation');
   await expect(composer).toHaveValue('保留本单元未发送的问题');
   await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
   await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
   await expect(page).toHaveURL(url);
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await expect(page.getByRole('button', { name: /切换到.*色主题/ })).toHaveCount(1);
+  await page.getByRole('button', { name: /切换到.*色主题/ }).click();
+  await expect(editor).toHaveValue('// unsaved settings navigation');
+  await expect(composer).toHaveValue('保留本单元未发送的问题');
+  await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
   expect({ socketCount, closed }).toEqual({ socketCount: 1, closed: 0 });
 });
 
@@ -282,4 +292,145 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await config.fill('{"mcpServers":{}}');
   await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
   await expect(settings.getByText('尚未配置 MCP 服务器。', { exact: true })).toBeVisible();
+});
+
+for (const system of ['light', 'dark'] as const) {
+  test(`theme follows ${system} system until an explicit choice, preserves edits and survives reload`, async ({ page }, info) => {
+    const selected = system === 'light' ? 'dark' : 'light';
+    const initialLabel = system === 'light' ? '切换到暗色主题' : '切换到亮色主题';
+    const selectedLabel = system === 'light' ? '切换到亮色主题' : '切换到暗色主题';
+    await page.emulateMedia({ colorScheme: system });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    const home = page.getByRole('textbox', { name: '你想学什么', exact: true });
+    await home.fill('切换主题时保留未发送的学习需求');
+    await page.getByRole('button', { name: '应用设置', exact: true }).click();
+    const settings = page.getByRole('region', { name: '应用设置', exact: true });
+    await expect(settings.getByRole('button', { name: initialLabel, exact: true })).toBeVisible();
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${system}\\b`));
+    // Before a manual choice the app still follows live system changes.
+    await page.emulateMedia({ colorScheme: selected });
+    await expect(settings.getByRole('button', { name: selectedLabel, exact: true })).toBeVisible();
+    await page.emulateMedia({ colorScheme: system });
+    await expect(settings.getByRole('button', { name: initialLabel, exact: true })).toBeVisible();
+    await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
+    const config = settings.getByLabel('MCP 配置 JSON', { exact: true });
+    await config.fill('{"mcpServers":{"unsaved":{"command":"not-executed","enabled":false}}}');
+    const unsaved = await config.inputValue();
+    const toggle = settings.getByRole('button', { name: initialLabel, exact: true });
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await expect(settings.getByRole('button', { name: selectedLabel, exact: true })).toBeFocused();
+    await expect(config).toHaveValue(unsaved);
+    await expect(settings.getByRole('button', { name: '保存 MCP 配置', exact: true })).toBeEnabled();
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
+    expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe(selected);
+    expect(await page.evaluate(() => localStorage.getItem('tmc-theme'))).toBe(selected);
+    expect(await page.locator('meta[name="theme-color"]').evaluateAll((metas) => metas.map((meta) => meta.getAttribute('content'))))
+      .toEqual(selected === 'dark' ? ['#0a0a0a', '#0a0a0a'] : ['#ffffff', '#ffffff']);
+    await page.screenshot({ path: `.amp/in/artifacts/theme-mcp-${selected}-${info.project.name}.png`, animations: 'disabled' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: `.amp/in/artifacts/theme-mcp-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
+    await settings.getByRole('button', { name: '返回学习', exact: true }).click();
+    await expect(home).toHaveValue('切换主题时保留未发送的学习需求');
+    expect(await page.locator('header').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    for (const name of [selectedLabel, '应用设置', '我的学习空间']) {
+      const bounds = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    }
+    await page.screenshot({ path: `.amp/in/artifacts/global-theme-home-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: `.amp/in/artifacts/theme-home-${selected}-${info.project.name}.png`, animations: 'disabled' });
+    // Opposing system preferences must not override the saved manual choice.
+    await page.emulateMedia({ colorScheme: selected });
+    await page.emulateMedia({ colorScheme: system });
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
+    await page.reload();
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
+    expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe(selected);
+    await page.goto('/preview?scene=unit');
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
+    await expect(page.getByRole('heading', { name: '所有权与借用', exact: true })).toBeVisible();
+    await page.screenshot({ path: `.amp/in/artifacts/theme-unit-${selected}-${info.project.name}.png`, animations: 'disabled' });
+  });
+}
+
+test('theme preferences synchronize across tabs and clearing storage restores system theme', async ({ page, context }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const other = await context.newPage();
+  try {
+    await other.emulateMedia({ colorScheme: 'light' });
+    await other.goto('/diagnostics');
+    await page.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
+    await expect(other.locator('html')).toHaveClass(/\bdark\b/);
+    await other.evaluate(() => localStorage.removeItem('tmc-theme'));
+    await expect(page.getByRole('button', { name: '切换到暗色主题', exact: true })).toBeVisible();
+    await expect(page.locator('html')).toHaveClass(/\blight\b/);
+  } finally { await other.close(); }
+});
+
+test('theme switching still works when browser storage is unavailable', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Storage unavailable', 'SecurityError'); } });
+  });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  await page.getByRole('button', { name: '切换到亮色主题', exact: true }).click();
+  await expect(page.locator('html')).toHaveClass(/\blight\b/);
+  expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe('light');
+  await page.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
+  await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+  expect(errors).toEqual([]);
+});
+
+test('global theme controls work throughout learning without opening settings', async ({ page }, info) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const toggle = async (scene: string) => {
+    const button = page.getByRole('button', { name: /切换到.*色主题/ });
+    await expect(button).toHaveCount(1);
+    await expect(button).toBeVisible();
+    await expect(page.getByRole('region', { name: '应用设置', exact: true })).toHaveCount(0);
+    const next = (await button.getAttribute('aria-label')) === '切换到暗色主题' ? 'dark' : 'light';
+    await button.click();
+    await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${next}\\b`));
+    await page.screenshot({ path: `.amp/in/artifacts/global-theme-${scene}-${info.project.name}.png`, animations: 'disabled' });
+  };
+  await page.goto('/preview');
+  await page.getByLabel('你想学什么', { exact: true }).fill('全局按钮保留学习需求草稿');
+  await toggle('home');
+  await expect(page.getByLabel('你想学什么', { exact: true })).toHaveValue('全局按钮保留学习需求草稿');
+  await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
+  await toggle('spaces');
+  await page.getByRole('button', { name: '创建学习空间', exact: true }).click();
+  await page.getByLabel('你想学什么', { exact: true }).fill('我想学习 Rust，最后能写一个命令行工具');
+  await page.getByRole('button', { name: '开始', exact: true }).click();
+  await toggle('intake');
+  await page.getByRole('button', { name: '熟悉 Python，写过一些自动化脚本，没接触过 C/C++', exact: true }).click();
+  await page.getByRole('button', { name: '每周大概 5 小时，希望两个月内完成', exact: true }).click();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await toggle('planning');
+  await expect(page.getByRole('heading', { name: 'Rust 入门', exact: true })).toBeVisible();
+  await toggle('route');
+  await page.goto('/preview?scene=unit');
+  await toggle('unit');
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await toggle('fullscreen');
+  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  await toggle('assessment');
+  await page.getByLabel('你的回答', { exact: true }).fill('我还不明白变量为什么不能使用');
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible();
+  await toggle('result');
+  await page.goto('/diagnostics');
+  await toggle('diagnostics');
 });

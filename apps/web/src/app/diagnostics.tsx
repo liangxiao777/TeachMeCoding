@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { TerminalSquare } from 'lucide-react';
 import type { HealthResponse } from '@teach-me-coding/contracts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ThemeToggle } from './theme';
 
 export function Diagnostics() {
   const [status, setStatus] = useState('正在连接本地服务…');
@@ -21,6 +22,7 @@ export function Diagnostics() {
       <CardHeader>
         <p className="flex items-center gap-2 text-muted-foreground"><TerminalSquare aria-hidden className="size-4" />本地运行环境</p>
         <CardTitle><h1 className="text-3xl font-semibold">TeachMeCoding</h1></CardTitle>
+        <CardAction><ThemeToggle /></CardAction>
       </CardHeader>
       <CardContent className="space-y-5 leading-relaxed">
         <p role="status" className="font-medium">{status}</p>

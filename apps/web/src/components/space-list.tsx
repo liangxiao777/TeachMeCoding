@@ -12,6 +12,7 @@ import { SettingsButton } from '@/components/settings/settings-page'
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { allUnits, findUnit, relativeTime } from '@/app/selectors'
 import { useApp } from '@/app/context'
+import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
 import type { Space } from '@/app/types'
 
@@ -144,6 +145,7 @@ export function SpaceList() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <Brand onClick={goHome} />
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <SettingsButton />
             {onHome ? (
               <Button variant="outline" onClick={goSpaces}>

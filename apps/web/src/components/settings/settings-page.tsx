@@ -2,6 +2,7 @@ import { ArrowLeft, Blocks, BookOpen, Plug, Settings2 } from 'lucide-react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ThemeToggle } from '@/app/theme'
 import { ModelSettingsForm } from './model-settings'
 import { McpSettingsForm } from './mcp-settings'
 import { SkillsSettingsForm } from './skills-settings'
@@ -14,7 +15,7 @@ export function SettingsButton({ iconOnly = false }: { iconOnly?: boolean }) {
   return (
     <Button variant="ghost" size={iconOnly ? 'icon-sm' : 'sm'} aria-label="应用设置" title="应用设置" onClick={open}>
       <Settings2 data-icon={iconOnly ? undefined : 'inline-start'} />
-      {!iconOnly && '设置'}
+      {!iconOnly && <span className="max-sm:hidden">设置</span>}
     </Button>
   )
 }
@@ -43,6 +44,7 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
         <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" /> 返回学习</Button>
         <span className="h-5 border-l" aria-hidden />
         <h1 ref={title} tabIndex={-1} className="text-base font-semibold outline-none">设置</h1>
+        <ThemeToggle className="ml-auto" />
       </header>
       <Tabs value={category} onValueChange={(value) => setCategory(String(value))} orientation={desktop ? 'vertical' : 'horizontal'}
         className="min-h-0 flex-1 gap-0">

@@ -61,7 +61,8 @@ test('ships fonts, icons and theme styles without online resources', async ({ pa
     ]).then((families) => families.map((family) => family.length));
   });
   expect(fonts.every((count) => count > 0)).toBe(true);
-  await expect(page.locator('svg.lucide')).toBeVisible();
+  await expect(page.getByText('本地运行环境', { exact: true }).locator('svg.lucide')).toBeVisible();
+  await expect(page.getByRole('button', { name: '切换到暗色主题', exact: true }).locator('svg.lucide')).toBeVisible();
   await expect(page.locator('body')).toHaveCSS('background-color', 'oklch(1 0 0)');
   for (const icon of ['/icon.svg', '/icon-light-32x32.png', '/icon-dark-32x32.png', '/apple-icon.png']) {
     expect((await page.request.get(icon)).ok()).toBe(true);
