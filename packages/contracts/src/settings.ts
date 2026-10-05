@@ -88,11 +88,35 @@ export interface McpSettings {
   servers: { name: string; state: 'disabled' | 'connecting' | 'connected' | 'failed'; error: string | null;
     tools: { name: string; agentName: string; description: string }[] }[];
 }
-export const skillConfigurationSchema = z.object({ paths: z.array(z.string().min(1)), disabled: z.array(z.string()) }).strict();
+export const skillConfigurationSchema = z.object({
+  paths: z.array(z.string().min(1)), disabled: z.array(z.string()), excluded: z.array(z.string()).default([]),
+}).strict();
 export type SkillConfiguration = z.infer<typeof skillConfigurationSchema>;
+export const skillInstallSchema = z.object({ source: z.string().trim().min(1),
+  skill: z.string().trim().min(1).refine((name) => !name.startsWith('-'), '技能名称不能是命令选项。').optional(),
+}).strict();
+export const skillPathSchema = z.object({ filePath: z.string().min(1) }).strict();
+export const skillLocalSchema = z.object({ path: z.string().trim().min(1) }).strict();
+export interface SkillInstallation {
+  source: string;
+  skill: string;
+  ref: string | null;
+  upstreamHash: string | null;
+  contentHash: string;
+  cliVersion: string;
+  sourceUrl?: string;
+  skillPath?: string;
+}
+export interface CatalogSkill { id: string; source: string; skillId: string; name: string; installs: number }
+export interface SkillSearch { skills: CatalogSkill[] }
+export interface SkillDetails {
+  name: string; filePath: string; installation: SkillInstallation | null;
+  files: string[]; content: string;
+}
+export interface SkillUpdate { filePath: string; available: boolean; modified: boolean }
 export interface SkillSettings {
   configuration: SkillConfiguration;
   directory: string;
-  skills: { name: string; description: string; filePath: string; enabled: boolean; automatic: boolean }[];
+  skills: { name: string; description: string; filePath: string; enabled: boolean; automatic: boolean; installation: SkillInstallation | null }[];
   diagnostics: { type: string; message: string; path?: string }[];
 }

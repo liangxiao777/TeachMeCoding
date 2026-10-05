@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProvider } from '@earendil-works/pi-ai';
@@ -138,4 +138,41 @@ test('single-server MCP endpoints validate names, protect mutations and preserve
     assert.equal((await post('/servers/renamed/delete')).status, 200);
     assert.deepEqual(Object.keys(mcp.settings().configuration.mcpServers), ['second']);
   } finally { await mcp.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Skills library endpoints protect installation and file access, and complete the managed/reference lifecycle', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-skill-api-')), db = openDatabase(':memory:');
+  const access = createLocalAccess({ port: 4310 }), skills = new SkillService(db, join(root, 'app'));
+  const source = join(root, 'source', 'explaining-types'); mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, 'SKILL.md'), '---\nname: explaining-types\ndescription: Explain type errors when reviewing learner code.\n---\nShow one concrete type error.');
+  const app = createApp(access, undefined, undefined, undefined, undefined, undefined, skills);
+  const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
+  const post = (path: string, input: unknown) => app.request(`/api/settings/skills/${path}`, { method: 'POST', headers, body: JSON.stringify(input) });
+  try {
+    for (const path of ['install', 'local', 'check', 'update', 'remove']) {
+      assert.equal((await app.request(`/api/settings/skills/${path}`, { method: 'POST', headers: { host: 'localhost:4310' }, body: '{}' })).status, 401);
+      assert.equal((await app.request(`/api/settings/skills/${path}`, { method: 'POST', headers: { ...headers, origin: 'https://evil.invalid' }, body: '{}' })).status, 403);
+    }
+    assert.equal((await app.request('/api/settings/skills/details?filePath=/etc/passwd', { headers })).status, 404);
+    assert.equal((await post('install', { source: '--global' })).status, 400);
+    assert.equal((await post('local', { path: 'relative' })).status, 400);
+    assert.equal((await post('install', {})).status, 400);
+    const installed = await post('install', { source, skill: 'explaining-types' });
+    assert.equal(installed.status, 201);
+    const item = (await installed.json()).skills[0];
+    assert.equal(item.enabled, true); assert.equal(item.installation.cliVersion, '1.7.0');
+    const query = `filePath=${encodeURIComponent(item.filePath)}`;
+    const details = await (await app.request(`/api/settings/skills/details?${query}`, { headers })).json();
+    assert.match(details.content, /concrete type error/);
+    assert.equal((await app.request(`/api/settings/skills/file?${query}&name=../../credentials.json`, { headers })).status, 400);
+    assert.equal((await post('check', { filePath: item.filePath })).status, 200);
+    assert.equal((await post('update', { filePath: item.filePath })).status, 200);
+    assert.equal((await post('remove', { filePath: item.filePath })).status, 200);
+    assert.equal(existsSync(item.filePath), false); assert.equal(existsSync(join(source, 'SKILL.md')), true);
+    const local = await post('local', { path: source }); assert.equal(local.status, 200);
+    assert.equal((await local.json()).skills[0].installation, null);
+    assert.equal((await post('remove', { filePath: join(source, 'SKILL.md') })).status, 200);
+    assert.equal(existsSync(join(source, 'SKILL.md')), true);
+    assert.equal((await (await app.request('/api/settings/skills', { headers })).json()).skills.length, 0);
+  } finally { await skills.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });

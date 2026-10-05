@@ -47,7 +47,7 @@ try {
     if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
-  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close()]).then(() => models?.close());
+  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close(), skills?.close()]).then(() => models?.close());
   server.on('error', () => {
     void close().finally(() => data.close());
     console.error('Cannot start local server. Check whether PORT is already in use.');

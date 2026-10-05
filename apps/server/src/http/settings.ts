@@ -26,9 +26,17 @@ export function settingsApi(models?: ModelService, mcp?: McpService, skills?: Sk
   api.post('/settings/mcp/servers/:server', async (c) => c.json(await mcp!.saveServer(await c.req.json(), c.req.param('server'))));
   api.post('/settings/mcp/servers/:server/delete', async (c) => c.json(await mcp!.removeServer(c.req.param('server'))));
   api.post('/settings/mcp/servers/:server/reconnect', async (c) => c.json(await mcp!.reconnect(c.req.param('server'))));
-  api.get('/settings/skills', (c) => c.json(skills!.settings()));
+  api.get('/settings/skills', (c) => c.json(skills!.reload()));
   api.post('/settings/skills', async (c) => c.json(skills!.save(await c.req.json())));
   api.post('/settings/skills/reload', (c) => c.json(skills!.reload()));
+  api.get('/settings/skills/search', async (c) => c.json(await skills!.search(c.req.query('q') ?? '')));
+  api.get('/settings/skills/details', (c) => c.json(skills!.details(c.req.query('filePath') ?? '')));
+  api.get('/settings/skills/file', (c) => c.json(skills!.file(c.req.query('filePath') ?? '', c.req.query('name') ?? '')));
+  api.post('/settings/skills/install', async (c) => c.json(await skills!.install(await c.req.json()), 201));
+  api.post('/settings/skills/local', async (c) => c.json(skills!.local(await c.req.json())));
+  api.post('/settings/skills/check', async (c) => c.json(await skills!.update(await c.req.json(), false)));
+  api.post('/settings/skills/update', async (c) => c.json(await skills!.update(await c.req.json(), true)));
+  api.post('/settings/skills/remove', async (c) => c.json(skills!.remove(await c.req.json())));
   if (!models) return api;
   api.get('/settings/model', async (c) => c.json(await models.settings()));
   api.get('/settings/providers/:provider/models', (c) => c.json(models.modelsOf(c.req.param('provider'))));

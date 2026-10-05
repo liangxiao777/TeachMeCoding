@@ -1,84 +1,176 @@
-import { useEffect, useState } from 'react'
-import type { SkillSettings } from '@teach-me-coding/contracts'
+import { useEffect, useRef, useState } from 'react'
+import { BookOpen, Check, Download, FolderOpen, Link, MoreHorizontal, Plus, RotateCw, Search, Trash2 } from 'lucide-react'
+import type { CatalogSkill, SkillSearch, SkillSettings } from '@teach-me-coding/contracts'
 import { api } from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
-import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+import { Item, ItemActions, ItemContent, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Spinner } from '@/components/ui/spinner'
+import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { SkillDetailsDialog } from './skill-details-dialog'
 
-export function SkillsSettingsForm() {
+type InstalledSkill = SkillSettings['skills'][number]
+const message = (error: unknown) => error instanceof Error ? error.message : '操作失败，请重试。'
+
+export function SkillsSettingsForm({ active }: { active: boolean }) {
   const [settings, setSettings] = useState<SkillSettings | null>(null)
-  const [paths, setPaths] = useState('')
+  const [tab, setTab] = useState('installed')
+  const [filter, setFilter] = useState('')
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<CatalogSkill[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [editor, setEditor] = useState<'link' | 'local' | null>(null)
+  const [source, setSource] = useState('')
+  const [skillName, setSkillName] = useState('')
+  const [editorError, setEditorError] = useState('')
+  const [details, setDetails] = useState<{ skill: InstalledSkill; check: boolean } | null>(null)
+  const [removing, setRemoving] = useState<InstalledSkill | null>(null)
+  const revision = useRef(0)
+  const searchRevision = useRef(0)
+  const addButton = useRef<HTMLButtonElement | null>(null)
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const restoreFocus = () => returnFocus.current?.isConnected ? returnFocus.current : addButton.current
   const load = async () => {
+    const current = revision.current
     try {
       const next = await api<SkillSettings>('/settings/skills')
-      setSettings(next); setPaths(next.configuration.paths.join('\n')); setError('')
-    } catch (error) { setError(error instanceof Error ? error.message : '无法读取 Skills。') }
+      if (current === revision.current) { setSettings(next); setError('') }
+    } catch (error) { if (current === revision.current) setError(message(error)) }
   }
-  useEffect(() => { void load() }, [])
-  const dirty = !!settings && paths !== settings.configuration.paths.join('\n')
-  const save = async (disabled = settings?.configuration.disabled ?? []) => {
-    setBusy(true); setError('')
+  useEffect(() => { if (active) void load() }, [active])
+  const write = async (path: string, input: unknown) => {
+    revision.current++; setBusy(true); setError('')
+    try { setSettings(await api<SkillSettings>(path, input)) }
+    finally { revision.current++; setBusy(false) }
+  }
+  const search = async () => {
+    if (!query.trim()) return
+    const current = ++searchRevision.current
+    setSearching(true); setSearchError(''); setResults(null)
     try {
-      const next = await api<SkillSettings>('/settings/skills', { paths: paths.split('\n').map((path) => path.trim()).filter(Boolean), disabled })
-      setSettings(next); setPaths(next.configuration.paths.join('\n'))
-    } catch (error) { setError(error instanceof Error ? error.message : '无法保存 Skills 配置。') }
-    finally { setBusy(false) }
+      const next = await api<SkillSearch>(`/settings/skills/search?q=${encodeURIComponent(query.trim())}`)
+      if (current === searchRevision.current) setResults(next.skills)
+    } catch (error) { if (current === searchRevision.current) setSearchError(message(error)) }
+    finally { if (current === searchRevision.current) setSearching(false) }
   }
-  const reload = async () => {
-    setBusy(true); setError('')
-    try { setSettings(await api<SkillSettings>('/settings/skills/reload', {})) }
-    catch (error) { setError(error instanceof Error ? error.message : '无法重新扫描 Skills。') }
-    finally { setBusy(false) }
+  const install = async (skill: CatalogSkill) => {
+    setInstalling(skill.id)
+    try { await write('/settings/skills/install', { source: skill.source, skill: skill.name }) }
+    catch (error) { setError(message(error)) }
+    finally { setInstalling(null) }
   }
+  const installed = (skill: CatalogSkill) => settings?.skills.some((item) => item.name === skill.name &&
+    (item.installation?.source === skill.source || item.installation?.source.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '') === skill.source))
+  const visible = settings?.skills.filter((skill) => `${skill.name} ${skill.description} ${skill.installation?.source ?? ''}`.toLowerCase().includes(filter.trim().toLowerCase())) ?? []
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-col gap-2"><h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
+          <p className="text-sm text-muted-foreground">为 Agent 添加可按需使用的技能。</p></div>
+        <Button ref={addButton} disabled={!settings || busy} onClick={() => setTab('discover')}><Plus data-icon="inline-start" />发现技能</Button>
+      </div>
       {error && <Alert variant="destructive"><AlertDescription>{error}{!settings && <Button variant="outline" size="sm" onClick={() => void load()}>重试</Button>}</AlertDescription></Alert>}
-      {!settings ? !error && <div role="status" className="flex items-center gap-2 text-sm"><Spinner /> 正在读取 Skills…</div> : <>
-        <Card>
-          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3"><CardTitle>已发现的 Skills</CardTitle>
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => void reload()}>重新扫描</Button>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {!settings.skills.length && <p className="text-sm text-muted-foreground">尚未发现 Skill。将 Skill 目录放入默认目录，或添加已有路径。</p>}
-            {settings.skills.map((skill) => <div key={skill.filePath} className="min-w-0 rounded-lg border p-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="break-all text-sm font-medium">{skill.name}</h3>
-                <Badge variant="secondary">{skill.enabled ? skill.automatic ? '按需加载' : '仅手动调用' : '已停用'}</Badge>
-                <Button variant="ghost" size="sm" className="ml-auto" disabled={busy || dirty} aria-label={`${skill.enabled ? '停用' : '启用'} ${skill.name}`}
-                  onClick={() => void save(skill.enabled ? [...settings.configuration.disabled, skill.filePath] : settings.configuration.disabled.filter((path) => path !== skill.filePath))}>
-                  {skill.enabled ? '停用' : '启用'}
-                </Button>
-              </div>
-              <p className="mt-2 break-words text-sm text-muted-foreground">{skill.description}</p>
-              <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">位置与调用方式</summary>
-                <p className="mt-2 break-words font-mono">{skill.filePath}</p>
-                <p className="mt-2">在会话中输入：</p>
-                <p className="mt-1 break-words"><code>/skill:{skill.name}</code> <span className="whitespace-nowrap">你的请求</span></p>
-              </details>
-            </div>)}
-            {settings.diagnostics.map((diagnostic, i) => <Alert key={i} variant={diagnostic.type === 'error' ? 'destructive' : 'default'}>
-              <AlertDescription className="break-words">{diagnostic.message}{diagnostic.path && <p className="mt-1 break-all font-mono text-xs">{diagnostic.path}</p>}</AlertDescription>
-            </Alert>)}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>加载位置</CardTitle></CardHeader>
-          <CardContent className="flex flex-col gap-5">
-            <div className="text-sm"><p className="font-medium">默认目录</p><p className="mt-2 break-all font-mono text-xs text-muted-foreground">{settings.directory}</p></div>
-            <Field><FieldLabel htmlFor="skill-paths">额外目录或 SKILL.md 路径</FieldLabel>
-              <Textarea id="skill-paths" value={paths} disabled={busy} onChange={(e) => setPaths(e.target.value)} spellCheck={false} className="min-h-28 font-mono text-xs!" placeholder="每行一个绝对路径或 ~/ 路径" />
-              <FieldDescription>使用 Pi 的 SKILL.md 格式。Agent 先看到名称与描述，匹配任务时再读取正文；同名 Skill 使用先发现的一项。</FieldDescription>
-            </Field>
-          </CardContent>
-          <CardFooter><Button disabled={busy || !dirty} onClick={() => void save()}>{busy && <Spinner />}保存 Skills 路径</Button></CardFooter>
-        </Card>
-      </>}
+      {!settings ? !error && <div role="status" className="flex items-center gap-2 text-sm"><Spinner />正在读取 Skills…</div> :
+        <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="gap-5">
+          <TabsList aria-label="技能列表" className="h-9! flex-row!"><TabsTrigger value="installed" className="w-auto! justify-center! px-3">已安装 <span className="text-xs text-muted-foreground">{settings.skills.length}</span></TabsTrigger>
+            <TabsTrigger value="discover" className="w-auto! justify-center! px-3">发现技能</TabsTrigger></TabsList>
+          <TabsContent value="installed" keepMounted className="flex flex-col gap-4">
+            <div className="flex items-center gap-2"><div className="relative min-w-0 flex-1"><Search aria-hidden className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
+              <Input aria-label="筛选已安装技能" placeholder="搜索已安装的技能" className="pl-9" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
+              <Button variant="outline" size="icon" aria-label="重新扫描" disabled={busy} onClick={() => void write('/settings/skills/reload', {}).catch((error) => setError(message(error)))}><RotateCw /></Button>
+            </div>
+            {!visible.length ? <Empty className="border py-14"><EmptyHeader><EmptyMedia variant="icon"><BookOpen /></EmptyMedia>
+              <EmptyTitle>{settings.skills.length ? '没有匹配的技能' : '还没有安装技能'}</EmptyTitle>
+              <EmptyDescription>{settings.skills.length ? '换个关键词试试。' : '从 skills.sh 发现技能，或添加已有的本地目录。'}</EmptyDescription></EmptyHeader>
+              {!settings.skills.length && <Button variant="outline" onClick={() => setTab('discover')}>浏览技能</Button>}</Empty> :
+              <ItemGroup aria-label="已安装技能" className="gap-0! overflow-hidden rounded-xl border">{visible.map((skill) => <Item key={skill.filePath} role="listitem" aria-label={skill.name}
+                className="flex-nowrap rounded-none border-0 border-border p-4 not-last:border-b">
+                <ItemMedia variant="icon" className="hidden size-10 rounded-lg bg-muted sm:flex"><BookOpen className="size-5" /></ItemMedia>
+                <ItemContent className="min-w-0 gap-1.5"><ItemTitle className="line-clamp-none flex! max-w-full flex-wrap break-all"><h3>{skill.name}</h3>
+                  {!skill.automatic && <Badge variant="secondary">仅手动调用</Badge>}</ItemTitle>
+                  <p className="break-words text-sm text-muted-foreground">{skill.description}</p>
+                  <p className="break-all text-xs text-muted-foreground">{skill.installation?.source ?? '本地目录'}</p>
+                </ItemContent>
+                <ItemActions className="shrink-0 gap-2"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" disabled={busy} aria-label={`管理 ${skill.name}`}
+                  onPointerDownCapture={(event) => { returnFocus.current = event.currentTarget }} onFocusCapture={(event) => { returnFocus.current = event.currentTarget }} />}><MoreHorizontal /></DropdownMenuTrigger>
+                  <DropdownMenuContent align="end"><DropdownMenuItem onClick={() => setDetails({ skill, check: false })}><BookOpen />查看详情</DropdownMenuItem>
+                    <DropdownMenuItem disabled={!skill.installation} onClick={() => setDetails({ skill, check: true })}><RotateCw />检查更新</DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onClick={() => { setEditorError(''); setRemoving(skill) }}><Trash2 />{skill.installation ? '卸载' : '移除'}</DropdownMenuItem>
+                  </DropdownMenuContent></DropdownMenu>
+                  <Switch aria-label={`启用 ${skill.name}`} checked={skill.enabled} disabled={busy} onCheckedChange={(enabled) => {
+                    void write('/settings/skills', { ...settings.configuration, disabled: enabled ? settings.configuration.disabled.filter((path) => path !== skill.filePath)
+                      : [...settings.configuration.disabled, skill.filePath] }).catch((error) => setError(message(error)))
+                  }} />
+                </ItemActions>
+              </Item>)}</ItemGroup>}
+            {settings.diagnostics.map((diagnostic, index) => <Alert key={index} variant={diagnostic.type === 'error' ? 'destructive' : 'default'}>
+              <AlertDescription className="break-words">{diagnostic.message}</AlertDescription></Alert>)}
+          </TabsContent>
+          <TabsContent value="discover" keepMounted className="flex flex-col gap-4">
+            <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); void search() }}>
+              <div className="relative min-w-0 flex-1"><Search aria-hidden className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
+                <Input aria-label="搜索 skills.sh" className="pl-9" placeholder="在 skills.sh 搜索技能" value={query} onChange={(event) => {
+                  setQuery(event.target.value); searchRevision.current++; setSearching(false); setResults(null); setSearchError('')
+                }} /></div>
+              <Button type="submit" disabled={searching || !query.trim()}>{searching ? <Spinner /> : <Search />}搜索</Button>
+            </form>
+            {searchError && <Alert variant="destructive"><AlertDescription>{searchError}<Button variant="outline" size="sm" onClick={() => void search()}>重试</Button></AlertDescription></Alert>}
+            {searching ? <div role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Spinner />正在搜索 skills.sh…</div> : results === null ?
+              !searchError && <Empty className="border py-14"><EmptyHeader><EmptyMedia variant="icon"><Search /></EmptyMedia><EmptyTitle>发现适合你的技能</EmptyTitle>
+                <EmptyDescription>输入名称或关键词，搜索 skills.sh。</EmptyDescription></EmptyHeader></Empty> : !results.length ?
+                <Empty className="border py-14"><EmptyHeader><EmptyTitle>没有找到相关技能</EmptyTitle><EmptyDescription>换个关键词试试。</EmptyDescription></EmptyHeader></Empty> :
+                <ItemGroup aria-label="搜索结果" className="gap-0! overflow-hidden rounded-xl border">{results.map((skill) => <Item key={skill.id} role="listitem" aria-label={skill.name}
+                  className="flex-nowrap rounded-none border-0 border-border p-4 not-last:border-b">
+                  <ItemMedia variant="icon" className="hidden size-10 rounded-lg bg-muted sm:flex"><BookOpen className="size-5" /></ItemMedia>
+                  <ItemContent className="min-w-0 gap-1.5"><ItemTitle className="line-clamp-none break-all"><h3>{skill.name}</h3></ItemTitle>
+                    <p className="break-all text-sm text-muted-foreground">{skill.source}</p>
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Download className="size-3" />{skill.installs.toLocaleString()} 次安装</p></ItemContent>
+                  <ItemActions className="shrink-0">{installed(skill) ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Check className="size-4" />已安装</span> :
+                    <Button variant="outline" size="sm" disabled={busy} aria-label={`安装 ${skill.name}`} onClick={() => void install(skill)}>{installing === skill.id && <Spinner />}{installing === skill.id ? '安装中' : '安装'}</Button>}</ItemActions>
+                </Item>)}</ItemGroup>}
+          </TabsContent>
+          <div className="flex flex-wrap items-center gap-2 border-t pt-4 text-muted-foreground">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setSkillName(''); setEditorError(''); setEditor('link') }}><Link />从链接安装</Button>
+            <Button variant="ghost" size="sm" disabled={busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setEditorError(''); setEditor('local') }}><FolderOpen />本地目录</Button>
+          </div>
+        </Tabs>}
+      {editor && <Dialog open onOpenChange={(open) => { if (!open && !busy) setEditor(null) }}><DialogContent showCloseButton={!busy} finalFocus={restoreFocus} className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader><DialogTitle>{editor === 'link' ? '从链接安装技能' : '添加本地技能目录'}</DialogTitle>
+          <DialogDescription>{editor === 'link' ? '填写 skills.sh 技能链接或 Git 仓库地址。' : '引用已有的技能文件，不复制或修改原目录。'}</DialogDescription></DialogHeader>
+        <form id="skill-source" className="flex flex-col gap-4" onSubmit={(event) => {
+          event.preventDefault(); setEditorError('')
+          void write(editor === 'link' ? '/settings/skills/install' : '/settings/skills/local', editor === 'link' ? { source, ...(skillName.trim() ? { skill: skillName.trim() } : {}) } : { path: source })
+            .then(() => { setEditor(null); setTab('installed'); setFilter('') }).catch((error) => setEditorError(message(error)))
+        }}><Field><FieldLabel htmlFor="skill-source-input">{editor === 'link' ? '来源链接' : '目录或 SKILL.md 路径'}</FieldLabel>
+          <Input id="skill-source-input" value={source} disabled={busy} onChange={(event) => setSource(event.target.value)} placeholder={editor === 'link' ? 'https://skills.sh/owner/repo/skill' : '/path/to/skills'} /></Field>
+          {editor === 'link' && <Field><FieldLabel htmlFor="skill-name">技能名称（可选）</FieldLabel><Input id="skill-name" value={skillName} disabled={busy} onChange={(event) => setSkillName(event.target.value)} />
+            <FieldDescription>仓库包含多个技能时填写；skills.sh 链接会自动识别。</FieldDescription></Field>}
+          {editorError && <Alert variant="destructive"><AlertDescription>{editorError}</AlertDescription></Alert>}
+        </form>
+        <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setEditor(null)}>取消</Button>
+          <Button type="submit" form="skill-source" disabled={busy || !source.trim()}>{busy && <Spinner />}{editor === 'link' ? '安装技能' : '添加目录'}</Button></DialogFooter>
+      </DialogContent></Dialog>}
+      {details && <SkillDetailsDialog filePath={details.skill.filePath} checkInitially={details.check} finalFocus={restoreFocus}
+        onClose={() => setDetails(null)} onUpdated={load} />}
+      {removing && <Dialog open onOpenChange={(open) => { if (!open && !busy) setRemoving(null) }}><DialogContent showCloseButton={!busy} finalFocus={restoreFocus}>
+        <DialogHeader><DialogTitle>{removing.installation ? '卸载' : '移除'} {removing.name}？</DialogTitle>
+          <DialogDescription>{removing.installation ? '这会删除应用安装的技能文件。' : '仅移除应用中的引用，原始文件会保留。'}</DialogDescription></DialogHeader>
+        {editorError && <Alert variant="destructive"><AlertDescription>{editorError}</AlertDescription></Alert>}
+        <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setRemoving(null)}>取消</Button>
+          <Button variant="destructive" disabled={busy} onClick={() => { setEditorError(''); void write('/settings/skills/remove', { filePath: removing.filePath })
+            .then(() => setRemoving(null)).catch((error) => setEditorError(message(error))) }}>{busy && <Spinner />}{removing.installation ? '卸载技能' : '移除引用'}</Button></DialogFooter>
+      </DialogContent></Dialog>}
     </div>
   )
 }
