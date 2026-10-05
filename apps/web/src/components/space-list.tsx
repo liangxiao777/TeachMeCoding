@@ -154,7 +154,7 @@ export function SpaceList() {
             {onHome ? (
               <Button variant="ghost" onClick={goSpaces}>
                 <LayoutGrid data-icon="inline-start" />
-                我的学习空间
+                学习空间
               </Button>
             ) : (
               <Button onClick={goHome}>
@@ -172,7 +172,7 @@ export function SpaceList() {
         ) : (
           <div className="flex flex-col gap-8 py-12">
             <div className="flex flex-col gap-1.5">
-              <h1 className="text-3xl font-semibold tracking-tight">我的学习空间</h1>
+              <h1 className="text-3xl font-semibold tracking-tight">学习空间</h1>
               <p className="text-muted-foreground">
                 {spaces.length ? '选择一个空间，从上次离开的地方继续。' : '还没有学习空间，先创建一个，开始你的学习之旅。'}
               </p>

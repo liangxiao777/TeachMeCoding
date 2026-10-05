@@ -342,7 +342,7 @@ for (const system of ['light', 'dark'] as const) {
     await page.goto('/');
     const home = page.getByRole('textbox', { name: '你想学什么', exact: true });
     await home.fill('切换主题时保留未发送的学习需求');
-    const spacesButton = page.getByRole('button', { name: '我的学习空间', exact: true });
+    const spacesButton = page.getByRole('button', { name: '学习空间', exact: true });
     const desktopSpaces = (await spacesButton.boundingBox())!;
     expect((await page.getByRole('button', { name: initialLabel, exact: true }).boundingBox())!.x)
       .toBeGreaterThanOrEqual(desktopSpaces.x + desktopSpaces.width);
@@ -377,7 +377,7 @@ for (const system of ['light', 'dark'] as const) {
     await settings.getByRole('button', { name: '返回学习', exact: true }).click();
     await expect(home).toHaveValue('切换主题时保留未发送的学习需求');
     expect(await page.locator('header').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-    for (const name of [selectedLabel, '应用设置', '我的学习空间']) {
+    for (const name of [selectedLabel, '应用设置', '学习空间']) {
       const bounds = (await page.getByRole('button', { name, exact: true }).boundingBox())!;
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
@@ -452,7 +452,7 @@ test('global theme controls work throughout learning without opening settings', 
   await page.getByLabel('你想学什么', { exact: true }).fill('全局按钮保留学习需求草稿');
   await toggle('home');
   await expect(page.getByLabel('你想学什么', { exact: true })).toHaveValue('全局按钮保留学习需求草稿');
-  await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '学习空间', exact: true }).click();
   await toggle('spaces');
   await page.getByRole('button', { name: '创建学习空间', exact: true }).click();
   await page.getByLabel('你想学什么', { exact: true }).fill('我想学习 Rust，最后能写一个命令行工具');

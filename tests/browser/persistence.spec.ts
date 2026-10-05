@@ -334,7 +334,7 @@ test('unavailable business API displays a retryable failure, never demo spaces',
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '开始', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '学习空间', exact: true }).click();
   await expect(spaceCard(page, '存储验收 Rust')).toBeVisible();
 });
 

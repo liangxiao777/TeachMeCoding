@@ -31,7 +31,7 @@ test('real home and intake retain the approved hero, space cards and conversatio
   expect(prompt.height).toBeGreaterThanOrEqual(110);
   expect(prompt.height).toBeLessThan(150);
   await capture(page, info, 'home');
-  await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '学习空间', exact: true }).click();
   await expect(spaceCard(page, '存储验收 Rust')).toBeVisible();
   const rustCard = await box(spaceCard(page, '存储验收 Rust'));
   const pythonCard = await box(spaceCard(page, '另一个 Python 空间'));

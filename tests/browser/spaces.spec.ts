@@ -28,7 +28,7 @@ test('startup header actions share ghost styling, keyboard focus and mobile touc
   }
   await page.getByRole('button', { name: '应用设置', exact: true }).focus();
   await page.keyboard.press('Tab');
-  const spaces = page.getByRole('button', { name: '我的学习空间', exact: true });
+  const spaces = page.getByRole('button', { name: '学习空间', exact: true });
   await expect(spaces).toBeFocused();
   expect(await spaces.evaluate(el => el.matches(':focus-visible'))).toBe(true);
   await expect(spaces).not.toHaveCSS('box-shadow', 'none');
@@ -146,7 +146,7 @@ test('explicit preview creates a space only after a goal and confirms edited req
   await expect(page.getByRole('heading', { name: '今天你想学习什么?' })).toBeVisible();
   await expect(page.getByTestId('fixture-notice')).toContainText('模拟回复与执行');
   await page.screenshot({ path: `.amp/in/artifacts/home-${info.project.name}.png` });
-  await page.getByRole('button', { name: '我的学习空间' }).click();
+  await page.getByRole('button', { name: '学习空间', exact: true }).click();
   await expect(page.getByText('还没有学习空间，先创建一个')).toBeVisible();
   await page.getByRole('button', { name: '创建学习空间', exact: true }).click();
   await page.getByLabel('你想学什么', { exact: true }).fill('我想学习 Rust，最后能写一个命令行工具');
