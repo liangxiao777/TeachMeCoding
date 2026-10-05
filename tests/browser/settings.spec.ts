@@ -304,6 +304,10 @@ for (const system of ['light', 'dark'] as const) {
     await page.goto('/');
     const home = page.getByRole('textbox', { name: '你想学什么', exact: true });
     await home.fill('切换主题时保留未发送的学习需求');
+    const spacesButton = page.getByRole('button', { name: '我的学习空间', exact: true });
+    const desktopSpaces = (await spacesButton.boundingBox())!;
+    expect((await page.getByRole('button', { name: initialLabel, exact: true }).boundingBox())!.x)
+      .toBeGreaterThanOrEqual(desktopSpaces.x + desktopSpaces.width);
     await page.getByRole('button', { name: '应用设置', exact: true }).click();
     const settings = page.getByRole('region', { name: '应用设置', exact: true });
     await expect(settings.getByRole('button', { name: initialLabel, exact: true })).toBeVisible();
@@ -340,6 +344,9 @@ for (const system of ['light', 'dark'] as const) {
       expect(bounds.x).toBeGreaterThanOrEqual(0);
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
     }
+    const mobileSpaces = (await spacesButton.boundingBox())!;
+    expect((await page.getByRole('button', { name: selectedLabel, exact: true }).boundingBox())!.x)
+      .toBeGreaterThanOrEqual(mobileSpaces.x + mobileSpaces.width);
     await page.screenshot({ path: `.amp/in/artifacts/global-theme-home-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.screenshot({ path: `.amp/in/artifacts/theme-home-${selected}-${info.project.name}.png`, animations: 'disabled' });

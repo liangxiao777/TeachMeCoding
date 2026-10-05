@@ -145,7 +145,6 @@ export function SpaceList() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <Brand onClick={goHome} />
           <div className="flex items-center gap-2">
-            <ThemeToggle />
             <SettingsButton />
             {onHome ? (
               <Button variant="outline" onClick={goSpaces}>
@@ -158,6 +157,7 @@ export function SpaceList() {
                 创建学习空间
               </Button>
             )}
+            <ThemeToggle />
           </div>
         </div>
       </header>
