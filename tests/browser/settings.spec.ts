@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { LoginSession, ModelSettings, ModelSummary } from '../../packages/contracts/src/settings';
 import type { seedWorkspaces } from '../seed-workspaces';
@@ -56,7 +56,7 @@ for (const [name, viewport] of [
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
       const panel = settingsPage.getByRole('tabpanel', { name: category, exact: true });
-      await expect(panel.getByText('功能待开发', { exact: true })).toBeVisible();
+      await expect(panel.getByRole('button', { name: category === 'MCP' ? '保存 MCP 配置' : '保存 Skills 路径', exact: true })).toBeVisible();
       await expect(settingsPage.getByLabel('Provider', { exact: true })).toBeHidden();
       await page.screenshot({ path: `.amp/in/artifacts/settings-${category.toLowerCase()}-${name}-${info.project.name}.png`, animations: 'disabled' });
     }
@@ -159,7 +159,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await expect(editor).toBeHidden();
   const settingsPage = page.getByRole('region', { name: '应用设置', exact: true });
   await settingsPage.getByRole('tab', { name: 'Skills', exact: true }).click();
-  await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByText('功能待开发', { exact: true })).toBeVisible();
+  await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '保存 Skills 路径', exact: true })).toBeVisible();
   await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
   await expect(editor).toHaveValue('// unsaved settings navigation');
   await expect(composer).toHaveValue('保留本单元未发送的问题');
@@ -182,6 +182,8 @@ for (const exit of ['category', 'back', 'late-response'] as const) {
       prompt: { id: '00000000-0000-4000-8000-000000000012', type: 'secret', message: 'Synthetic login in progress' } };
     await page.route('**/api/settings/**', async (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path === '/api/settings/mcp') return route.fulfill({ json: { configuration: { mcpServers: {} }, servers: [] } });
+      if (path === '/api/settings/skills') return route.fulfill({ json: { configuration: { paths: [], disabled: [] }, directory: '/synthetic/skills', skills: [], diagnostics: [] } });
       if (path === '/api/settings/model') return route.fulfill({ json: settings });
       if (path.endsWith('/models')) return route.fulfill({ json: [] });
       if (path.endsWith('/login')) { started = true; if (exit === 'late-response') await wait; return route.fulfill({ json: login }); }
@@ -203,3 +205,81 @@ for (const exit of ['category', 'back', 'late-response'] as const) {
     expect(polls).toBe(count);
   });
 }
+
+test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobile', async ({ page }, info) => {
+  const seed = JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
+  const automatic = join(seed.root, 'skills', 'reviewing-loops');
+  const external = join(seed.root, 'external-skills');
+  const manual = join(external, 'explaining-types');
+  mkdirSync(automatic, { recursive: true }); mkdirSync(manual, { recursive: true });
+  writeFileSync(join(automatic, 'SKILL.md'), '---\nname: reviewing-loops\ndescription: Explain loop conditions when studying iteration.\n---\nReview the counter and exit condition.');
+  writeFileSync(join(manual, 'SKILL.md'), '---\nname: explaining-types\ndescription: Explain type errors and suggest a small example.\ndisable-model-invocation: true\n---\nUse one concrete example.');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '应用设置', exact: true });
+  await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
+  const config = settings.getByLabel('MCP 配置 JSON', { exact: true });
+  const configuration = { mcpServers: {
+    arithmetic: { command: process.execPath, args: [resolve('tests/fixtures/mcp-server.mjs')], env: { TMC_FIXTURE_TOKEN: 'synthetic-browser-key' } },
+    unavailable: { command: '/nonexistent-tmc-fixture-command', timeout: 1 },
+  } };
+  await config.fill(JSON.stringify(configuration, null, 2));
+  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await expect(settings.getByText('连接失败', { exact: true })).toBeVisible();
+  await expect(config).not.toHaveValue(/synthetic-browser-key/);
+  const persisted = await config.inputValue();
+  await settings.getByText('4 个工具', { exact: true }).click();
+  await expect(settings.getByText('subtract', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Subtract right from left.', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-desktop-${info.project.name}.png`, animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-mobile-${info.project.name}.png`, animations: 'disabled' });
+  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).scrollIntoViewIfNeeded();
+  expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-mobile-config-${info.project.name}.png`, animations: 'disabled' });
+  await settings.getByRole('button', { name: '停用 arithmetic', exact: true }).click();
+  await expect(settings.getByText('已停用', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '启用 arithmetic', exact: true }).click();
+  await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await config.fill('{broken');
+  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  await expect(settings.getByText('配置不是有效 JSON，请检查后再保存。', { exact: true })).toBeVisible();
+  await expect(config).toHaveValue('{broken');
+  await config.fill(persisted);
+  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  await settings.getByRole('button', { name: '重新连接', exact: true }).click();
+  await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
+  const paths = settings.getByLabel('额外目录或 SKILL.md 路径', { exact: true });
+  await paths.fill(external);
+  await settings.getByRole('button', { name: '保存 Skills 路径', exact: true }).click();
+  await expect(settings.getByRole('heading', { name: 'reviewing-loops', exact: true })).toBeVisible();
+  await expect(settings.getByText('仅手动调用', { exact: true })).toBeVisible();
+  await settings.getByText('位置与调用方式', { exact: true }).first().click();
+  expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-skills-mobile-${info.project.name}.png`, animations: 'disabled' });
+  await settings.getByRole('button', { name: '保存 Skills 路径', exact: true }).scrollIntoViewIfNeeded();
+  expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-skills-mobile-paths-${info.project.name}.png`, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await settings.getByRole('heading', { name: 'Skills', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-skills-desktop-${info.project.name}.png`, animations: 'disabled' });
+  await settings.getByRole('button', { name: '停用 reviewing-loops', exact: true }).click();
+  await expect(settings.getByRole('button', { name: '启用 reviewing-loops', exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '重新扫描', exact: true }).click();
+  await page.reload();
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
+  await expect(paths).toHaveValue(external);
+  await expect(settings.getByRole('button', { name: '启用 reviewing-loops', exact: true })).toBeVisible();
+  await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
+  await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await expect(config).not.toHaveValue(/synthetic-browser-key/);
+  // Stop every fixture server through the same settings API before browser teardown.
+  await config.fill('{"mcpServers":{}}');
+  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  await expect(settings.getByText('尚未配置 MCP 服务器。', { exact: true })).toBeVisible();
+});

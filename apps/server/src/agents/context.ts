@@ -26,7 +26,7 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '4';
+export const compilerVersion = '5';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const budget = { milliseconds: 300_000 };
 
@@ -60,9 +60,9 @@ export function compileContext(input: FrozenContext) {
   return { xml, sources: sources.map(({ value, ...s }) => ({ ...s, hash: hash(value) })) };
 }
 
-export function compileRequest(input: FrozenContext, history: HistoryGroup[], current: Message[], tools: Tool[]) {
+export function compileRequest(input: FrozenContext, history: HistoryGroup[], current: Message[], tools: Tool[], skillPrompt = '') {
   const { xml, sources } = compileContext(input);
-  const prompt = systemPrompt(input.scenario);
+  const prompt = systemPrompt(input.scenario).replace('</teaching>', () => `${skillPrompt}</teaching>`);
   const prefix: Message[] = [
     { role: 'system', content: prompt, toolsAdded: tools, timestamp: 0 },
     { role: 'user', content: xml, timestamp: 0 },

@@ -1,9 +1,10 @@
 import { ArrowLeft, Blocks, BookOpen, Plug, Settings2 } from 'lucide-react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ModelSettingsForm } from './model-settings'
+import { McpSettingsForm } from './mcp-settings'
+import { SkillsSettingsForm } from './skills-settings'
 
 export const SettingsNavigation = createContext<(() => void) | null>(null)
 
@@ -61,14 +62,9 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                 <h2 className="text-2xl font-semibold tracking-tight">{label}</h2>
                 {id === 'model' && <p className="text-sm text-muted-foreground">选择教学模型、推理强度与登录方式。</p>}
               </div>
-              {id === 'model' ? <ModelSettingsForm active={category === id} /> : (
-                <Empty className="min-h-72 border">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon"><Icon /></EmptyMedia>
-                    <EmptyTitle>功能待开发</EmptyTitle>
-                  </EmptyHeader>
-                </Empty>
-              )}
+              {id === 'model' && <ModelSettingsForm active={category === id} />}
+              {id === 'mcp' && <McpSettingsForm active={category === id} />}
+              {id === 'skills' && <SkillsSettingsForm />}
             </div>
           </TabsContent>
         ))}

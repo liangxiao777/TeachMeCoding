@@ -14,6 +14,9 @@ import { Assessments } from '../modules/assessments.js';
 import type { Actions } from '../modules/actions.js';
 import type { Executions } from '../modules/executions.js';
 import { sealToolCalls } from '../storage/agent-messages.js';
+import type { McpService } from '../extensions/mcp.js';
+import type { SkillService } from '../extensions/skills.js';
+import { readTools } from './read-tools.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -24,10 +27,12 @@ interface RuntimeOptions {
   projectDirectory?: (space: string) => string;
   actions?: Actions;
   executions?: Executions;
+  mcp?: McpService;
+  skills?: SkillService;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
-  private live = new Map<string, { space: string; agent?: Agent; done: Promise<void> }>();
+  private live = new Map<string, { space: string; agent?: Agent; controller: AbortController; done: Promise<void> }>();
   private closing = false;
   private stream: StreamFn;
   constructor(readonly learning: Learning, private models: ModelSource | null, private options: RuntimeOptions = {}) {
@@ -186,7 +191,7 @@ export class TeachingRuntime {
   }
   private launch(space: string, id: string, text: string) {
     if (this.get(space, id).state === 'pending' && !this.live.has(id)) {
-      const entry: { space: string; agent?: Agent; done: Promise<void> } = { space, done: Promise.resolve() };
+      const entry: { space: string; agent?: Agent; controller: AbortController; done: Promise<void> } = { space, controller: new AbortController(), done: Promise.resolve() };
       this.live.set(id, entry);
       entry.done = Promise.resolve().then(() => this.execute(space, id, text, entry)).finally(() => { this.live.delete(id); });
     }
@@ -199,6 +204,7 @@ export class TeachingRuntime {
         this.learning.db.prepare(`UPDATE ${this.tables(space, id).run} SET cancelled=1 WHERE space_id=? AND id=?`).run(space, id);
         this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
       })();
+      this.live.get(id)?.controller.abort();
       this.live.get(id)?.agent?.abort();
       this.stopExecution(space, id);
     }
@@ -214,6 +220,7 @@ export class TeachingRuntime {
     this.closing = true;
     for (const [id, entry] of this.live) {
       this.learning.db.transaction(() => this.finish(entry.space, id, 'interrupted', '服务关闭，运行已中断；未自动重放。'))();
+      entry.controller.abort();
       entry.agent?.abort();
       this.stopExecution(entry.space, id);
     }
@@ -233,7 +240,7 @@ export class TeachingRuntime {
     for (const row of rows) { const g = groups.get(row.id) ?? { id: row.id, messages: [] }; g.messages.push(JSON.parse(row.value) as Message); groups.set(row.id, g); }
     return [...groups.values()];
   }
-  private async execute(space: string, id: string, text: string, entry: { agent?: Agent }) {
+  private async execute(space: string, id: string, text: string, entry: { agent?: Agent; controller: AbortController }) {
     if (!active(this.get(space, id))) return;
     const tables = this.tables(space, id);
     const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
@@ -275,9 +282,15 @@ export class TeachingRuntime {
         if (!active(this.get(space, id))) return;
       }
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
-      const tools = scenario.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+      const skills = this.options.skills?.snapshot(text);
+      const external = await this.options.mcp?.tools(entry.controller.signal) ?? [];
+      if (!active(this.get(space, id))) return;
+      const skillReads = skills?.skills.length ? readTools(this.options.projectDirectory?.(space) ?? process.cwd())
+        .filter((tool) => !scenario.tools.some((existing) => existing.name === tool.name)) : [];
+      const availableTools = [...scenario.tools, ...skillReads, ...external];
+      const tools = availableTools.map(({ name, description, parameters, outputSchema }) => ({ name, description, parameters, ...(outputSchema ? { outputSchema } : {}) }));
       const agent = new Agent({
-        initialState: { model: choice.model, tools: scenario.tools, thinkingLevel: choice.selection.thinkingLevel },
+        initialState: { model: choice.model, tools: availableTools, thinkingLevel: choice.selection.thinkingLevel },
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
         beforeToolCall: async () => {
           if (failure) return { block: true, reason: failure, terminate: true };
@@ -291,10 +304,11 @@ export class TeachingRuntime {
           try {
             request++;
             if (!active(this.get(space, id))) return failureStream(model, '运行已停止。', true);
-            const compiled = compileRequest(frozen, history, context.messages, tools);
+            const compiled = compileRequest(frozen, history, context.messages, tools, skills?.prompt);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
               model: choice.model.id, provider: choice.model.provider, thinkingLevel: choice.selection.thinkingLevel,
               modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
+              extensions: { skills: skills?.digest ?? null, mcpTools: external.map((tool) => tool.name) },
               toolSources, actualUsage: null };
             this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
             if (this.options.debugDirectory) {
@@ -321,7 +335,7 @@ export class TeachingRuntime {
       this.learning.db.prepare(`UPDATE ${tables.work} SET state='running' WHERE space_id=? AND id=?`).run(space, id);
       this.emit(space, id, { type: 'state', state: 'running', error: null });
       agent.subscribe((event) => {
-        if (event.type === 'message_end' && event.message.role !== 'system') {
+        if (event.type === 'message_end' && (event.message.role === 'user' || event.message.role === 'assistant' || event.message.role === 'toolResult')) {
           const m = event.message;
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
@@ -375,8 +389,8 @@ export class TeachingRuntime {
             phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
       await agent.prompt({ role: 'user', content: frozen.references.length ? [
-        { type: 'text', text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },
-      ] : text, timestamp: Date.now() });
+        { type: 'text', text: skills?.text ?? text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },
+      ] : skills?.text ?? text, timestamp: Date.now() });
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);

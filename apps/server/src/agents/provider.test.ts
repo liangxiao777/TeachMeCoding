@@ -51,7 +51,9 @@ test('exact model and private key reach the stream; text and terminal lifecycle 
   } });
   agent.subscribe((event) => { events.push(event); });
   await agent.prompt('check');
-  assert.deepEqual(agent.state.messages.at(-1)?.content, [{ type: 'text', text: 'hello 42' }]);
+  const last = agent.state.messages.at(-1);
+  assert.ok(last?.role === 'assistant');
+  assert.deepEqual(last.content, [{ type: 'text', text: 'hello 42' }]);
   assert.ok(events.some((event) => event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta'));
   assert.equal(events[0]?.type, 'agent_start');
   assert.equal(events.at(-1)?.type, 'agent_end');
@@ -110,7 +112,9 @@ test('one validated tool call returns its result to the next model turn', async 
   assert.equal(calls, 2);
   assert.equal(executions, 1);
   assert.deepEqual(events.filter((event) => event.startsWith('tool_execution')), ['tool_execution_start', 'tool_execution_end']);
-  assert.deepEqual(agent.state.messages.at(-1)?.content, [{ type: 'text', text: 'result:14' }]);
+  const last = agent.state.messages.at(-1);
+  assert.ok(last?.role === 'assistant');
+  assert.deepEqual(last.content, [{ type: 'text', text: 'result:14' }]);
 });
 
 test('provider failure is a terminal assistant error, not a successful empty reply', async () => {

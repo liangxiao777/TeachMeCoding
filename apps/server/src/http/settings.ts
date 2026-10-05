@@ -1,14 +1,31 @@
 import { Hono } from 'hono';
 import { BusinessError } from '../modules/learning.js';
 import type { ModelService } from '../models/service.js';
+import type { McpService } from '../extensions/mcp.js';
+import type { SkillService } from '../extensions/skills.js';
 
-export function settingsApi(models: ModelService) {
+export function settingsApi(models?: ModelService, mcp?: McpService, skills?: SkillService) {
   const api = new Hono();
   api.onError((error, c) => {
     if (error instanceof BusinessError) return c.json({ error: error.message }, error.status);
     if (error.name === 'ZodError' || error instanceof SyntaxError) return c.json({ error: '请求格式或字段无效。' }, 400);
-    return c.json({ error: '无法保存或读取模型设置，请检查数据目录权限和可用空间。' }, 503);
+    return c.json({ error: '无法保存或读取设置，请检查数据目录权限和配置文件。' }, 503);
   });
+  api.use('/settings/*', async (c, next) => {
+    const path = c.req.path;
+    if (path.startsWith('/api/settings/mcp') && !mcp || path.startsWith('/api/settings/skills') && !skills
+      || !path.startsWith('/api/settings/mcp') && !path.startsWith('/api/settings/skills') && !models) {
+      throw new BusinessError(503, '无法读取这类设置，请检查数据目录中的配置文件。');
+    }
+    await next();
+  });
+  api.get('/settings/mcp', (c) => c.json(mcp!.settings()));
+  api.post('/settings/mcp', async (c) => c.json(await mcp!.save(await c.req.json())));
+  api.post('/settings/mcp/reconnect', async (c) => c.json(await mcp!.reconnect()));
+  api.get('/settings/skills', (c) => c.json(skills!.settings()));
+  api.post('/settings/skills', async (c) => c.json(skills!.save(await c.req.json())));
+  api.post('/settings/skills/reload', (c) => c.json(skills!.reload()));
+  if (!models) return api;
   api.get('/settings/model', async (c) => c.json(await models.settings()));
   api.get('/settings/providers/:provider/models', (c) => c.json(models.modelsOf(c.req.param('provider'))));
   api.post('/settings/model', async (c) => c.json(await models.select(await c.req.json())));

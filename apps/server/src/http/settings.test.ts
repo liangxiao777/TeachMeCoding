@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createProvider } from '@earendil-works/pi-ai';
 import { createApp } from './app.js';
 import { createLocalAccess } from './local-access.js';
 import { ModelService } from '../models/service.js';
 import { openDatabase } from '../storage/database.js';
+import { McpService } from '../extensions/mcp.js';
+import { SkillService } from '../extensions/skills.js';
 
 const stealth = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' };
 
@@ -86,4 +91,28 @@ test('login endpoints drive a complete prompt/answer flow and reject bad input',
   const after = await (await app.request('/api/settings/model', { headers })).json();
   assert.equal(after.providers.find((p: { id: string }) => p.id === 'synthetic').stored, null);
   db.close(); models.close();
+});
+
+test('MCP and Skills work without a model, retain access protection and reject invalid config', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-settings-')), db = openDatabase(':memory:');
+  const access = createLocalAccess({ port: 4310 });
+  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+  const skills = new SkillService(db, root);
+  const app = createApp(access, undefined, undefined, undefined, undefined, mcp, skills);
+  const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
+  try {
+    assert.equal((await app.request('/api/settings/mcp', { headers: { host: 'localhost:4310' } })).status, 401);
+    assert.equal((await app.request('/api/settings/skills', { headers: { ...headers, origin: 'http://evil.invalid' } })).status, 403);
+    assert.equal((await app.request('/api/settings/model', { headers })).status, 503);
+    const saved = await app.request('/api/settings/mcp', { method: 'POST', headers, body: JSON.stringify({ mcpServers: {
+      fixture: { command: '/disabled-fixture', enabled: false, env: { TOKEN: 'synthetic-api-secret' } },
+    } }) });
+    assert.equal(saved.status, 200);
+    assert.ok(!(await saved.text()).includes('synthetic-api-secret'));
+    assert.equal((await app.request('/api/settings/mcp', { method: 'POST', headers, body: '{"mcpServers":{"invalid":{}}}' })).status, 400);
+    assert.equal((await app.request('/api/settings/mcp/reconnect', { method: 'POST', headers, body: '{}' })).status, 200);
+    assert.equal((await app.request('/api/settings/skills', { headers })).status, 200);
+    assert.equal((await app.request('/api/settings/skills', { method: 'POST', headers, body: '{"paths":["relative"],"disabled":[]}' })).status, 400);
+    assert.equal((await app.request('/api/settings/skills/reload', { method: 'POST', headers, body: '{}' })).status, 200);
+  } finally { await mcp.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });

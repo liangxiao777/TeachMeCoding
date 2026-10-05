@@ -22,7 +22,7 @@ Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsou
 
 要求 Node **24.15.0（24 LTS）**、pnpm **11.1.0**。依赖版本通过清单和 `pnpm-lock.yaml` 固定。
 
-教学 Agent 需要服务端模型配置：在根目录 `.env` 中设置 `OPENROUTER_API_KEY` 和 `OPENROUTER_MODEL=stealth/space-bunny-alpha`。文件不存在时可参考 `.env.example` 创建并将权限设为 `600`，已有配置不要覆盖；服务端环境变量优先。缺少模型配置时仍可启动服务、查看已保存数据及使用项目文件和终端，教学生成会显示不可用。配置与真实模型检查详见[模型兼容性检查](#模型兼容性检查)。
+在全屏「设置 → 模型配置」中选择 pi-ai 提供的 Provider、模型、推理强度及登录方式；保存的选择用于新运行，进行中的运行继续使用创建时的模型。API Key / OAuth 凭据只保存在服务端数据目录的 `credentials.json`（600），不返回浏览器。原有 `.env` 的 `OPENROUTER_API_KEY` 和 `OPENROUTER_MODEL=stealth/space-bunny-alpha` 可继续作为初始配置；服务端环境变量优先，保存模型选择后不再使用模型回退值。缺少配置时仍可查看数据和使用终端；设置页说明缺少哪项配置。实际模型检查见[模型兼容性检查](#模型兼容性检查)。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -35,6 +35,39 @@ pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 AP
 ```
 
 `Ctrl+C` 停止服务。API 端口可通过 `PORT` 设置，开发前端可通过 `TMC_WEB_PORT` 设置；`pnpm dev` 将相同配置用于代理和本地访问白名单。编译产物可从任意工作目录用 `node /绝对路径/apps/server/dist/index.js` 启动，静态资源和默认数据目录不依赖当前目录。
+
+## MCP 与 Skills
+
+全屏设置提供真实 MCP / Skills 配置，切换类别或返回学习不会丢失编辑器、会话输入或终端连接。不自动加载其他应用的 MCP 配置，也不自动安装 MCP 服务或 Skill 包。
+
+**MCP：**在「MCP 配置 JSON」中填写 `mcpServers`，保存后连接已启用的服务器。支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 支持 `${变量名}`，从私有服务端环境查询；不执行 `!command`。命令是可执行程序名，不是 shell 命令串。
+
+```json
+{
+  "mcpServers": {
+    "local": { "command": "node", "args": ["/absolute/path/server.js"] },
+    "remote": {
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_TOKEN}" },
+      "enabled": false
+    }
+  }
+}
+```
+
+配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的字面值，保存未改动的掩码会保留原值；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述，可停用、重新连接；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
+
+使用 `@earendil-works/pi-mcp@1.0.0` 的客户端、stdio / HTTP transport 和结果转换，将远端动态 JSON Schema 适配为现有 Agent 的原生工具，保留结构化结果、错误状态、取消和工具列表变更通知。工具使用稳定的独立名称，不覆盖教学工具；每次运行固定当时的工具集合，后续配置和工具列表更新供新运行使用。关闭应用会关闭连接并清理其拥有的 stdio 进程。单次取消会发送 MCP 取消通知，但不保证远端撤销已发生的操作。
+
+**启用服务器即信任其工具可被 Agent 直接调用。**MCP 不受第一方文件/命令提案的逐次确认机制约束，可能发送学习资料或产生外部副作用；仅配置信任的服务。stdio 使用本机账号权限，继承基础环境及明确配置的 `env`，不直接继承整个服务端环境。当前接入 MCP 工具能力；不包含 legacy SSE、远端 OAuth 登录界面、MCP resources / prompts 管理或 codemode。
+
+**Skills：**默认扫描 `<TMC_DATA_DIR>/skills/`（默认 `~/.teach-me-coding/skills/`），每个 Skill 放在包含 `SKILL.md` 的目录中。可在设置中添加已有目录或单个 Markdown 文件的绝对路径，也支持 `~/`，例如 `~/.pi/agent/skills` 和 `~/.agents/skills`。启停与额外路径保存在 SQLite 的 `app_settings`，不复制或改写原 Skill 文件。应用目录优先，额外路径按配置顺序加载；同名冲突和无效 frontmatter 显示 Pi 的诊断。
+
+复用 `@earendil-works/pi-coding-agent@1.0.0` 的 `loadSkills` / `formatSkillsForPrompt`，不创建 `AgentSession`、加载默认 coding tools 或改变现有 SQLite 会话格式。系统 XML 只增加 Skill 名称、描述和路径；模型匹配任务时通过原生 `read` 工具读取正文及参考文件。所有教学场景均可使用已启用的 Skills；每次运行重新发现文件，再固定本次元数据。`disable-model-invocation: true` 不进入自动发现提示，仍可用 `/skill:名称 你的请求` 显式调用；停用后不再广告或展开该命令，但它不是文件读取权限封锁。Skill 不改变场景任务、工具集合或原有执行确认规则。
+
+实现依据：[Pi Skills 1.0.0](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/skills.md)、[Pi MCP 1.0.0](https://github.com/earendil-works/pi/tree/v1.0.0/packages/mcp)、[裸 Agent MCP 示例](https://github.com/earendil-works/pi/tree/v1.0.0/packages/agent/examples/mcp-codemode)。
+
+## 网络访问
 
 默认只监听 `127.0.0.1`。需要从可信网络访问时，在启动命令中设置 `HOST`（支持 `127.0.0.1` 或 `0.0.0.0`）：
 
