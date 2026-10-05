@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowRight, LayoutGrid, Plus, Sparkles } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, LayoutGrid, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { LearningHome } from '@/components/learning-home'
 import { Brand, isComposing } from '@/components/shared'
@@ -16,7 +16,11 @@ import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
 import type { Space } from '@/app/types'
 
-const EXAMPLES = ['我想学习 Rust，最后能写一个命令行工具', '我想用 PyTorch 训练一个图像分类模型', '我想学会用 Go 写后端服务']
+const EXAMPLES = [
+  { label: 'Rust 命令行工具', goal: '我想学习 Rust，最后能写一个命令行工具' },
+  { label: 'PyTorch 图像分类', goal: '我想用 PyTorch 训练一个图像分类模型' },
+  { label: 'Go 后端服务', goal: '我想学会用 Go 写后端服务' },
+]
 
 function StartInput({ autoFocus }: { autoFocus?: boolean }) {
   const { createSpace, persistence } = useApp()
@@ -27,8 +31,8 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
     createSpace(value)
   }
   return (
-    <div className="flex flex-col gap-3">
-      <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => start(text)}>
+    <div className="startup-composer mx-auto flex w-full max-w-[40rem] flex-col gap-5">
+      <PromptInput className="startup-prompt" onReset={(event) => event.preventDefault()} onSubmit={() => start(text)}>
           <label htmlFor="goal-input" className="sr-only">
             你想学什么
           </label>
@@ -43,18 +47,19 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
             placeholder="说说你想学什么，比如：我想学习 Rust，最后能写一个命令行工具"
             className="text-base"
           />
-          <PromptInputFooter>
-            <Sparkles className="size-4 text-muted-foreground" aria-hidden />
-            <PromptInputSubmit aria-label="开始" size="sm" disabled={!text.trim() || busy}>
+          <PromptInputFooter className="justify-end">
+            <PromptInputSubmit className="startup-submit" aria-label="开始" size="sm" disabled={!text.trim() || busy}>
               开始
               <ArrowRight data-icon="inline-end" />
             </PromptInputSubmit>
           </PromptInputFooter>
       </PromptInput>
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <span className="text-xs text-muted-foreground">试试：</span>
+      <div className="startup-examples flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
         {EXAMPLES.map((ex) => (
-          <Suggestion key={ex} suggestion={ex} disabled={busy} onClick={start} />
+          <Suggestion key={ex.goal} suggestion={ex.goal} aria-label={ex.goal} variant="ghost" className="startup-example" disabled={busy} onClick={start}>
+            {ex.label}
+            <ArrowUpRight className="size-3" aria-hidden />
+          </Suggestion>
         ))}
       </div>
     </div>
@@ -140,8 +145,8 @@ export function SpaceList() {
   const spaces = state.spaces
   const onHome = state.globalView === 'home'
   return (
-    <div className="min-h-dvh">
-      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
+    <div className={cn('min-h-dvh', onHome && 'startup-page relative isolate')}>
+      <header className={cn('sticky top-0 z-10 border-b bg-background/80 backdrop-blur', onHome && 'startup-header')}>
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <Brand onClick={goHome} />
           <div className="flex items-center gap-2">

@@ -215,63 +215,158 @@
   color: var(--accent-foreground);
 }
 
-.orbital-field {
-  position: absolute;
-  inset: 0 -1.5rem;
+.startup-page {
+  --startup-light-strong: light-dark(rgb(0 0 0 / 18%), rgb(255 255 255 / 16%));
+  --startup-light-soft: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 6%));
+  --startup-light-secondary: light-dark(rgb(0 0 0 / 15%), rgb(255 255 255 / 13%));
+  background: light-dark(#fbfbfb, #101010);
+}
+
+.startup-header {
+  border-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.startup-field {
+  --light-x: 0px;
+  --light-y: 0px;
+  position: fixed;
+  inset: 0;
   z-index: -1;
   overflow: hidden;
   pointer-events: none;
-  color: var(--foreground);
-  mask-image: radial-gradient(ellipse at center, transparent 34%, #000 66%, transparent 100%);
+  mask-image: radial-gradient(ellipse at center, transparent 25%, #000 80%);
   transition: opacity 800ms ease;
 }
 
-.orbital-field svg {
-  width: 100%;
-  height: 100%;
-  fill: currentColor;
+.startup-light-plane {
+  position: absolute;
+  inset: -10%;
+  transform: translate(var(--light-x), var(--light-y));
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.orbital-field-orbit {
-  transform-origin: 0 0;
-  animation: orbital-drift 180s linear infinite;
+.startup-light-plane > span {
+  position: absolute;
+  inset: -10%;
+  border-radius: 45%;
+  background: linear-gradient(132deg, transparent 8%, var(--startup-light-strong) 24%, var(--startup-light-soft) 36%, transparent 52%);
+  filter: blur(24px);
+  animation: startup-light-drift 12s ease-in-out infinite;
 }
 
-.orbital-field-orbit:nth-child(2) {
-  animation-duration: 240s;
-  animation-direction: reverse;
+.startup-light-plane:nth-child(2) {
+  transform: translate(calc(var(--light-x) * -0.6), calc(var(--light-y) * -0.6));
 }
 
-/* Autofocus alone should not hide the effect before the visitor starts typing. */
-.learning-entry:has(#goal-input:focus:not(:placeholder-shown)) .orbital-field {
-  opacity: 0.35;
+.startup-light-plane:nth-child(2) > span {
+  background: linear-gradient(132deg, transparent 48%, var(--startup-light-soft) 64%, var(--startup-light-secondary) 78%, transparent 96%);
+  animation-duration: 16s;
+  animation-delay: -4s;
 }
 
-.learning-entry:has(#goal-input:focus:not(:placeholder-shown)) .orbital-field-orbit {
-  animation-play-state: paused;
+/* Keep autofocus welcoming; soften the field only once the visitor writes. */
+.learning-entry:has(#goal-input:focus:not(:placeholder-shown)) .startup-field {
+  opacity: 0.5;
 }
 
-@keyframes orbital-drift {
-  to { transform: rotate(360deg); }
+@keyframes startup-light-drift {
+  0%, 100% { transform: translate(-12%, -10%) rotate(-5deg) scale(1); }
+  50% { transform: translate(12%, 10%) rotate(5deg) scale(1.08); }
+}
+
+.startup-prompt > [data-slot="input-group"] {
+  opacity: 1;
+  border-radius: 14px;
+  border-color: light-dark(#d9d9d9, #3e3e3e);
+  background: light-dark(rgb(255 255 255 / 95%), rgb(27 27 27 / 96%));
+  box-shadow: 0 4px 18px -10px color-mix(in srgb, var(--foreground) 14%, transparent);
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.startup-prompt > [data-slot="input-group"]:focus-within {
+  border-color: light-dark(#b8b8b8, #5a5a5a);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--foreground) 3%, transparent), 0 4px 18px -10px color-mix(in srgb, var(--foreground) 14%, transparent);
+}
+
+.startup-prompt textarea {
+  min-height: 76px;
+  padding: 18px 20px 8px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.startup-prompt [data-slot="input-group-addon"] {
+  padding: 0 14px 14px;
+}
+
+.startup-submit {
+  height: 32px;
+  padding-inline: 14px;
+  border-radius: 8px;
+}
+
+.startup-submit svg {
+  transition: transform 180ms ease;
+}
+
+.startup-submit:not(:disabled):hover svg {
+  transform: translateX(3px);
+}
+
+.startup-submit:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.startup-example {
+  height: auto;
+  min-height: 36px;
+  gap: 6px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.startup-example:hover {
+  color: var(--foreground);
 }
 
 @media (max-width: 639px) {
-  .orbital-field {
-    mask-image: radial-gradient(ellipse at center, transparent 48%, #000 78%, transparent 100%);
+  .startup-field {
+    mask-image: radial-gradient(ellipse at center, transparent 35%, #000 90%);
   }
 
-  .orbital-field-orbit circle:nth-child(n + 49) {
-    display: none;
+  .startup-light-plane {
+    transform: none !important;
+  }
+
+  .startup-prompt textarea {
+    padding-inline: 16px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .orbital-field {
+  .startup-field,
+  .startup-light-plane,
+  .startup-prompt > [data-slot="input-group"],
+  .startup-submit svg {
     transition: none;
   }
 
-  .orbital-field-orbit {
+  .startup-light-plane {
+    transform: none !important;
+  }
+
+  .startup-light-plane > span {
     animation: none;
+  }
+
+  .startup-submit:not(:disabled):hover svg,
+  .startup-submit:not(:disabled):active {
+    transform: none;
   }
 }
 

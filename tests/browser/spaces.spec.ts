@@ -2,6 +2,83 @@ import { expect, test } from '@playwright/test';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 
+test('startup light moves without moving content, softens while writing and respects reduced motion', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference', colorScheme: 'light' });
+  await page.goto('/preview');
+  const input = page.getByRole('textbox', { name: '你想学什么', exact: true });
+  const field = page.locator('.startup-field');
+  const surface = page.locator('.startup-prompt > [data-slot="input-group"]');
+  const planes = page.locator('.startup-light-plane');
+  const light = planes.first().locator('span');
+  await expect(input).toBeFocused();
+  await expect(page.locator('.startup-page')).toHaveCSS('background-color', 'rgb(251, 251, 251)');
+  await expect(surface).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.95)');
+  await expect(surface).toHaveCSS('opacity', '1');
+  await expect(page.getByRole('button', { name: '开始', exact: true })).toBeDisabled();
+  await expect(field).toHaveCSS('opacity', '1');
+  await expect(page.locator('.startup-header')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(page.locator('.startup-header')).toHaveCSS('border-bottom-color', 'rgba(0, 0, 0, 0)');
+  await expect(light).toHaveCSS('animation-duration', '12s');
+  await expect(planes.nth(1).locator('span')).toHaveCSS('animation-duration', '16s');
+  const initial = await light.evaluate((el) => getComputedStyle(el).transform);
+  await expect.poll(() => light.evaluate((el) => getComputedStyle(el).transform)).not.toBe(initial);
+
+  const hero = (await page.locator('.learning-entry').boundingBox())!;
+  const heading = page.getByRole('heading', { name: '今天你想学习什么?' });
+  const headingBefore = (await heading.boundingBox())!;
+  await page.mouse.move(hero.x + hero.width * 0.85, hero.y + hero.height * 0.3);
+  await expect.poll(() => planes.first().evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41)).toBeCloseTo(5.6, 1);
+  await expect.poll(() => planes.first().evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m42)).toBeCloseTo(-2.4, 1);
+  await expect.poll(() => planes.nth(1).evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41)).toBeCloseTo(-3.36, 1);
+  expect((await heading.boundingBox())!.x).toBe(headingBefore.x);
+  expect((await heading.boundingBox())!.y).toBe(headingBefore.y);
+  await page.mouse.move(10, 10);
+  await expect.poll(() => planes.first().evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41)).toBeCloseTo(0, 1);
+  await page.locator('.learning-entry').dispatchEvent('pointermove', { pointerType: 'touch', clientX: 1200, clientY: 100 });
+  expect(await field.evaluate((el) => el.style.getPropertyValue('--light-x'))).toBe('0px');
+
+  await input.fill('我想做一个属于自己的小工具');
+  await expect(field).toHaveCSS('opacity', '0.5');
+  await input.fill('');
+  await expect(field).toHaveCSS('opacity', '1');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(light).toHaveCSS('animation-name', 'none');
+  await expect(planes.first()).toHaveCSS('transform', 'none');
+  await page.mouse.move(hero.x + hero.width * 0.2, hero.y + hero.height * 0.8);
+  await expect(planes.first()).toHaveCSS('transform', 'none');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await expect(light).toHaveCSS('animation-name', 'startup-light-drift');
+  const mobileInitial = await light.evaluate((el) => getComputedStyle(el).transform);
+  await expect.poll(() => light.evaluate((el) => getComputedStyle(el).transform)).not.toBe(mobileInitial);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const prompt = (await page.locator('.startup-prompt').boundingBox())!;
+  expect(prompt.width).toBeLessThanOrEqual(342);
+  await page.screenshot({ path: `.amp/in/artifacts/startup-light-mobile-${info.project.name}.png` });
+  await input.fill('主题切换后保留这个目标');
+  await page.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
+  await expect(input).toHaveValue('主题切换后保留这个目标');
+  await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+  await expect(page.locator('.startup-page')).toHaveCSS('background-color', 'rgb(16, 16, 16)');
+  await expect(page.locator('.startup-header')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(surface).toHaveCSS('background-color', 'rgba(27, 27, 27, 0.96)');
+  await input.fill('');
+  await expect(surface).toHaveCSS('opacity', '1');
+  await expect(page.getByRole('button', { name: '开始', exact: true })).toBeDisabled();
+  await page.screenshot({ path: `.amp/in/artifacts/startup-dark-mobile-${info.project.name}.png` });
+});
+
+test('short example labels still submit the complete selected goal', async ({ page }) => {
+  await page.goto('/preview');
+  const input = page.getByRole('textbox', { name: '你想学什么', exact: true });
+  await input.fill('不要提交这条未发送的草稿');
+  await page.getByRole('button', { name: '我想用 PyTorch 训练一个图像分类模型', exact: true }).click();
+  await expect(page.getByText('我想用 PyTorch 训练一个图像分类模型', { exact: true })).toBeVisible();
+  await expect(page.getByText('不要提交这条未发送的草稿', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.startup-field')).toHaveCount(0);
+});
+
 test('explicit preview creates a space only after a goal and confirms edited requirements', async ({ page }, info) => {
   const businessRequests: string[] = [];
   page.on('request', (request) => { if (new URL(request.url()).pathname.startsWith('/api/')) businessRequests.push(request.url()); });

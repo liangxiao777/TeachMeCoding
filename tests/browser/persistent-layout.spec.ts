@@ -24,7 +24,12 @@ test('real home and intake retain the approved hero, space cards and conversatio
   const heading = await box(page.getByRole('heading', { name: '今天你想学习什么?' }));
   expect(Math.abs(heading.x + heading.width / 2 - 720)).toBeLessThan(2);
   expect(hero.height).toBeGreaterThan(850);
-  await expect(page.locator('.orbital-field svg')).toBeVisible();
+  await expect(page.locator('.startup-field')).toBeVisible();
+  await expect(page.locator('.learning-content p')).toHaveText('路线、课件、会话、练习代码与测评记录都在同一个空间里。每个学习目标独立推进，随时回来接着学。');
+  const prompt = await box(page.locator('.startup-prompt > [data-slot="input-group"]'));
+  expect(prompt.width).toBe(640);
+  expect(prompt.height).toBeGreaterThanOrEqual(110);
+  expect(prompt.height).toBeLessThan(150);
   await capture(page, info, 'home');
   await page.getByRole('button', { name: '我的学习空间', exact: true }).click();
   await expect(spaceCard(page, '存储验收 Rust')).toBeVisible();
