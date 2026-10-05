@@ -17,6 +17,9 @@ async function capture(page: Page, info: TestInfo, name: string) {
 
 test('real home and intake retain the approved hero, space cards and conversation-summary layout', async ({ page }, info) => {
   await page.goto('/');
+  await expect(page.locator('.app-layout footer')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
+  await expect(page.locator('.app-layout > .min-h-dvh')).toHaveCSS('min-height', '1000px');
   const hero = await box(page.locator('.learning-entry'));
   const heading = await box(page.getByRole('heading', { name: '今天你想学习什么?' }));
   expect(Math.abs(heading.x + heading.width / 2 - 720)).toBeLessThan(2);
@@ -49,6 +52,8 @@ test('real home and intake retain the approved hero, space cards and conversatio
 test('real route and IDE retain timeline, full-height tree, split editor and visible fullscreen Agent', async ({ page }, info) => {
   const data = seed(info);
   await page.goto(`/?space=${data.spaceId}&tab=route`);
+  await expect(page.locator('.app-layout footer')).toHaveCount(0);
+  await expect(page.locator('.app-layout > .h-dvh')).toHaveCSS('height', '1000px');
   const stage = page.getByRole('region', { name: /阶段 1.*语言基础/ });
   await expect(stage).toBeVisible();
   await expect(stage.locator(':scope > ol > li')).toHaveCount(2);

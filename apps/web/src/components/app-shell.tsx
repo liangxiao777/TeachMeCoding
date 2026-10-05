@@ -45,7 +45,7 @@ function SpaceBody() {
 }
 
 export function AppShell() {
-  const { current, persistence, capabilities } = useApp()
+  const { current, persistence } = useApp()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsTrigger = useRef<HTMLElement | null>(null)
   const openSettings = () => {
@@ -61,7 +61,7 @@ export function AppShell() {
       <TooltipProvider delay={300}>
         <SettingsNavigation value={persistence ? openSettings : null}>
           <Activity mode={settingsOpen ? 'hidden' : 'visible'}>
-            <div className="app-layout">
+            <div className="app-layout" data-fixture={!persistence || undefined}>
               {current ? <SpaceBody key={current.id} /> : <SpaceList />}
               {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
                 <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
@@ -75,13 +75,11 @@ export function AppShell() {
                   )}
                 </div>
               )}
-              <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
-                {persistence ? (
-                  <span data-testid="workspace-notice">真实工作区 · {capabilities.agent ? '教学 Agent 已接入' : 'Agent 暂不可用'} · {capabilities.terminal ? '本机执行 · 非沙箱' : '终端暂不可用'}</span>
-                ) : (
+              {!persistence && (
+                <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
                   <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
-                )}
-              </footer>
+                </footer>
+              )}
             </div>
           </Activity>
           {settingsOpen && <SettingsPage onBack={closeSettings} />}

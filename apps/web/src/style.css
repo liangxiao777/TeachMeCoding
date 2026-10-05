@@ -289,7 +289,7 @@
   animation: caret-blink 1s steps(1) infinite;
 }
 
-/* Both data sources use the same layout and reserve space for their status footer. */
-.app-layout .h-dvh { height: calc(100dvh - 24px); }
-.app-layout .min-h-dvh { min-height: calc(100dvh - 24px); }
-.app-layout .learning-entry { min-height: calc(100dvh - 81px); }
+/* Only the development fixture reserves space for its status footer. */
+.app-layout[data-fixture] .h-dvh { height: calc(100dvh - 24px); }
+.app-layout[data-fixture] .min-h-dvh { min-height: calc(100dvh - 24px); }
+.app-layout[data-fixture] .learning-entry { min-height: calc(100dvh - 81px); }
