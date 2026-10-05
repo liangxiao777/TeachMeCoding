@@ -2,6 +2,66 @@ import { expect, test } from '@playwright/test';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 
+test('startup header actions share ghost styling, keyboard focus and mobile touch targets', async ({ page }, info) => {
+  const actions = page.locator('.startup-header .startup-actions > [data-slot="button"]');
+  for (const scheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'no-preference' });
+    await page.goto('/');
+    await expect(actions).toHaveCount(3);
+    await page.mouse.move(0, 0);
+    for (const action of await actions.all()) {
+      await expect(action).toHaveCSS('height', '32px');
+      await expect(action).toHaveCSS('border-radius', '8px');
+      await expect(action).toHaveCSS('font-size', '13px');
+      await expect(action).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+      await expect(action).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
+      await expect(action).toHaveCSS('transition-duration', '0.15s, 0.15s');
+      await expect(action.locator('svg')).toHaveCSS('width', '16px');
+      const before = (await action.boundingBox())!;
+      await action.hover();
+      await expect(action).toHaveCSS('background-color', scheme === 'light' ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.08)');
+      expect(await action.boundingBox()).toEqual(before);
+      await page.mouse.move(0, 0);
+      await expect(action).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    }
+    await page.screenshot({ path: `.amp/in/artifacts/startup-actions-${scheme}-${info.project.name}.png`, animations: 'disabled' });
+  }
+  await page.getByRole('button', { name: '应用设置', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  const spaces = page.getByRole('button', { name: '我的学习空间', exact: true });
+  await expect(spaces).toBeFocused();
+  expect(await spaces.evaluate(el => el.matches(':focus-visible'))).toBe(true);
+  await expect(spaces).not.toHaveCSS('box-shadow', 'none');
+  await page.getByRole('textbox', { name: '你想学什么', exact: true }).focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const action of await actions.all()) {
+    const target = await action.evaluate(el => {
+      const style = getComputedStyle(el, '::after');
+      return { width: parseFloat(style.width), height: parseFloat(style.height) };
+    });
+    expect(target.width).toBeGreaterThanOrEqual(44);
+    expect(target.height).toBe(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const theme = page.getByRole('button', { name: '切换到亮色主题', exact: true });
+  const themeBox = (await theme.boundingBox())!;
+  // Click outside the visible 32px button but inside its expanded touch target.
+  await page.mouse.click(themeBox.x + themeBox.width / 2, themeBox.y + themeBox.height + 4);
+  await expect(page.getByRole('button', { name: '切换到暗色主题', exact: true })).toBeVisible();
+  await expect(actions.first()).toHaveCSS('color', 'oklch(0.145 0 0)');
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: `.amp/in/artifacts/startup-actions-mobile-${info.project.name}.png`, animations: 'disabled' });
+  const settings = page.getByRole('button', { name: '应用设置', exact: true });
+  const settingsBox = (await settings.boundingBox())!;
+  await page.mouse.click(settingsBox.x + settingsBox.width / 2, settingsBox.y + settingsBox.height + 4);
+  await expect(page.getByRole('region', { name: '应用设置', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await spaces.click();
+  await expect(page.getByRole('button', { name: '创建学习空间', exact: true })).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  // Home-only overrides must not change settings buttons on other pages.
+  await expect(page.getByRole('button', { name: '应用设置', exact: true })).toHaveCSS('height', '28px');
+});
+
 test('startup light moves without moving content, softens while writing and respects reduced motion', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'no-preference', colorScheme: 'light' });
   await page.goto('/preview');

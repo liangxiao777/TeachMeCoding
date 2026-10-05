@@ -149,10 +149,10 @@ export function SpaceList() {
       <header className={cn('sticky top-0 z-10 border-b bg-background/80 backdrop-blur', onHome && 'startup-header')}>
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
           <Brand onClick={goHome} />
-          <div className="flex items-center gap-2">
+          <div className="startup-actions flex items-center gap-2">
             <SettingsButton />
             {onHome ? (
-              <Button variant="outline" onClick={goSpaces}>
+              <Button variant="ghost" onClick={goSpaces}>
                 <LayoutGrid data-icon="inline-start" />
                 我的学习空间
               </Button>

@@ -228,6 +228,25 @@
   backdrop-filter: none;
 }
 
+.startup-header .startup-actions > [data-slot="button"] {
+  position: relative;
+  height: 32px;
+  gap: 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  translate: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.startup-header .startup-actions > [data-slot="button"] svg {
+  width: 16px;
+  height: 16px;
+}
+
+.startup-header .startup-actions > [data-slot="button"]:hover {
+  background-color: light-dark(rgb(0 0 0 / 5%), rgb(255 255 255 / 8%));
+}
+
 .startup-field {
   --light-x: 0px;
   --light-y: 0px;
@@ -335,6 +354,18 @@
 }
 
 @media (max-width: 639px) {
+  .startup-header .startup-actions > [data-slot="button"] {
+    min-width: 36px;
+    padding-inline: 6px;
+  }
+
+  /* Expand the touch target to 44px without enlarging the visible buttons. */
+  .startup-header .startup-actions > [data-slot="button"]::after {
+    position: absolute;
+    inset: -7px -5px;
+    content: '';
+  }
+
   .startup-field {
     mask-image: radial-gradient(ellipse at center, transparent 35%, #000 90%);
   }
@@ -351,6 +382,7 @@
 @media (prefers-reduced-motion: reduce) {
   .startup-field,
   .startup-light-plane,
+  .startup-header .startup-actions > [data-slot="button"],
   .startup-prompt > [data-slot="input-group"],
   .startup-submit svg {
     transition: none;
