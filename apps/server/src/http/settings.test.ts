@@ -154,6 +154,11 @@ test('Skills library endpoints protect installation and file access, and complet
       assert.equal((await app.request(`/api/settings/skills/${path}`, { method: 'POST', headers: { ...headers, origin: 'https://evil.invalid' }, body: '{}' })).status, 403);
     }
     assert.equal((await app.request('/api/settings/skills/details?filePath=/etc/passwd', { headers })).status, 404);
+    assert.equal((await app.request('/api/settings/skills/leaderboard', { headers: { host: 'localhost:4310' } })).status, 401);
+    assert.equal((await app.request('/api/settings/skills/leaderboard', { headers: { ...headers, origin: 'https://evil.invalid' } })).status, 403);
+    for (const query of ['view=unknown', 'page=-1', 'page=1.5', 'page=not-a-number', 'view=hot&extra=1']) {
+      assert.equal((await app.request(`/api/settings/skills/leaderboard?${query}`, { headers })).status, 400);
+    }
     assert.equal((await post('install', { source: '--global' })).status, 400);
     assert.equal((await post('local', { path: 'relative' })).status, 400);
     assert.equal((await post('install', {})).status, 400);

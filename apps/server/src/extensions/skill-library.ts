@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { loadSkills } from '@earendil-works/pi-coding-agent';
-import type { SkillInstallation, SkillSearch } from '@teach-me-coding/contracts';
+import type { SkillInstallation, SkillLeaderboard, SkillLeaderboardView, SkillSearch } from '@teach-me-coding/contracts';
 import { BusinessError } from '../modules/learning.js';
 import { descendants, stopProcesses } from '../runtime/processes.js';
 
@@ -16,6 +16,12 @@ const installationSchema = z.object({
 });
 const catalogSchema = z.object({ skills: z.array(z.object({
   id: z.string().min(1), source: z.string().min(1), skillId: z.string().min(1), name: z.string().min(1), installs: z.number().nonnegative(),
+})) });
+const leaderboardSchema = z.object({ skills: z.array(catalogSchema.shape.skills.element.omit({ id: true }).extend({ change: z.number().optional() })),
+  total: z.number().int().nonnegative(), hasMore: z.boolean(), page: z.number().int().nonnegative() });
+const wellKnownLockSchema = z.object({ version: z.literal(1), skills: z.record(z.string(), z.object({
+  source: z.string(), sourceUrl: z.string(), sourceType: z.literal('well-known'),
+  computedHash: z.string().regex(/^[a-f0-9]{64}$/), wellKnownDigest: z.string().optional(),
 })) });
 const acquiredSchema = z.array(z.object({
   name: z.string().optional(), status: z.string(), source: z.string().optional(), ref: z.string().nullable().optional(),
@@ -43,6 +49,17 @@ export async function searchSkills(query: string, request: typeof fetch = fetch)
   } catch { throw new BusinessError(503, '暂时无法搜索 skills.sh，请重试。'); }
 }
 
+/** The public leaderboard has no search id; retain its order and its view-specific metrics. */
+export async function skillLeaderboard(view: SkillLeaderboardView, page: number, request: typeof fetch = fetch): Promise<SkillLeaderboard> {
+  try {
+    const response = await request(`https://skills.sh/api/skills/${view}/${page}`, { signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error('leaderboard unavailable');
+    const data = leaderboardSchema.parse(await response.json());
+    if (data.page !== page || view === 'hot' && data.skills.some((skill) => skill.change === undefined)) throw new Error('unexpected leaderboard');
+    return { ...data, skills: data.skills.map((skill) => ({ ...skill, id: `${skill.source}/${skill.skillId}` })) };
+  } catch { throw new BusinessError(503, '暂时无法读取 skills.sh 榜单，请重试。'); }
+}
+
 export function skillSource(source: string, skill?: string) {
   if (source.startsWith('https://')) {
     let url: URL;
@@ -51,10 +68,12 @@ export function skillSource(source: string, skill?: string) {
     if (url.hostname === 'skills.sh' || url.hostname === 'www.skills.sh') {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts.length !== 3 || parts.some((part) => !/^[\w.-]+$/.test(part)) || parts[2]!.startsWith('-')) throw new BusinessError(400, '请填写具体技能的 skills.sh 链接。');
+      if (parts[0] === 'site') return skillSource(parts[1]!, skill ?? parts[2]);
       return { source: `${parts[0]}/${parts[1]}`, skill: skill ?? parts[2] };
     }
     return { source, skill };
   }
+  if (/^[\w][\w.-]*\.[a-z]{2,}$/i.test(source)) return { source: `https://${source}/`, skill };
   // Absolute local sources are also useful for offline acquisition; reference-only loading is a separate operation.
   if (isAbsolute(source) || /^[\w.-]+\/[\w.-]+(?:\/[^\s]+|[#@][^\s]+)?$/.test(source)) return { source, skill };
   throw new BusinessError(400, '请填写 skills.sh 链接、HTTPS 仓库链接或 owner/repo。');
@@ -117,8 +136,33 @@ export class SkillLibrary {
     }
     return hash.digest('hex');
   }
+  private publisherBundle(project: string, source: string) {
+    try {
+      const root = realpathSync(join(project, '.pi/skills'));
+      if (!within(realpathSync(project), root)) throw new Error('Skill acquisition escaped staging');
+      const folders = readdirSync(root);
+      if (folders.length > 1) throw new BusinessError(422, '来源中包含多个技能，请填写要安装的技能名称。');
+      if (!folders.length) throw new Error('Publisher did not install a bundle');
+      const folder = realpathSync(join(root, folders[0]!));
+      if (!within(root, folder)) throw new Error('Skill acquisition escaped staging');
+      const lock = wellKnownLockSchema.parse(JSON.parse(readFileSync(join(project, 'skills-lock.json'), 'utf8'))).skills[basename(folder)];
+      if (!lock || lock.source !== new URL(source).hostname.replace(/^www\./, '') || new URL(lock.sourceUrl).href !== new URL(source).href) throw new Error('Missing publisher provenance');
+      // Match the pinned CLI's folder digest, independently of our content/permission digest.
+      const digest = createHash('sha256');
+      for (const name of this.files(folder).filter((name) => !name.split('/').slice(0, -1).some((part) => part === '.git' || part === 'node_modules')).sort((a, b) => a.localeCompare(b))) {
+        digest.update(name); digest.update(readFileSync(join(folder, name)));
+      }
+      if (digest.digest('hex') !== lock.computedHash) throw new Error('Publisher bundle does not match lock');
+      return { name: basename(folder), path: folder, status: 'installed', scope: 'project', mode: 'copy', agents: ['Pi'], hash: lock.wellKnownDigest ?? lock.computedHash };
+    } catch (error) {
+      if (error instanceof BusinessError) throw error;
+      throw new BusinessError(503, '无法校验技能文件和来源记录，请检查来源后重试。');
+    }
+  }
   private async run(project: string, source: string, skill: string | undefined, signal: AbortSignal) {
-    const args = [cli, 'add', source, ...(skill ? ['--skill', skill] : []), '--agent', 'pi', '--copy', '--yes', '--json'];
+    // skills@1.7.0 acquires publisher bundles, but its well-known add does not support JSON stdout.
+    const wellKnown = source.startsWith('https://') && (new URL(source).pathname === '/' || new URL(source).pathname.startsWith('/.well-known/agent-skills'));
+    const args = [cli, 'add', source, ...(skill ? ['--skill', skill] : []), '--agent', 'pi', '--copy', '--yes', ...(wellKnown ? [] : ['--json'])];
     const home = join(project, 'home'), temporary = join(project, 'tmp');
     mkdirSync(home); mkdirSync(temporary);
     const gitConfig = join(project, 'git-config'); writeFileSync(gitConfig, '');
@@ -145,7 +189,12 @@ export class SkillLibrary {
       const code = await new Promise<number | null>((done, fail) => { child.once('error', fail); child.once('close', done); });
       if (signal.aborted) throw new BusinessError(503, '技能安装已停止，请重试。');
       let json: unknown;
-      try { json = JSON.parse(stdout || '[]'); } catch { throw new BusinessError(503, '技能来源返回了无法识别的安装结果，请重试。'); }
+      if (wellKnown) {
+        if (code !== 0) throw new BusinessError(503, '无法获取这个技能，请检查来源和技能名称后重试。');
+        json = [this.publisherBundle(project, source)];
+      } else {
+        try { json = JSON.parse(stdout || '[]'); } catch { throw new BusinessError(503, '技能来源返回了无法识别的安装结果，请重试。'); }
+      }
       const entries = acquiredSchema.safeParse(json);
       if (code !== 0 || !entries.success || entries.data.some((entry) => entry.status !== 'installed')) throw new BusinessError(503, '无法获取这个技能，请检查来源和技能名称后重试。');
       if (entries.data.length !== 1) throw new BusinessError(422, '来源中包含多个技能，请填写要安装的技能名称。');

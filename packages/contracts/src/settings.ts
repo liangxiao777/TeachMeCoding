@@ -97,6 +97,11 @@ export const skillInstallSchema = z.object({ source: z.string().trim().min(1),
 }).strict();
 export const skillPathSchema = z.object({ filePath: z.string().min(1) }).strict();
 export const skillLocalSchema = z.object({ path: z.string().trim().min(1) }).strict();
+export const skillLeaderboardQuerySchema = z.object({
+  view: z.enum(['all-time', 'trending', 'hot']).default('all-time'),
+  page: z.coerce.number().int().nonnegative().default(0),
+}).strict();
+export type SkillLeaderboardView = z.infer<typeof skillLeaderboardQuerySchema>['view'];
 export interface SkillInstallation {
   source: string;
   skill: string;
@@ -109,6 +114,12 @@ export interface SkillInstallation {
 }
 export interface CatalogSkill { id: string; source: string; skillId: string; name: string; installs: number }
 export interface SkillSearch { skills: CatalogSkill[] }
+export interface SkillLeaderboard {
+  skills: (CatalogSkill & { change?: number })[];
+  total: number;
+  page: number;
+  hasMore: boolean;
+}
 export interface SkillDetails {
   name: string; filePath: string; installation: SkillInstallation | null;
   files: string[]; content: string;

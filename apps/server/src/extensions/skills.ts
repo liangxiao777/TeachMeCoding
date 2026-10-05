@@ -3,10 +3,10 @@ import { isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import type Database from 'better-sqlite3';
 import { loadSkills, formatSkillsForPrompt, type Skill, type LoadSkillsResult } from '@earendil-works/pi-coding-agent';
-import { skillConfigurationSchema, skillInstallSchema, skillLocalSchema, skillPathSchema, type SkillConfiguration, type SkillDetails, type SkillSettings } from '@teach-me-coding/contracts';
+import { skillConfigurationSchema, skillInstallSchema, skillLeaderboardQuerySchema, skillLocalSchema, skillPathSchema, type SkillConfiguration, type SkillDetails, type SkillSettings } from '@teach-me-coding/contracts';
 import { BusinessError } from '../modules/learning.js';
 import { hash, xmlText } from '../agents/context.js';
-import { SkillLibrary, searchSkills } from './skill-library.js';
+import { SkillLibrary, searchSkills, skillLeaderboard } from './skill-library.js';
 
 /** Reuse Pi discovery/frontmatter/collision rules, without its session manager. */
 export class SkillService {
@@ -44,6 +44,10 @@ export class SkillService {
     return this.reload();
   }
   search(query: string) { return searchSkills(query); }
+  leaderboard(query: unknown) {
+    const { view, page } = skillLeaderboardQuerySchema.parse(query);
+    return skillLeaderboard(view, page);
+  }
   private requireSkill(filePath: string) {
     this.reload();
     const skill = this.loaded.skills.find((skill) => skill.filePath === filePath);

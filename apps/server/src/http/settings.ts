@@ -30,6 +30,7 @@ export function settingsApi(models?: ModelService, mcp?: McpService, skills?: Sk
   api.post('/settings/skills', async (c) => c.json(skills!.save(await c.req.json())));
   api.post('/settings/skills/reload', (c) => c.json(skills!.reload()));
   api.get('/settings/skills/search', async (c) => c.json(await skills!.search(c.req.query('q') ?? '')));
+  api.get('/settings/skills/leaderboard', async (c) => c.json(await skills!.leaderboard(c.req.query())));
   api.get('/settings/skills/details', (c) => c.json(skills!.details(c.req.query('filePath') ?? '')));
   api.get('/settings/skills/file', (c) => c.json(skills!.file(c.req.query('filePath') ?? '', c.req.query('name') ?? '')));
   api.post('/settings/skills/install', async (c) => c.json(await skills!.install(await c.req.json()), 201));

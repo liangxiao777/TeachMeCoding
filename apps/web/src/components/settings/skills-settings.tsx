@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { BookOpen, Check, Download, FolderOpen, Link, MoreHorizontal, Plus, RotateCw, Search, Trash2 } from 'lucide-react'
-import type { CatalogSkill, SkillSearch, SkillSettings } from '@teach-me-coding/contracts'
+import { BookOpen, FolderOpen, Link, MoreHorizontal, RotateCw, Search, Trash2 } from 'lucide-react'
+import type { CatalogSkill, SkillSettings } from '@teach-me-coding/contracts'
 import { api } from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SkillDetailsDialog } from './skill-details-dialog'
+import { SkillMarket } from './skill-market'
 
 type InstalledSkill = SkillSettings['skills'][number]
 const message = (error: unknown) => error instanceof Error ? error.message : '操作失败，请重试。'
@@ -23,10 +24,6 @@ export function SkillsSettingsForm({ active }: { active: boolean }) {
   const [settings, setSettings] = useState<SkillSettings | null>(null)
   const [tab, setTab] = useState('installed')
   const [filter, setFilter] = useState('')
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<CatalogSkill[] | null>(null)
-  const [searching, setSearching] = useState(false)
-  const [searchError, setSearchError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
@@ -37,7 +34,6 @@ export function SkillsSettingsForm({ active }: { active: boolean }) {
   const [details, setDetails] = useState<{ skill: InstalledSkill; check: boolean } | null>(null)
   const [removing, setRemoving] = useState<InstalledSkill | null>(null)
   const revision = useRef(0)
-  const searchRevision = useRef(0)
   const addButton = useRef<HTMLButtonElement | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const restoreFocus = () => returnFocus.current?.isConnected ? returnFocus.current : addButton.current
@@ -54,37 +50,30 @@ export function SkillsSettingsForm({ active }: { active: boolean }) {
     try { setSettings(await api<SkillSettings>(path, input)) }
     finally { revision.current++; setBusy(false) }
   }
-  const search = async () => {
-    if (!query.trim()) return
-    const current = ++searchRevision.current
-    setSearching(true); setSearchError(''); setResults(null)
-    try {
-      const next = await api<SkillSearch>(`/settings/skills/search?q=${encodeURIComponent(query.trim())}`)
-      if (current === searchRevision.current) setResults(next.skills)
-    } catch (error) { if (current === searchRevision.current) setSearchError(message(error)) }
-    finally { if (current === searchRevision.current) setSearching(false) }
-  }
   const install = async (skill: CatalogSkill) => {
     setInstalling(skill.id)
-    try { await write('/settings/skills/install', { source: skill.source, skill: skill.name }) }
-    catch (error) { setError(message(error)) }
+    try { await write('/settings/skills/install', { source: skill.source, skill: skill.skillId }); return null }
+    catch (error) { return message(error) }
     finally { setInstalling(null) }
   }
-  const installed = (skill: CatalogSkill) => settings?.skills.some((item) => item.name === skill.name &&
-    (item.installation?.source === skill.source || item.installation?.source.replace(/^https:\/\/github.com\//, '').replace(/\.git$/, '') === skill.source))
+  const installed = (skill: CatalogSkill) => settings?.skills.some((item) => (item.name === skill.name || item.name === skill.skillId) &&
+    (item.installation?.source === skill.source || item.installation?.source.replace(/^https:\/\/(?:github.com\/)?/, '').replace(/\.git$/, '').replace(/\/$/, '') === skill.source))
   const visible = settings?.skills.filter((skill) => `${skill.name} ${skill.description} ${skill.installation?.source ?? ''}`.toLowerCase().includes(filter.trim().toLowerCase())) ?? []
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-col gap-2"><h2 className="text-2xl font-semibold tracking-tight">Skills</h2>
           <p className="text-sm text-muted-foreground">为 Agent 添加可按需使用的技能。</p></div>
-        <Button ref={addButton} disabled={!settings || busy} onClick={() => setTab('discover')}><Plus data-icon="inline-start" />发现技能</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button ref={addButton} variant="outline" disabled={!settings || busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setSkillName(''); setEditorError(''); setEditor('link') }}><Link />从链接安装</Button>
+          <Button variant="outline" disabled={!settings || busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setEditorError(''); setEditor('local') }}><FolderOpen />导入本地目录</Button>
+        </div>
       </div>
       {error && <Alert variant="destructive"><AlertDescription>{error}{!settings && <Button variant="outline" size="sm" onClick={() => void load()}>重试</Button>}</AlertDescription></Alert>}
       {!settings ? !error && <div role="status" className="flex items-center gap-2 text-sm"><Spinner />正在读取 Skills…</div> :
         <Tabs value={tab} onValueChange={(value) => setTab(String(value))} className="gap-5">
           <TabsList aria-label="技能列表" className="h-9! flex-row!"><TabsTrigger value="installed" className="w-auto! justify-center! px-3">已安装 <span className="text-xs text-muted-foreground">{settings.skills.length}</span></TabsTrigger>
-            <TabsTrigger value="discover" className="w-auto! justify-center! px-3">发现技能</TabsTrigger></TabsList>
+            <TabsTrigger value="discover" className="w-auto! justify-center! px-3">技能市场</TabsTrigger></TabsList>
           <TabsContent value="installed" keepMounted className="flex flex-col gap-4">
             <div className="flex items-center gap-2"><div className="relative min-w-0 flex-1"><Search aria-hidden className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
               <Input aria-label="筛选已安装技能" placeholder="搜索已安装的技能" className="pl-9" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
@@ -118,32 +107,8 @@ export function SkillsSettingsForm({ active }: { active: boolean }) {
               <AlertDescription className="break-words">{diagnostic.message}</AlertDescription></Alert>)}
           </TabsContent>
           <TabsContent value="discover" keepMounted className="flex flex-col gap-4">
-            <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); void search() }}>
-              <div className="relative min-w-0 flex-1"><Search aria-hidden className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
-                <Input aria-label="搜索 skills.sh" className="pl-9" placeholder="在 skills.sh 搜索技能" value={query} onChange={(event) => {
-                  setQuery(event.target.value); searchRevision.current++; setSearching(false); setResults(null); setSearchError('')
-                }} /></div>
-              <Button type="submit" disabled={searching || !query.trim()}>{searching ? <Spinner /> : <Search />}搜索</Button>
-            </form>
-            {searchError && <Alert variant="destructive"><AlertDescription>{searchError}<Button variant="outline" size="sm" onClick={() => void search()}>重试</Button></AlertDescription></Alert>}
-            {searching ? <div role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Spinner />正在搜索 skills.sh…</div> : results === null ?
-              !searchError && <Empty className="border py-14"><EmptyHeader><EmptyMedia variant="icon"><Search /></EmptyMedia><EmptyTitle>发现适合你的技能</EmptyTitle>
-                <EmptyDescription>输入名称或关键词，搜索 skills.sh。</EmptyDescription></EmptyHeader></Empty> : !results.length ?
-                <Empty className="border py-14"><EmptyHeader><EmptyTitle>没有找到相关技能</EmptyTitle><EmptyDescription>换个关键词试试。</EmptyDescription></EmptyHeader></Empty> :
-                <ItemGroup aria-label="搜索结果" className="gap-0! overflow-hidden rounded-xl border">{results.map((skill) => <Item key={skill.id} role="listitem" aria-label={skill.name}
-                  className="flex-nowrap rounded-none border-0 border-border p-4 not-last:border-b">
-                  <ItemMedia variant="icon" className="hidden size-10 rounded-lg bg-muted sm:flex"><BookOpen className="size-5" /></ItemMedia>
-                  <ItemContent className="min-w-0 gap-1.5"><ItemTitle className="line-clamp-none break-all"><h3>{skill.name}</h3></ItemTitle>
-                    <p className="break-all text-sm text-muted-foreground">{skill.source}</p>
-                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Download className="size-3" />{skill.installs.toLocaleString()} 次安装</p></ItemContent>
-                  <ItemActions className="shrink-0">{installed(skill) ? <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><Check className="size-4" />已安装</span> :
-                    <Button variant="outline" size="sm" disabled={busy} aria-label={`安装 ${skill.name}`} onClick={() => void install(skill)}>{installing === skill.id && <Spinner />}{installing === skill.id ? '安装中' : '安装'}</Button>}</ItemActions>
-                </Item>)}</ItemGroup>}
+            <SkillMarket active={active && tab === 'discover'} busy={busy} installing={installing} installed={installed} onInstall={install} />
           </TabsContent>
-          <div className="flex flex-wrap items-center gap-2 border-t pt-4 text-muted-foreground">
-            <Button variant="ghost" size="sm" disabled={busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setSkillName(''); setEditorError(''); setEditor('link') }}><Link />从链接安装</Button>
-            <Button variant="ghost" size="sm" disabled={busy} onClick={(event) => { returnFocus.current = event.currentTarget; setSource(''); setEditorError(''); setEditor('local') }}><FolderOpen />本地目录</Button>
-          </div>
         </Tabs>}
       {editor && <Dialog open onOpenChange={(open) => { if (!open && !busy) setEditor(null) }}><DialogContent showCloseButton={!busy} finalFocus={restoreFocus} className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader><DialogTitle>{editor === 'link' ? '从链接安装技能' : '添加本地技能目录'}</DialogTitle>

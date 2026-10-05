@@ -56,7 +56,7 @@ for (const [name, viewport] of [
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
       const panel = settingsPage.getByRole('tabpanel', { name: category, exact: true });
-      await expect(panel.getByRole('button', { name: category === 'MCP' ? '添加 MCP Server' : '本地目录', exact: true })).toBeVisible();
+      await expect(panel.getByRole('button', { name: category === 'MCP' ? '添加 MCP Server' : '导入本地目录', exact: true })).toBeVisible();
       await expect(settingsPage.getByLabel('Provider', { exact: true })).toBeHidden();
       await page.screenshot({ path: `.amp/in/artifacts/settings-${category.toLowerCase()}-${name}-${info.project.name}.png`, animations: 'disabled' });
     }
@@ -162,7 +162,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await expect(editor).toBeHidden();
   const settingsPage = page.getByRole('region', { name: '应用设置', exact: true });
   await settingsPage.getByRole('tab', { name: 'Skills', exact: true }).click();
-  await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '本地目录', exact: true })).toBeVisible();
+  await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '导入本地目录', exact: true })).toBeVisible();
   await settingsPage.getByRole('button', { name: /切换到.*色主题/ }).click();
   await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
   await expect(editor).toHaveValue('// unsaved settings navigation');
@@ -289,7 +289,7 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(settings.getByRole('textbox', { name: /路径/ })).toHaveCount(0);
-  await settings.getByRole('button', { name: '本地目录', exact: true }).click();
+  await settings.getByRole('button', { name: '导入本地目录', exact: true }).click();
   const paths = dialog.getByLabel('目录或 SKILL.md 路径', { exact: true });
   await paths.fill(external);
   await dialog.getByRole('button', { name: '添加目录', exact: true }).click();
@@ -364,7 +364,7 @@ for (const system of ['light', 'dark'] as const) {
     await page.keyboard.press('Enter');
     await expect(settings.getByRole('button', { name: selectedLabel, exact: true })).toBeFocused();
     await expect(config).toHaveValue(unsaved);
-    await expect(settings.getByRole('button', { name: '本地目录', exact: true })).toBeEnabled();
+    await expect(settings.getByRole('button', { name: '导入本地目录', exact: true })).toBeEnabled();
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
     expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe(selected);
     expect(await page.evaluate(() => localStorage.getItem('tmc-theme'))).toBe(selected);

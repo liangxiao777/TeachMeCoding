@@ -3,6 +3,13 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { seedWorkspaces } from '../seed-workspaces';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/settings/skills/leaderboard?*', (route) => route.fulfill({ json: {
+    skills: [{ id: 'fixture/repo/browse-fixture', source: 'fixture/repo', skillId: 'browse-fixture', name: 'browse-fixture', installs: 93 }],
+    page: 0, hasMore: false, total: 1,
+  } }));
+});
+
 test('Skills discovery installs a real bundle, preserves drafts and manages updates, resources and uninstall', async ({ page }, info) => {
   const seed = JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
   const source = join(seed.root, 'catalog-fixture', 'reviewing-arrays');
@@ -24,11 +31,11 @@ test('Skills discovery installs a real bundle, preserves drafts and manages upda
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(settings.getByRole('tab', { name: /^已安装/ })).toHaveAttribute('aria-selected', 'true');
   const installedTab = (await settings.getByRole('tab', { name: /^已安装/ }).boundingBox())!;
-  const discoveryTab = (await settings.getByRole('tab', { name: '发现技能', exact: true }).boundingBox())!;
+  const discoveryTab = (await settings.getByRole('tab', { name: '技能市场', exact: true }).boundingBox())!;
   expect(discoveryTab.y).toBe(installedTab.y);
   expect(discoveryTab.x).toBeGreaterThan(installedTab.x);
   await expect(settings.getByRole('textbox', { name: /路径/ })).toHaveCount(0);
-  await settings.getByRole('tab', { name: '发现技能', exact: true }).click();
+  await settings.getByRole('tab', { name: '技能市场', exact: true }).click();
   await settings.getByRole('textbox', { name: '搜索 skills.sh', exact: true }).fill('array');
   await settings.getByRole('button', { name: '搜索', exact: true }).click();
   await expect(settings.getByRole('alert')).toContainText('暂时无法搜索 skills.sh，请重试。');
@@ -37,7 +44,7 @@ test('Skills discovery installs a real bundle, preserves drafts and manages upda
   outage = false;
   await settings.getByRole('button', { name: '重试', exact: true }).click();
   await expect(settings.getByRole('heading', { name: 'reviewing-arrays', exact: true })).toBeVisible();
-  await expect(settings.getByText('1,379 次安装', { exact: true })).toBeVisible();
+  await expect(settings.getByLabel('1,379 次安装', { exact: true })).toBeVisible();
   await settings.getByRole('button', { name: '安装 reviewing-arrays', exact: true }).click();
   await expect(settings.getByText('已安装', { exact: true }).last()).toBeVisible();
   await expect(settings.getByRole('button', { name: '安装 reviewing-arrays', exact: true })).toHaveCount(0);
@@ -104,7 +111,7 @@ test('Skills discovery installs a real bundle, preserves drafts and manages upda
   await expect(dialog).toHaveCount(0);
   await expect(row).toHaveCount(0); expect(existsSync(installedFile)).toBe(false);
   expect(readFileSync(join(source, 'SKILL.md'), 'utf8')).toBe(original);
-  await settings.getByRole('button', { name: '本地目录', exact: true }).click();
+  await settings.getByRole('button', { name: '导入本地目录', exact: true }).click();
   await dialog.getByLabel('目录或 SKILL.md 路径', { exact: true }).fill(source);
   await dialog.getByRole('button', { name: '添加目录', exact: true }).click();
   await expect(row.getByText('本地目录', { exact: true })).toBeVisible();
@@ -128,7 +135,7 @@ test('late skill search responses cannot replace results for a newer query', asy
   await page.goto('/'); await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '应用设置', exact: true });
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
-  await settings.getByRole('tab', { name: '发现技能', exact: true }).click();
+  await settings.getByRole('tab', { name: '技能市场', exact: true }).click();
   const query = settings.getByRole('textbox', { name: '搜索 skills.sh', exact: true });
   await query.fill('old'); await settings.getByRole('button', { name: '搜索', exact: true }).click(); await started;
   await query.fill('new'); await settings.getByRole('button', { name: '搜索', exact: true }).click();
@@ -148,7 +155,7 @@ test('single Markdown references select their actual filename and recover a fail
   await page.goto('/'); await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '应用设置', exact: true });
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
-  await settings.getByRole('button', { name: '本地目录', exact: true }).click();
+  await settings.getByRole('button', { name: '导入本地目录', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('目录或 SKILL.md 路径', { exact: true }).fill(filePath);
   await dialog.getByRole('button', { name: '添加目录', exact: true }).click();
@@ -181,5 +188,91 @@ test('single Markdown references select their actual filename and recover a fail
     release(); await response;
     await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
     await expect(dialog.getByRole('alert')).toHaveCount(0);
+  }
+});
+
+test('market loads rankings without a query, retains rows on pagination failure and ignores late board responses', async ({ page }, info) => {
+  const skill = (name: string, installs: number, change?: number) => ({ id: `source/repo/${name}`, source: 'source/repo', skillId: name, name, installs, ...(change === undefined ? {} : { change }) });
+  let paginationOutage = true, release!: () => void, started!: () => void;
+  const gate = new Promise<void>((done) => { release = done }), received = new Promise<void>((done) => { started = done });
+  await page.route('**/api/settings/skills/leaderboard?*', async (route) => {
+    const url = new URL(route.request().url()), view = url.searchParams.get('view'), pageNumber = Number(url.searchParams.get('page'));
+    if (view === 'trending') { started(); await gate; }
+    if (pageNumber && paginationOutage) return route.fulfill({ status: 503, json: { error: '暂时无法读取 skills.sh 榜单，请重试。' } });
+    const skills = view === 'hot' ? [skill('growth-first', 81, 47), skill('volume-second', 206, -8)] : view === 'trending' ? [skill('late-trending', 375)] : pageNumber ? [skill('page-two', 137)] : [skill('all-time-first', 2379), skill('all-time-second', 701)];
+    await route.fulfill({ json: { skills, page: pageNumber, hasMore: view === 'all-time' && !pageNumber, total: 3 } });
+  });
+  await page.route('**/api/settings/skills/search?*', (route) => route.fulfill({ json: { skills: [] } }));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/'); await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '应用设置', exact: true });
+  await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
+  await expect(settings.getByRole('button', { name: '发现技能', exact: true })).toHaveCount(0);
+  for (const name of ['从链接安装', '导入本地目录']) await expect(settings.getByRole('button', { name, exact: true })).toHaveCount(1);
+  await settings.getByRole('tab', { name: '技能市场', exact: true }).click();
+  await expect(settings.getByRole('textbox', { name: '搜索 skills.sh', exact: true })).toHaveValue('');
+  await expect(settings.getByRole('heading', { name: 'all-time-first', exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '加载更多', exact: true }).click();
+  await expect(settings.getByRole('alert')).toContainText('暂时无法读取 skills.sh 榜单');
+  await expect(settings.getByRole('heading', { name: 'all-time-first', exact: true })).toBeVisible();
+  paginationOutage = false; await settings.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(settings.getByRole('row', { name: 'page-two', exact: true }).getByRole('cell').first()).toHaveText('3');
+  await expect(settings.getByRole('button', { name: '加载更多', exact: true })).toHaveCount(0);
+  await settings.getByRole('tab', { name: 'Trending (24h)', exact: true }).click(); await received;
+  await settings.getByRole('tab', { name: 'Hot', exact: true }).click();
+  await expect(settings.getByRole('table')).toHaveAccessibleName('Hot 技能榜单');
+  await expect(settings.getByRole('row', { name: 'growth-first', exact: true }).getByRole('cell').first()).toHaveText('1');
+  await expect(settings.getByLabel('较昨日同小时变化').first()).toHaveText('+47');
+  await expect(settings.getByLabel('较昨日同小时变化').last()).toHaveText('-8');
+  const response = page.waitForResponse((response) => new URL(response.url()).searchParams.get('view') === 'trending');
+  release(); await response;
+  await expect(settings.getByRole('heading', { name: 'late-trending', exact: true })).toHaveCount(0);
+  const hot = settings.getByRole('tab', { name: 'Hot', exact: true });
+  expect(await hot.evaluate((el) => { const style = getComputedStyle(el, '::after'); return parseFloat(style.width) > parseFloat(style.height) && parseFloat(style.height) === 2 })).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/skills-market-hot-${info.project.name}.png`, animations: 'disabled' });
+  const query = settings.getByRole('textbox', { name: '搜索 skills.sh', exact: true });
+  await query.fill('no-match'); await settings.getByRole('button', { name: '搜索', exact: true }).click();
+  await expect(settings.getByText('没有找到相关技能', { exact: true })).toBeVisible();
+  await expect(settings.getByRole('heading', { name: 'growth-first', exact: true })).toHaveCount(0);
+  await settings.getByRole('button', { name: '清除搜索', exact: true }).click();
+  await expect(settings.getByRole('heading', { name: 'growth-first', exact: true })).toBeVisible();
+});
+
+test('market installs by skill identifier and fits light/dark desktop and mobile with category navigation intact', async ({ page }, info) => {
+  const entries = [ ['find-skills', 'vercel-labs/skills', 3704225], ['grill-me', 'mattpocock/skills', 1285831],
+    ['react-best-practices', 'vercel-labs/agent-skills', 992731], ['ui-taste', 'uizze.sh', 362302], ['web-design-guidelines', 'vercel-labs/agent-skills', 337011],
+    ['frontend-design', 'anthropics/skills', 294853], ['skill-creator', 'anthropics/skills', 231875] ] as const;
+  const skills = entries.map(([name, source, installs]) => ({ id: `${source}/${name}`, name, source, installs, skillId: name === 'ui-taste' ? 'stable-skill-id' : name }));
+  await page.route('**/api/settings/skills/leaderboard?*', (route) => route.fulfill({ json: { skills, page: 0, hasMore: false, total: skills.length } }));
+  let installationOutage = true;
+  await page.route('**/api/settings/skills/install', async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ source: 'uizze.sh', skill: 'stable-skill-id' });
+    if (installationOutage) return route.fulfill({ status: 503, json: { error: '技能来源暂时不可用，请重试。' } });
+    await route.fulfill({ status: 201, json: { directory: '/fixture/skills', configuration: { paths: [], disabled: [], excluded: [] }, diagnostics: [], skills: [{
+      name: 'stable-skill-id', description: 'Fixture', enabled: true, automatic: true, filePath: '/fixture/skills/stable-skill-id/SKILL.md',
+      installation: { source: 'https://uizze.sh/', skill: 'stable-skill-id', ref: null, upstreamHash: null, cliVersion: '1.7.0', contentHash: 'fixture' },
+    }] } });
+  });
+  await page.goto('/'); await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '应用设置', exact: true });
+  await settings.getByRole('tab', { name: 'Skills', exact: true }).click(); await settings.getByRole('tab', { name: '技能市场', exact: true }).click();
+  await expect(settings.getByRole('heading', { name: 'ui-taste', exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '安装 ui-taste', exact: true }).click();
+  await expect(settings.getByRole('row', { name: 'ui-taste', exact: true }).getByRole('alert')).toHaveText('技能来源暂时不可用，请重试。');
+  await page.screenshot({ path: `.amp/in/artifacts/skills-market-install-failure-${info.project.name}.png`, animations: 'disabled' });
+  installationOutage = false; await settings.getByRole('button', { name: '安装 ui-taste', exact: true }).click();
+  await expect(settings.getByRole('row', { name: 'ui-taste', exact: true })).toContainText('已安装');
+  await expect(settings.getByRole('row', { name: 'ui-taste', exact: true }).getByRole('alert')).toHaveCount(0);
+  await expect(settings.getByRole('button', { name: '安装 ui-taste', exact: true })).toHaveCount(0);
+  for (const size of [{ name: 'desktop', width: 1440, height: 1000 }, { name: 'mobile', width: 390, height: 844 }]) {
+    await page.setViewportSize(size);
+    for (const theme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${theme}\\b`));
+      for (const category of ['模型配置', 'MCP', 'Skills']) await expect(settings.getByRole('tab', { name: category, exact: true })).toBeVisible();
+      expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      expect(await settings.getByRole('table').evaluate((el) => el.getBoundingClientRect().right <= innerWidth)).toBe(true);
+      await page.screenshot({ path: `.amp/in/artifacts/skills-market-${size.name}-${theme}-${info.project.name}.png`, animations: 'disabled' });
+    }
   }
 });

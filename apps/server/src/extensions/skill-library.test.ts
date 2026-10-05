@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SkillLibrary, searchSkills, skillSource } from './skill-library.js';
+import { createHash } from 'node:crypto';
+import { SkillLibrary, searchSkills, skillSource, skillLeaderboard } from './skill-library.js';
 import { SkillService } from './skills.js';
 import { openDatabase } from '../storage/database.js';
 
@@ -34,7 +35,55 @@ test('catalog adapter preserves public fields and distinguishes outage/schema dr
   }
   assert.deepEqual(skillSource('https://www.skills.sh/owner/repo/reviewing-loops?from=search'), { source: 'owner/repo', skill: 'reviewing-loops' });
   assert.deepEqual(skillSource('owner/repo#release@reviewing-loops'), { source: 'owner/repo#release@reviewing-loops', skill: undefined });
+  assert.deepEqual(skillSource('uizze.sh', 'ui-taste'), { source: 'https://uizze.sh/', skill: 'ui-taste' });
+  assert.deepEqual(skillSource('https://skills.sh/site/uizze.sh/ui-taste'), { source: 'https://uizze.sh/', skill: 'ui-taste' });
   for (const source of ['--global', 'https://user:secret@github.com/owner/repo', 'https://skills.sh/docs', 'https://skills.sh/owner/repo/--global']) assert.throws(() => skillSource(source));
+});
+
+test('leaderboards retain upstream ranks and view metrics, identify domain sources and reject schema drift', async () => {
+  const entries = [{ source: 'uizze.sh', skillId: 'ui-taste', name: 'UI Taste', installs: 81, change: 47 },
+    { source: 'owner/repo', skillId: 'reviewing-loops', name: 'reviewing-loops', installs: 206, change: -8 }];
+  for (const view of ['all-time', 'trending', 'hot'] as const) {
+    const data = await skillLeaderboard(view, 2, async (input) => {
+      assert.equal(String(input), `https://skills.sh/api/skills/${view}/2`);
+      return Response.json({ skills: entries, page: 2, hasMore: true, total: 947, extra: 'ignored' });
+    });
+    assert.deepEqual(data, { skills: entries.map((skill) => ({ ...skill, id: `${skill.source}/${skill.skillId}` })), page: 2, hasMore: true, total: 947 });
+  }
+  assert.deepEqual(await skillLeaderboard('all-time', 0, async () => Response.json({ skills: [], page: 0, hasMore: false, total: 0 })), { skills: [], page: 0, hasMore: false, total: 0 });
+  for (const response of [new Response('', { status: 500 }), Response.json({ skills: entries, page: 1, hasMore: false, total: 2 }),
+    Response.json({ skills: [{ ...entries[0], installs: '81' }], page: 0, hasMore: false, total: 1 }),
+    Response.json({ skills: [{ source: 'owner/repo', skillId: 'test', name: 'test', installs: 2 }], page: 0, hasMore: false, total: 1 })]) {
+    await assert.rejects(skillLeaderboard('hot', 0, async () => response), /无法读取.*榜单/);
+  }
+});
+
+test('publisher acquisition requires the copied bundle, matching provenance and a verified CLI folder digest', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-publisher-')), library = new SkillLibrary(join(root, 'app/skills'), join(root, 'app'));
+  const project = join(root, 'acquire'), folder = makeSkill(join(project, '.pi/skills'));
+  const body = readFileSync(join(folder, 'SKILL.md'));
+  // Expected bytes are derived from the fixture, not the validation implementation.
+  const computedHash = createHash('sha256').update('reference/examples.md').update('A loop with an asymmetric initial counter: 3.')
+    .update('scripts/example.sh').update('#!/bin/sh\nprintf never-run-on-install\n').update('SKILL.md').update(body).digest('hex');
+  const lock = { version: 1, skills: { 'reviewing-loops': { source: 'publisher.invalid', sourceUrl: 'https://publisher.invalid/',
+    sourceType: 'well-known', computedHash, wellKnownDigest: 'publisher-archive-digest' } } };
+  const lockFile = join(project, 'skills-lock.json');
+  const validate = () => library['publisherBundle'](project, 'https://publisher.invalid/');
+  try {
+    assert.throws(validate, /校验/);
+    writeFileSync(lockFile, JSON.stringify(lock));
+    assert.equal(validate().hash, 'publisher-archive-digest'); assert.equal(validate().path, realpathSync(folder));
+    writeFileSync(join(folder, 'reference/examples.md'), 'tampered'); assert.throws(validate, /校验/);
+    writeFileSync(join(folder, 'reference/examples.md'), 'A loop with an asymmetric initial counter: 3.');
+    for (const invalid of [{ ...lock, version: 2 }, { ...lock, skills: {} },
+      { ...lock, skills: { 'reviewing-loops': { ...lock.skills['reviewing-loops'], sourceUrl: 'https://another.invalid/' } } },
+      { ...lock, skills: { 'reviewing-loops': { ...lock.skills['reviewing-loops'], sourceType: 'github' } } }]) {
+      writeFileSync(lockFile, JSON.stringify(invalid)); assert.throws(validate, /校验/);
+    }
+    writeFileSync(lockFile, JSON.stringify(lock));
+    symlinkSync(join(folder, 'SKILL.md'), join(folder, 'extra-link')); assert.throws(validate, /链接/);
+    rmSync(join(folder, 'extra-link')); makeSkill(join(project, '.pi/skills'), 'another-skill'); assert.throws(validate, /多个技能/);
+  } finally { await library.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test('pinned public CLI installs the complete bundle, enables subsequent snapshots and safely manages updates', async () => {
