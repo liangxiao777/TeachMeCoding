@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type McpTransport } from '@earendil-works/pi-mcp';
 import { Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { mcpConfigurationSchema, type McpConfiguration, type McpSettings, type McpServerConfiguration } from '@teach-me-coding/contracts';
+import { mcpConfigurationSchema, mcpServerEntrySchema, type McpConfiguration, type McpSettings, type McpServerConfiguration } from '@teach-me-coding/contracts';
 import type { EnvLookup } from '../config/model.js';
 import { terminalEnvironment } from '../runtime/terminal-env.js';
 import { BusinessError } from '../modules/learning.js';
@@ -104,7 +104,10 @@ export class McpService {
     for (const config of Object.values(configuration.mcpServers)) for (const key of ['env', 'headers'] as const) {
       if (config[key]) config[key] = Object.fromEntries(Object.entries(config[key]).map(([name, value]) => [name, /^(?:Bearer )?\$\{[A-Z_][A-Z0-9_]*\}$/i.test(value) || !value ? value : mask]));
     }
-    return { configuration, servers: [...this.connections.values()].map((entry) => structuredClone(entry.status)) };
+    return { configuration, servers: Object.keys(configuration.mcpServers).flatMap((name) => {
+      const entry = this.connections.get(name);
+      return entry ? [structuredClone(entry.status)] : [];
+    }) };
   }
   async tools(signal?: AbortSignal): Promise<AgentTool[]> {
     this.start();
@@ -118,17 +121,18 @@ export class McpService {
     });
     return selected.filter((entry) => this.connections.get(entry.status.name) === entry && entry.status.state === 'connected').flatMap((entry) => entry.tools);
   }
-  save(raw: unknown): Promise<McpSettings> {
-    const parsed = mcpConfigurationSchema.parse(raw);
+  private restoreSecrets(config: McpServerConfiguration, previous?: McpServerConfiguration) {
+    for (const field of ['env', 'headers'] as const) for (const [key, value] of Object.entries(config[field] ?? {})) if (value === mask) {
+      const original = previous?.[field]?.[key];
+      if (original === undefined) throw new BusinessError(400, '新的认证字段需要填写实际值。');
+      config[field]![key] = original;
+    }
+  }
+  private write(update: () => McpConfiguration): Promise<McpSettings> {
     const operation = this.writes.then(async () => {
       if (this.closed) throw new BusinessError(503, '服务正在关闭。');
-      for (const [name, config] of Object.entries(parsed.mcpServers)) for (const field of ['env', 'headers'] as const) {
-        for (const [key, value] of Object.entries(config[field] ?? {})) if (value === mask) {
-          const previous = this.configuration.mcpServers[name]?.[field]?.[key];
-          if (previous === undefined) throw new BusinessError(400, '新的认证字段需要填写实际值。');
-          config[field]![key] = previous;
-        }
-      }
+      const parsed = mcpConfigurationSchema.parse(update());
+      for (const [name, config] of Object.entries(parsed.mcpServers)) this.restoreSecrets(config, this.configuration.mcpServers[name]);
       const temporary = `${this.path}.tmp`;
       rmSync(temporary, { force: true });
       writeFileSync(temporary, JSON.stringify(parsed, null, 2), { mode: 0o600, flag: 'wx' });
@@ -144,11 +148,36 @@ export class McpService {
     this.writes = operation.catch(() => undefined);
     return operation;
   }
-  reconnect(): Promise<McpSettings> {
+  save(raw: unknown): Promise<McpSettings> {
+    const parsed = mcpConfigurationSchema.parse(raw);
+    return this.write(() => parsed);
+  }
+  saveServer(raw: unknown, previousName?: string): Promise<McpSettings> {
+    const entry = mcpServerEntrySchema.parse(raw);
+    return this.write(() => {
+      const servers = this.configuration.mcpServers;
+      if (previousName !== undefined && !Object.hasOwn(servers, previousName)) throw new BusinessError(404, 'MCP 服务器不存在。');
+      if (entry.name !== previousName && Object.hasOwn(servers, entry.name)) throw new BusinessError(409, '已存在同名 MCP 服务器，请换一个名称。');
+      this.restoreSecrets(entry.configuration, previousName === undefined ? undefined : servers[previousName]);
+      const next = { ...servers };
+      if (previousName !== undefined && previousName !== entry.name) delete next[previousName];
+      next[entry.name] = entry.configuration;
+      return { mcpServers: next };
+    });
+  }
+  removeServer(name: string): Promise<McpSettings> {
+    return this.write(() => {
+      if (!Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, 'MCP 服务器不存在。');
+      const next = { ...this.configuration.mcpServers }; delete next[name];
+      return { mcpServers: next };
+    });
+  }
+  reconnect(name?: string): Promise<McpSettings> {
     const operation = this.writes.then(async () => {
       if (this.closed) throw new BusinessError(503, '服务正在关闭。');
-      const old = [...this.connections.values()]; this.connections.clear();
-      await Promise.all(old.map((entry) => entry.client.close()));
+      if (name !== undefined && !Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, 'MCP 服务器不存在。');
+      const old = [...this.connections].filter(([server]) => name === undefined || server === name);
+      await Promise.all(old.map(async ([server, entry]) => { this.connections.delete(server); await entry.client.close(); }));
       this.start(); return this.settings();
     });
     this.writes = operation.catch(() => undefined);

@@ -116,3 +116,26 @@ test('MCP and Skills work without a model, retain access protection and reject i
     assert.equal((await app.request('/api/settings/skills/reload', { method: 'POST', headers, body: '{}' })).status, 200);
   } finally { await mcp.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test('single-server MCP endpoints validate names, protect mutations and preserve unrelated entries', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-mcp-api-'));
+  const access = createLocalAccess({ port: 4310 });
+  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+  const app = createApp(access, undefined, undefined, undefined, undefined, mcp);
+  const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
+  const body = JSON.stringify({ name: 'first', configuration: { command: '/not-started', enabled: false } });
+  const post = (path: string, body = '{}') => app.request(`/api/settings/mcp${path}`, { method: 'POST', headers, body });
+  try {
+    assert.equal((await app.request('/api/settings/mcp/servers', { method: 'POST', headers: { host: 'localhost:4310' }, body })).status, 401);
+    assert.equal((await app.request('/api/settings/mcp/servers', { method: 'POST', headers: { ...headers, origin: 'https://evil.invalid' }, body })).status, 403);
+    assert.equal((await post('/servers', body)).status, 201);
+    assert.equal((await post('/servers', body)).status, 409);
+    assert.equal((await post('/servers', JSON.stringify({ name: 'bad name', configuration: { command: 'node' } }))).status, 400);
+    assert.equal((await post('/servers', JSON.stringify({ name: 'second', configuration: { url: 'https://example.invalid/mcp', enabled: false } }))).status, 201);
+    assert.equal((await post('/servers/first', JSON.stringify({ name: 'renamed', configuration: { command: '/not-started', enabled: false } }))).status, 200);
+    assert.equal((await post('/servers/renamed/reconnect')).status, 200);
+    assert.equal((await post('/servers/missing/reconnect')).status, 404);
+    assert.equal((await post('/servers/renamed/delete')).status, 200);
+    assert.deepEqual(Object.keys(mcp.settings().configuration.mcpServers), ['second']);
+  } finally { await mcp.close(); rmSync(root, { recursive: true, force: true }); }
+});

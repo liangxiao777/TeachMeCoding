@@ -74,11 +74,14 @@ export const mcpServerSchema = z.object({
     ctx.addIssue({ code: 'custom', message: 'Configure either stdio command/args/env/cwd or HTTP url/headers.' });
   }
 });
+const mcpServerNameSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/, '服务器名称只能包含字母、数字、下划线和连字符。');
+export const mcpServerEntrySchema = z.object({ name: mcpServerNameSchema, configuration: mcpServerSchema }).strict();
 export const mcpConfigurationSchema = z.object({
-  mcpServers: z.record(z.string().regex(/^[a-zA-Z0-9_-]+$/), mcpServerSchema),
+  mcpServers: z.record(mcpServerNameSchema, mcpServerSchema),
 }).strict();
 export type McpConfiguration = z.infer<typeof mcpConfigurationSchema>;
 export type McpServerConfiguration = z.infer<typeof mcpServerSchema>;
+export type McpServerEntry = z.infer<typeof mcpServerEntrySchema>;
 export interface McpSettings {
   /** Environment/header values are masked; unchanged masks preserve their stored values on save. */
   configuration: McpConfiguration;

@@ -42,12 +42,13 @@ pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 AP
 
 全屏设置提供真实 MCP / Skills 配置，切换类别或返回学习不会丢失编辑器、会话输入或终端连接。不自动加载其他应用的 MCP 配置，也不自动安装 MCP 服务或 Skill 包。
 
-**MCP：**在「MCP 配置 JSON」中填写 `mcpServers`，保存后连接已启用的服务器。支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 支持 `${变量名}`，从私有服务端环境查询；不执行 `!command`。命令是可执行程序名，不是 shell 命令串。
+**MCP：**默认展示服务器列表，每行右侧开关直接保存启用状态，连接是否成功另行显示；仅在连接成功后显示工具数量。点击「添加 MCP Server」打开表单，选择本地进程（stdio）或远程地址（HTTP）；每行菜单可编辑、重连或删除该服务器，不重连其他服务器。弹窗也支持 JSON：粘贴单个服务器配置，或仅包含一个服务器的 `mcpServers` 配置；取消不会保存草稿。
+
+支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。表单中的启动参数每行一个，工作目录、环境变量和超时位于高级配置。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 支持 `${变量名}`，从私有服务端环境查询；不执行 `!command`。命令是可执行程序名，不是 shell 命令串。
 
 ```json
 {
   "mcpServers": {
-    "local": { "command": "node", "args": ["/absolute/path/server.js"] },
     "remote": {
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${MCP_TOKEN}" },
@@ -57,7 +58,7 @@ pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 AP
 }
 ```
 
-配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的字面值，保存未改动的掩码会保留原值；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述，可停用、重新连接；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
+配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的字面值，保存未改动的掩码会保留原值，重命名也保留；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
 
 使用 `@earendil-works/pi-mcp@1.0.0` 的客户端、stdio / HTTP transport 和结果转换，将远端动态 JSON Schema 适配为现有 Agent 的原生工具，保留结构化结果、错误状态、取消和工具列表变更通知。工具使用稳定的独立名称，不覆盖教学工具；每次运行固定当时的工具集合，后续配置和工具列表更新供新运行使用。关闭应用会关闭连接并清理其拥有的 stdio 进程。单次取消会发送 MCP 取消通知，但不保证远端撤销已发生的操作。
 

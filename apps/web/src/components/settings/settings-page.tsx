@@ -60,10 +60,10 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
         {categories.map(({ id, label, icon: Icon }) => (
           <TabsContent key={id} value={id} keepMounted className="min-h-0 min-w-0 overflow-y-auto p-5 md:p-10">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-              <div className="flex flex-col gap-2">
+              {id !== 'mcp' && <div className="flex flex-col gap-2">
                 <h2 className="text-2xl font-semibold tracking-tight">{label}</h2>
                 {id === 'model' && <p className="text-sm text-muted-foreground">选择教学模型、推理强度与登录方式。</p>}
-              </div>
+              </div>}
               {id === 'model' && <ModelSettingsForm active={category === id} />}
               {id === 'mcp' && <McpSettingsForm active={category === id} />}
               {id === 'skills' && <SkillsSettingsForm />}

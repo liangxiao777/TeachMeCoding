@@ -153,6 +153,62 @@ test('names remain distinct after sanitization/truncation and owned child proces
   } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test('single-server writes preserve concurrent additions and masked credentials through rename', async () => {
+  const root = temporary(), path = join(root, 'mcp.json');
+  const service = new McpService(path, { env: noenv, cwd: root });
+  try {
+    await Promise.all([
+      service.saveServer({ name: 'docs', configuration: { url: 'https://example.invalid/mcp', enabled: false,
+        headers: { Authorization: 'Bearer synthetic-rename-secret' }, timeout: 13 } }),
+      service.saveServer({ name: 'files', configuration: { command: '/not-started', enabled: false, env: { TOKEN: 'synthetic-files-secret' } } }),
+    ]);
+    const before = service.settings().configuration.mcpServers;
+    assert.deepEqual(Object.keys(before).sort(), ['docs', 'files']);
+    await service.saveServer({ name: 'docs', configuration: { ...before.docs, timeout: 14 } }, 'docs');
+    assert.deepEqual(service.settings().servers.map((server) => server.name), ['docs', 'files'], 'editing must not move a row to the end');
+    await service.saveServer({ name: 'documentation', configuration: before.docs }, 'docs');
+    const stored = JSON.parse(readFileSync(path, 'utf8')).mcpServers;
+    assert.equal(stored.documentation.headers.Authorization, 'Bearer synthetic-rename-secret');
+    assert.equal(stored.documentation.timeout, 13);
+    assert.equal(stored.files.env.TOKEN, 'synthetic-files-secret');
+    assert.equal(stored.docs, undefined);
+    assert.ok(!JSON.stringify(service.settings()).includes('synthetic-rename-secret'));
+    await assert.rejects(service.saveServer({ name: 'files', configuration: before.docs }, 'documentation'), /同名/);
+    await assert.rejects(service.saveServer({ name: 'new', configuration: before.docs }), /认证字段/);
+    await assert.rejects(service.saveServer({ name: 'missing', configuration: before.files }, 'missing'), /不存在/);
+    await assert.rejects(service.removeServer('missing'), /不存在/);
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).mcpServers, stored, 'rejected writes must leave all servers unchanged');
+    await service.removeServer('documentation');
+    assert.deepEqual(Object.keys(service.settings().configuration.mcpServers), ['files']);
+  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('reconnecting and deleting one server leaves the other live transport untouched', async () => {
+  const root = temporary();
+  const transports = new Map<string, StdioTransport[]>();
+  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root, transport: (entry) => {
+    const name = entry.env!.FIXTURE_NAME!;
+    const transport = new StdioTransport({ command: entry.command!, args: entry.args, cwd: root, inheritEnv: false });
+    transports.set(name, [...transports.get(name) ?? [], transport]); return transport;
+  } });
+  try {
+    for (const name of ['first', 'second']) await service.saveServer({ name, configuration: { ...config, env: { FIXTURE_NAME: name } } });
+    await service.tools();
+    const firstPid = transports.get('first')![0]!.pid!, secondPid = transports.get('second')![0]!.pid!;
+    await assert.rejects(service.reconnect('missing'), /不存在/);
+    await service.reconnect('first'); await service.tools();
+    assert.equal(transports.get('first')!.length, 2);
+    assert.equal(transports.get('second')!.length, 1);
+    assert.equal(transports.get('second')![0]!.pid, secondPid);
+    assert.throws(() => process.kill(firstPid, 0), /ESRCH/);
+    const currentFirstPid = transports.get('first')![1]!.pid!;
+    await service.removeServer('second');
+    assert.throws(() => process.kill(secondPid, 0), /ESRCH/);
+    assert.equal(transports.get('first')![1]!.pid, currentFirstPid);
+    assert.equal((await service.tools()).length, 4);
+  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('stopping during MCP initialization does not wait for the connection timeout', async () => {
   const root = temporary(), db = openDatabase(':memory:');
   const mcp = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });

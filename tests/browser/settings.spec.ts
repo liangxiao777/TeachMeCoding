@@ -56,7 +56,7 @@ for (const [name, viewport] of [
       await tab.click();
       await expect(tab).toHaveAttribute('aria-selected', 'true');
       const panel = settingsPage.getByRole('tabpanel', { name: category, exact: true });
-      await expect(panel.getByRole('button', { name: category === 'MCP' ? '保存 MCP 配置' : '保存 Skills 路径', exact: true })).toBeVisible();
+      await expect(panel.getByRole('button', { name: category === 'MCP' ? '添加 MCP Server' : '保存 Skills 路径', exact: true })).toBeVisible();
       await expect(settingsPage.getByLabel('Provider', { exact: true })).toBeHidden();
       await page.screenshot({ path: `.amp/in/artifacts/settings-${category.toLowerCase()}-${name}-${info.project.name}.png`, animations: 'disabled' });
     }
@@ -229,17 +229,30 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '应用设置', exact: true });
   await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
-  const config = settings.getByLabel('MCP 配置 JSON', { exact: true });
-  const configuration = { mcpServers: {
-    arithmetic: { command: process.execPath, args: [resolve('tests/fixtures/mcp-server.mjs')], env: { TMC_FIXTURE_TOKEN: 'synthetic-browser-key' } },
-    unavailable: { command: '/nonexistent-tmc-fixture-command', timeout: 1 },
-  } };
-  await config.fill(JSON.stringify(configuration, null, 2));
-  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  await expect(settings.getByRole('textbox', { name: /JSON/ })).toHaveCount(0);
+  await settings.getByRole('button', { name: '添加 MCP Server', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('服务器名称', { exact: true }).fill('arithmetic');
+  await dialog.getByLabel('启动命令', { exact: true }).fill(process.execPath);
+  await dialog.getByLabel('启动参数', { exact: true }).fill(resolve('tests/fixtures/mcp-server.mjs'));
+  await dialog.getByRole('button', { name: /高级配置/ }).click();
+  await dialog.getByRole('button', { name: '添加环境变量', exact: true }).click();
+  await dialog.getByLabel('环境变量名称 1', { exact: true }).fill('TMC_FIXTURE_TOKEN');
+  await dialog.getByLabel('环境变量值 1', { exact: true }).fill('synthetic-browser-key');
+  await dialog.getByRole('button', { name: '添加服务器', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '添加 MCP Server', exact: true }).click();
+  await dialog.getByRole('tab', { name: 'JSON', exact: true }).click();
+  const config = dialog.getByLabel('服务器配置 JSON', { exact: true });
+  await config.fill(JSON.stringify({ mcpServers: { unavailable: { command: '/nonexistent-tmc-fixture-command', timeout: 1 } } }));
+  await dialog.getByRole('button', { name: '添加服务器', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   await expect(settings.getByText('连接失败', { exact: true })).toBeVisible();
-  await expect(config).not.toHaveValue(/synthetic-browser-key/);
-  const persisted = await config.inputValue();
+  await expect(settings.getByRole('switch', { name: '启用 unavailable', exact: true })).toBeChecked();
+  await expect(settings.getByRole('listitem', { name: 'unavailable', exact: true }).getByText(/个工具/)).toHaveCount(0);
+  await expect(settings.getByText('subtract', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/mcp-server-list-${info.project.name}.png`, animations: 'disabled' });
   await settings.getByText('4 个工具', { exact: true }).click();
   await expect(settings.getByText('subtract', { exact: true })).toBeVisible();
   await expect(settings.getByText('Subtract right from left.', { exact: true })).toBeVisible();
@@ -247,20 +260,32 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-mobile-${info.project.name}.png`, animations: 'disabled' });
-  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).scrollIntoViewIfNeeded();
-  expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-mobile-config-${info.project.name}.png`, animations: 'disabled' });
-  await settings.getByRole('button', { name: '停用 arithmetic', exact: true }).click();
+  await settings.getByRole('switch', { name: '启用 arithmetic', exact: true }).click();
   await expect(settings.getByText('已停用', { exact: true })).toBeVisible();
-  await settings.getByRole('button', { name: '启用 arithmetic', exact: true }).click();
+  await expect(settings.getByRole('switch', { name: '启用 arithmetic', exact: true })).not.toBeChecked();
+  await settings.getByRole('switch', { name: '启用 arithmetic', exact: true }).click();
   await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '配置 arithmetic', exact: true }).click();
+  await page.getByRole('menuitem', { name: '编辑', exact: true }).click();
+  await dialog.getByRole('tab', { name: 'JSON', exact: true }).click();
+  await expect(config).not.toHaveValue(/synthetic-browser-key/);
+  const persisted = await config.inputValue();
+  await dialog.getByLabel('服务器名称', { exact: true }).fill('arithmetic-renamed');
   await config.fill('{broken');
-  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
-  await expect(settings.getByText('配置不是有效 JSON，请检查后再保存。', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(dialog.getByText('配置不是有效 JSON，请检查后再保存。', { exact: true })).toBeVisible();
   await expect(config).toHaveValue('{broken');
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: `.amp/in/artifacts/extensions-mcp-mobile-config-${info.project.name}.png`, animations: 'disabled' });
   await config.fill(persisted);
-  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
-  await settings.getByRole('button', { name: '重新连接', exact: true }).click();
+  await dialog.getByRole('button', { name: '保存修改', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(settings.getByRole('heading', { name: 'arithmetic-renamed', exact: true })).toBeVisible();
+  const stored = JSON.parse(readFileSync(join(seed.root, 'mcp.json'), 'utf8'));
+  expect(stored.mcpServers['arithmetic-renamed'].env.TMC_FIXTURE_TOKEN).toBe('synthetic-browser-key');
+  expect(stored.mcpServers.arithmetic).toBeUndefined();
+  await settings.getByRole('button', { name: '配置 arithmetic-renamed', exact: true }).click();
+  await page.getByRole('menuitem', { name: '重新连接', exact: true }).click();
   await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
   const paths = settings.getByLabel('额外目录或 SKILL.md 路径', { exact: true });
@@ -287,10 +312,18 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await expect(settings.getByRole('button', { name: '启用 reviewing-loops', exact: true })).toBeVisible();
   await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
+  await settings.getByRole('button', { name: '配置 arithmetic-renamed', exact: true }).click();
+  await page.getByRole('menuitem', { name: '编辑', exact: true }).click();
+  await dialog.getByRole('tab', { name: 'JSON', exact: true }).click();
   await expect(config).not.toHaveValue(/synthetic-browser-key/);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
   // Stop every fixture server through the same settings API before browser teardown.
-  await config.fill('{"mcpServers":{}}');
-  await settings.getByRole('button', { name: '保存 MCP 配置', exact: true }).click();
+  for (const name of ['arithmetic-renamed', 'unavailable']) {
+    await settings.getByRole('button', { name: `配置 ${name}`, exact: true }).click();
+    await page.getByRole('menuitem', { name: '删除', exact: true }).click();
+    await dialog.getByRole('button', { name: '删除服务器', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  }
   await expect(settings.getByText('尚未配置 MCP 服务器。', { exact: true })).toBeVisible();
 });
 
@@ -317,25 +350,25 @@ for (const system of ['light', 'dark'] as const) {
     await expect(settings.getByRole('button', { name: selectedLabel, exact: true })).toBeVisible();
     await page.emulateMedia({ colorScheme: system });
     await expect(settings.getByRole('button', { name: initialLabel, exact: true })).toBeVisible();
-    await settings.getByRole('tab', { name: 'MCP', exact: true }).click();
-    const config = settings.getByLabel('MCP 配置 JSON', { exact: true });
-    await config.fill('{"mcpServers":{"unsaved":{"command":"not-executed","enabled":false}}}');
+    await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
+    const config = settings.getByLabel('额外目录或 SKILL.md 路径', { exact: true });
+    await config.fill('/unsaved-theme-fixture');
     const unsaved = await config.inputValue();
     const toggle = settings.getByRole('button', { name: initialLabel, exact: true });
     await toggle.focus();
     await page.keyboard.press('Enter');
     await expect(settings.getByRole('button', { name: selectedLabel, exact: true })).toBeFocused();
     await expect(config).toHaveValue(unsaved);
-    await expect(settings.getByRole('button', { name: '保存 MCP 配置', exact: true })).toBeEnabled();
+    await expect(settings.getByRole('button', { name: '保存 Skills 路径', exact: true })).toBeEnabled();
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
     expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe(selected);
     expect(await page.evaluate(() => localStorage.getItem('tmc-theme'))).toBe(selected);
     expect(await page.locator('meta[name="theme-color"]').evaluateAll((metas) => metas.map((meta) => meta.getAttribute('content'))))
       .toEqual(selected === 'dark' ? ['#0a0a0a', '#0a0a0a'] : ['#ffffff', '#ffffff']);
-    await page.screenshot({ path: `.amp/in/artifacts/theme-mcp-${selected}-${info.project.name}.png`, animations: 'disabled' });
+    await page.screenshot({ path: `.amp/in/artifacts/theme-skills-${selected}-${info.project.name}.png`, animations: 'disabled' });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-    await page.screenshot({ path: `.amp/in/artifacts/theme-mcp-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
+    await page.screenshot({ path: `.amp/in/artifacts/theme-skills-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
     await settings.getByRole('button', { name: '返回学习', exact: true }).click();
     await expect(home).toHaveValue('切换主题时保留未发送的学习需求');
     expect(await page.locator('header').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);

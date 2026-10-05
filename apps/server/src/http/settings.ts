@@ -22,6 +22,10 @@ export function settingsApi(models?: ModelService, mcp?: McpService, skills?: Sk
   api.get('/settings/mcp', (c) => c.json(mcp!.settings()));
   api.post('/settings/mcp', async (c) => c.json(await mcp!.save(await c.req.json())));
   api.post('/settings/mcp/reconnect', async (c) => c.json(await mcp!.reconnect()));
+  api.post('/settings/mcp/servers', async (c) => c.json(await mcp!.saveServer(await c.req.json()), 201));
+  api.post('/settings/mcp/servers/:server', async (c) => c.json(await mcp!.saveServer(await c.req.json(), c.req.param('server'))));
+  api.post('/settings/mcp/servers/:server/delete', async (c) => c.json(await mcp!.removeServer(c.req.param('server'))));
+  api.post('/settings/mcp/servers/:server/reconnect', async (c) => c.json(await mcp!.reconnect(c.req.param('server'))));
   api.get('/settings/skills', (c) => c.json(skills!.settings()));
   api.post('/settings/skills', async (c) => c.json(skills!.save(await c.req.json())));
   api.post('/settings/skills/reload', (c) => c.json(skills!.reload()));
