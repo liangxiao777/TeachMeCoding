@@ -55,7 +55,7 @@ test('startup header actions share ghost styling, keyboard focus and mobile touc
   const settingsBox = (await settings.boundingBox())!;
   await page.mouse.click(settingsBox.x + settingsBox.width / 2, settingsBox.y + settingsBox.height + 4);
   await expect(page.getByRole('region', { name: '应用设置', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await page.getByRole('button', { name: '返回', exact: true }).click();
   await spaces.click();
   await expect(page.getByRole('button', { name: '创建学习空间', exact: true })).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   // Home-only overrides must not change settings buttons on other pages.

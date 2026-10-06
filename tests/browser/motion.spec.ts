@@ -114,7 +114,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(settings.getByRole('tab', { name: 'Skills', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(settings.getByRole('textbox', { name: '筛选已安装技能', exact: true })).toHaveValue('未提交的筛选');
     await expect(home).toBeHidden();
-    await settings.getByRole('button', { name: '返回学习', exact: true }).click();
+    await settings.getByRole('button', { name: '返回', exact: true }).click();
     await expect(settings).toHaveCount(0);
     await expect(home).toHaveValue('保留学习目标草稿');
     await expect(home).toHaveAttribute('data-motion-probe', 'retained');
@@ -168,7 +168,7 @@ test('motion: settings restores route reading position without replacing its scr
   expect(await reader.evaluate((el) => el.scrollTop)).toBe(137);
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
   await expect(reader).toBeHidden();
-  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await page.getByRole('button', { name: '返回', exact: true }).click();
   await expect(reader).toBeVisible();
   await expect(reader).toHaveAttribute('data-motion-probe', 'reader');
   expect(await reader.evaluate((el) => el.scrollTop)).toBe(137);
@@ -208,7 +208,7 @@ test('motion: reduced-motion switches all three samples without an animated inte
   const settings = page.getByRole('region', { name: '应用设置', exact: true });
   await expect(settings).toHaveCSS('opacity', '1');
   await expect(settings).toHaveCSS('transform', 'none');
-  await settings.getByRole('button', { name: '返回学习', exact: true }).click();
+  await settings.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page.locator('section[aria-label="应用设置"]')).toHaveCount(0);
   const data = seed(info);
   await page.goto(`/?space=${data.spaceId}&tab=result&unit=${data.unitIds[0]}&record=${data.recordId}`);

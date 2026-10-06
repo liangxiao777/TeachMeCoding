@@ -15,6 +15,7 @@ import { Actions } from './modules/actions.js';
 import { Executions } from './modules/executions.js';
 import { McpService } from './extensions/mcp.js';
 import { SkillService } from './extensions/skills.js';
+import { SearchService } from './extensions/search.js';
 
 try {
   const config = serverConfig();
@@ -27,27 +28,29 @@ try {
     models = new ModelService(data.db, { env, credentials: new FileCredentialStore(join(data.root, 'credentials.json')), fallback: defaultModel(env) });
     await models.refresh();
   } catch { /* Missing or unreadable model configuration must not block saved learning data. */ }
-  let mcp: McpService | undefined, skills: SkillService | undefined;
+  let mcp: McpService | undefined, skills: SkillService | undefined, search: SearchService | undefined;
   try { mcp = new McpService(join(data.root, 'mcp.json'), { env, cwd: data.root }); mcp.start(); }
   catch { /* Invalid MCP files remain untouched and their settings API reports unavailable. */ }
   try { skills = new SkillService(data.db, data.root); }
   catch { /* Preserve unreadable Skills configuration, rather than resetting it. */ }
+  try { search = new SearchService(join(data.root, 'search.json'), { env }); }
+  catch { /* Invalid search configuration must not block learning or other settings. */ }
   const learning = new Learning(data.db);
   const projects = new Projects(data.root);
   const terminals = new Terminals((space) => projects.root(space));
   const actions = new Actions(learning, projects);
   const executions = new Executions(learning);
   const agents = new TeachingRuntime(learning, models, {
-    actions, executions, mcp, skills,
+    actions, executions, mcp, skills, search,
     projectDirectory: (space) => projects.root(space),
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
-  const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined, mcp, skills).fetch, hostname, port }, () => {
+  const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined, mcp, skills, search).fetch, hostname, port }, () => {
     console.log(`TeachMeCoding listening on http://${hostname}:${port}`);
     if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
-  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close(), skills?.close()]).then(() => models?.close());
+  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close(), skills?.close(), search?.close()]).then(() => models?.close());
   server.on('error', () => {
     void close().finally(() => data.close());
     console.error('Cannot start local server. Check whether PORT is already in use.');

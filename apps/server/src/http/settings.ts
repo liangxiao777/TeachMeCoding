@@ -3,8 +3,9 @@ import { BusinessError } from '../modules/learning.js';
 import type { ModelService } from '../models/service.js';
 import type { McpService } from '../extensions/mcp.js';
 import type { SkillService } from '../extensions/skills.js';
+import type { SearchService } from '../extensions/search.js';
 
-export function settingsApi(models?: ModelService, mcp?: McpService, skills?: SkillService) {
+export function settingsApi(models?: ModelService, mcp?: McpService, skills?: SkillService, search?: SearchService) {
   const api = new Hono();
   api.onError((error, c) => {
     if (error instanceof BusinessError) return c.json({ error: error.message }, error.status);
@@ -14,11 +15,15 @@ export function settingsApi(models?: ModelService, mcp?: McpService, skills?: Sk
   api.use('/settings/*', async (c, next) => {
     const path = c.req.path;
     if (path.startsWith('/api/settings/mcp') && !mcp || path.startsWith('/api/settings/skills') && !skills
-      || !path.startsWith('/api/settings/mcp') && !path.startsWith('/api/settings/skills') && !models) {
+      || path.startsWith('/api/settings/search') && !search
+      || !path.startsWith('/api/settings/mcp') && !path.startsWith('/api/settings/skills') && !path.startsWith('/api/settings/search') && !models) {
       throw new BusinessError(503, '无法读取这类设置，请检查数据目录中的配置文件。');
     }
     await next();
   });
+  api.get('/settings/search', (c) => c.json(search!.settings()));
+  api.post('/settings/search', async (c) => c.json(search!.save(await c.req.json())));
+  api.post('/settings/search/test', async (c) => c.json(await search!.test(await c.req.json(), c.req.raw.signal)));
   api.get('/settings/mcp', (c) => c.json(mcp!.settings()));
   api.post('/settings/mcp', async (c) => c.json(await mcp!.save(await c.req.json())));
   api.post('/settings/mcp/reconnect', async (c) => c.json(await mcp!.reconnect()));

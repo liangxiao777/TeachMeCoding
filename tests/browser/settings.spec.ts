@@ -30,7 +30,7 @@ for (const [name, viewport] of [
     await expect(settingsPage.getByLabel('Provider', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('OpenRouter');
     await expect(settingsPage.getByLabel('推理强度', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('低');
     await expect(settingsPage.getByLabel('模型', { exact: true })).toHaveValue('Space Bunny Alpha');
-    expect(await settingsPage.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+    await expect.poll(() => settingsPage.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
     expect(await settingsPage.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await expect(settingsPage.getByRole('tablist')).toHaveAttribute('data-orientation', viewport.width >= 768 ? 'vertical' : 'horizontal');
     await settingsPage.getByRole('tab', { name: '模型配置', exact: true }).focus();
@@ -65,7 +65,7 @@ for (const [name, viewport] of [
     await expect(settingsPage.getByRole('button', { name: '保存选择', exact: true })).toBeEnabled();
     await settingsPage.getByRole('button', { name: '保存选择', exact: true }).click();
     await expect(settingsPage.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
-    await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
+    await settingsPage.getByRole('button', { name: '返回', exact: true }).click();
     await expect(homeInput).toHaveValue('保留未发送的学习需求');
     await expect(page.getByRole('button', { name: '应用设置', exact: true })).toBeFocused();
     await page.reload();
@@ -164,7 +164,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await settingsPage.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '导入本地目录', exact: true })).toBeVisible();
   await settingsPage.getByRole('button', { name: /切换到.*色主题/ }).click();
-  await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
+  await settingsPage.getByRole('button', { name: '返回', exact: true }).click();
   await expect(editor).toHaveValue('// unsaved settings navigation');
   await expect(composer).toHaveValue('保留本单元未发送的问题');
   await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
@@ -207,7 +207,7 @@ for (const exit of ['category', 'back', 'late-response'] as const) {
     await expect.poll(() => started).toBe(true);
     if (exit !== 'late-response') await expect(settingsPage.getByText('Synthetic login in progress')).toBeVisible();
     if (exit === 'category') await settingsPage.getByRole('tab', { name: 'MCP', exact: true }).click();
-    else await settingsPage.getByRole('button', { name: '返回学习', exact: true }).click();
+    else await settingsPage.getByRole('button', { name: '返回', exact: true }).click();
     release!();
     await expect.poll(() => cancelled).toBe(true);
     const count = polls;
@@ -374,8 +374,9 @@ for (const system of ['light', 'dark'] as const) {
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await settings.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await page.screenshot({ path: `.amp/in/artifacts/theme-skills-${selected}-mobile-${info.project.name}.png`, animations: 'disabled' });
-    await settings.getByRole('button', { name: '返回学习', exact: true }).click();
+    await settings.getByRole('button', { name: '返回', exact: true }).click();
     await expect(home).toHaveValue('切换主题时保留未发送的学习需求');
+    await expect(page.locator('header')).toHaveCount(1);
     expect(await page.locator('header').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     for (const name of [selectedLabel, '应用设置', '学习空间']) {
       const bounds = (await page.getByRole('button', { name, exact: true }).boundingBox())!;

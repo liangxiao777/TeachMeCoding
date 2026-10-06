@@ -40,6 +40,33 @@ export interface ModelSettings {
   providers: ProviderSummary[];
 }
 
+export const searchProviderSchema = z.enum(['brave', 'tavily', 'exa']);
+export type SearchProvider = z.infer<typeof searchProviderSchema>;
+export const searchSettingsUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: searchProviderSchema.optional(),
+  /** Omitted or empty retains the selected provider's credential; never returned by GET. */
+  apiKey: z.string().trim().max(4096).regex(/^[^\r\n]*$/).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, '至少提供一个设置字段。');
+export interface SearchSettings {
+  enabled: boolean;
+  provider: SearchProvider;
+  providers: { id: SearchProvider; name: string; apiKeyUrl: string; configured: 'saved' | 'environment' | null }[];
+}
+export const webSearchInputSchema = z.object({
+  query: z.string().trim().min(1).max(1000),
+  count: z.number().int().min(1).max(10).default(5),
+}).strict();
+export interface WebSearchResult { title: string; url: string; snippet: string }
+export interface WebSearchResponse {
+  provider: SearchProvider;
+  query: string;
+  results: WebSearchResult[];
+  tookMs: number;
+  /** Search snippets are external evidence, not instructions or fetched page bodies. */
+  untrusted: true;
+}
+
 export const loginStartSchema = z.object({ type: z.enum(['api_key', 'oauth']) }).strict();
 export const loginAnswerSchema = z.object({ promptId: z.string().uuid(), value: z.string().max(20_000) }).strict();
 export type LoginPrompt = { id: string } & (

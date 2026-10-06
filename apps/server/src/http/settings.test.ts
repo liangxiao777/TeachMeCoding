@@ -10,6 +10,7 @@ import { ModelService } from '../models/service.js';
 import { openDatabase } from '../storage/database.js';
 import { McpService } from '../extensions/mcp.js';
 import { SkillService } from '../extensions/skills.js';
+import { SearchService } from '../extensions/search.js';
 
 const stealth = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' };
 
@@ -180,4 +181,49 @@ test('Skills library endpoints protect installation and file access, and complet
     assert.equal(existsSync(join(source, 'SKILL.md')), true);
     assert.equal((await (await app.request('/api/settings/skills', { headers })).json()).skills.length, 0);
   } finally { await skills.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('search settings and diagnostics work without a model, protect every route and never return credentials', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-search-api-')), access = createLocalAccess({ port: 4310 });
+  let requests = 0, failed = false;
+  const search = new SearchService(join(root, 'search.json'), { env: () => undefined, fetch: async (_url, options) => {
+    requests++; assert.equal(new Headers(options?.headers).get('Authorization'), 'Bearer synthetic-search-secret');
+    assert.deepEqual(JSON.parse(String(options?.body)), { query: 'Rust references', max_results: 2 });
+    return failed ? new Response('reflected synthetic-search-secret', { status: 401 }) : Response.json({ results: [
+      { title: 'Rust reference', url: 'https://doc.rust-lang.org/reference/', content: 'Language reference' },
+    ] });
+  } });
+  const app = createApp(access, undefined, undefined, undefined, undefined, undefined, undefined, search);
+  const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
+  const post = (path: string, input: unknown) => app.request(`/api/settings/search${path}`, { method: 'POST', headers, body: JSON.stringify(input) });
+  try {
+    for (const [path, method] of [['', 'GET'], ['', 'POST'], ['/test', 'POST']] as const) {
+      assert.equal((await app.request(`/api/settings/search${path}`, { method, headers: { host: 'localhost:4310' } })).status, 401);
+      assert.equal((await app.request(`/api/settings/search${path}`, { method, headers: { ...headers, origin: 'https://evil.invalid' } })).status, 403);
+    }
+    const initial = await app.request('/api/settings/search', { headers }); assert.equal(initial.status, 200);
+    assert.equal((await initial.json()).enabled, false);
+    assert.equal((await app.request('/api/settings/model', { headers })).status, 503);
+    assert.equal((await post('/test', { query: 'Rust references', count: 2 })).status, 422);
+    for (const input of [{ provider: 'invalid' }, {}, { enabled: 1 }, { apiKey: 'bad\r\nheader' }, { provider: 'tavily', unknown: true }]) {
+      assert.equal((await post('', input)).status, 400);
+    }
+    const saved = await post('', { provider: 'tavily', apiKey: 'synthetic-search-secret' });
+    assert.equal(saved.status, 200); assert.doesNotMatch(await saved.text(), /synthetic-search-secret/);
+    assert.equal(requests, 0, 'saving must not make a paid network request');
+    for (const input of [{ query: ' ' }, { query: 'Rust references', count: 11 }, { query: 'Rust references', apiKey: 'must-not-accept' }]) {
+      assert.equal((await post('/test', input)).status, 400);
+    }
+    const tested = await post('/test', { query: 'Rust references', count: 2 }); assert.equal(tested.status, 200);
+    assert.deepEqual((await tested.json()).results, [{ title: 'Rust reference', url: 'https://doc.rust-lang.org/reference/', snippet: 'Language reference' }]);
+    assert.equal(search.settings().enabled, false); assert.equal(requests, 1);
+    failed = true;
+    const failure = await post('/test', { query: 'Rust references', count: 2 }); assert.equal(failure.status, 503);
+    assert.doesNotMatch(await failure.text(), /synthetic-search-secret|reflected/);
+    assert.equal((await post('', { enabled: true })).status, 200); assert.equal(search.tools().length, 1);
+    assert.equal((await post('', { enabled: false })).status, 200); assert.deepEqual(search.tools(), []);
+    assert.doesNotMatch(await (await app.request('/api/settings/search', { headers })).text(), /synthetic-search-secret/);
+    assert.equal((await createApp(access, undefined, undefined, undefined, undefined, new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root }))
+      .request('/api/settings/search', { headers })).status, 503);
+  } finally { search.close(); rmSync(root, { recursive: true, force: true }); }
 });

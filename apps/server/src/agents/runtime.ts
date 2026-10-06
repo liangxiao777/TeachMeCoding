@@ -16,6 +16,7 @@ import type { Executions } from '../modules/executions.js';
 import { sealToolCalls } from '../storage/agent-messages.js';
 import type { McpService } from '../extensions/mcp.js';
 import type { SkillService } from '../extensions/skills.js';
+import type { SearchService } from '../extensions/search.js';
 import { readTools } from './read-tools.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
@@ -29,6 +30,7 @@ interface RuntimeOptions {
   executions?: Executions;
   mcp?: McpService;
   skills?: SkillService;
+  search?: SearchService;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
@@ -287,7 +289,8 @@ export class TeachingRuntime {
       if (!active(this.get(space, id))) return;
       const skillReads = skills?.skills.length ? readTools(this.options.projectDirectory?.(space) ?? process.cwd())
         .filter((tool) => !scenario.tools.some((existing) => existing.name === tool.name)) : [];
-      const availableTools = [...scenario.tools, ...skillReads, ...external];
+      const searchTools = this.options.search?.tools() ?? [];
+      const availableTools = [...scenario.tools, ...skillReads, ...external, ...searchTools];
       const tools = availableTools.map(({ name, description, parameters, outputSchema }) => ({ name, description, parameters, ...(outputSchema ? { outputSchema } : {}) }));
       const agent = new Agent({
         initialState: { model: choice.model, tools: availableTools, thinkingLevel: choice.selection.thinkingLevel },

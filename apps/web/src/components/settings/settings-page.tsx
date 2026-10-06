@@ -1,4 +1,4 @@
-import { ArrowLeft, Blocks, BookOpen, Plug, Settings2 } from 'lucide-react'
+import { ArrowLeft, Blocks, BookOpen, Globe, Plug, Settings2 } from 'lucide-react'
 import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { uiMotion } from '@/lib/motion'
 import { ModelSettingsForm } from './model-settings'
 import { McpSettingsForm } from './mcp-settings'
 import { SkillsSettingsForm } from './skills-settings'
+import { SearchSettingsForm } from './search-settings'
 
 export const SettingsNavigation = createContext<(() => void) | null>(null)
 
@@ -26,6 +27,7 @@ const categories = [
   { id: 'model', label: '模型配置', icon: Blocks },
   { id: 'mcp', label: 'MCP', icon: Plug },
   { id: 'skills', label: 'Skills', icon: BookOpen },
+  { id: 'search', label: '搜索服务', icon: Globe },
 ] as const
 
 export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEntered: () => void }) {
@@ -55,7 +57,7 @@ export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEnte
       className="fixed inset-0 z-50 flex h-dvh min-w-0 flex-col bg-background text-foreground"
     >
       <header className="flex h-16 shrink-0 items-center gap-4 border-b px-4 md:px-6">
-        <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" /> 返回学习</Button>
+        <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" /> 返回</Button>
         <span className="h-5 border-l" aria-hidden />
         <h1 ref={title} tabIndex={-1} className="text-base font-semibold outline-none">设置</h1>
         <ThemeToggle className="ml-auto" />
@@ -65,7 +67,7 @@ export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEnte
         <div className="shrink-0 border-b bg-sidebar p-3 md:w-56 md:border-r md:border-b-0 md:p-4">
           <TabsList aria-label="设置类别" className="h-auto! w-full gap-1 bg-transparent p-0">
             {categories.map(({ id, label, icon: Icon }) => (
-              <TabsTrigger key={id} value={id} className="h-10 flex-none px-3 max-md:flex-1 data-active:bg-background">
+              <TabsTrigger key={id} value={id} className="h-10 flex-none px-3 max-md:flex-1 max-sm:px-1.5 max-sm:[&_svg]:hidden data-active:bg-background">
                 <Icon />{label}
               </TabsTrigger>
             ))}
@@ -81,6 +83,7 @@ export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEnte
               {id === 'model' && <ModelSettingsForm active={category === id && isPresent} />}
               {id === 'mcp' && <McpSettingsForm active={category === id && isPresent} />}
               {id === 'skills' && <SkillsSettingsForm active={category === id && isPresent} />}
+              {id === 'search' && <SearchSettingsForm active={category === id && isPresent} />}
             </div>
           </TabsContent>
         ))}
