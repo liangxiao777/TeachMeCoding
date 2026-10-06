@@ -5,18 +5,8 @@ import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { MessageResponse } from '@/components/ai-elements/message'
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ai-elements/reasoning'
 import { Shimmer } from '@/components/ai-elements/shimmer'
-import { Tool, ToolContent, ToolHeader, ToolInput } from '@/components/ai-elements/tool'
+import { ToolCallGroup } from '@/components/agent/tool-call-group'
 import { Button } from '@/components/ui/button'
-
-const TOOL_NAMES: Record<string, string> = {
-  submit_requirement_draft: '整理学习需求', submit_route_proposal: '提交学习路线',
-  add_route_stage: '添加学习阶段', add_route_unit: '添加学习单元',
-  update_route_stage: '调整学习阶段', update_route_unit: '调整学习单元',
-  remove_route_stage: '移除空阶段', remove_route_unit: '移除草稿单元',
-  submit_learning_conclusion: '整理学习结论', submit_lesson: '提交课件',
-  submit_assessment: '提交测评题目', submit_evaluation: '提交评估结果',
-  read: '读取文件', ls: '查看目录', find: '查找文件', grep: '搜索内容',
-}
 
 /** Ordered public events only; native reasoning signatures and private rubrics never enter this view. */
 export function RunContent({ parts, text = '', streaming = false, onCode }: {
@@ -42,15 +32,19 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
     },
   } : undefined, [onCode, streaming])
   const content = parts?.length ? parts : text ? [{ type: 'text' as const, id: 'legacy', text }] : []
+  const calls = content.filter((part) => part.type === 'tool')
 
   return (
     <div className="flex min-w-0 flex-col gap-3" data-testid="run-content">
       {content.map((part, index) => {
         if (part.type === 'text') return <MessageResponse key={part.id} components={components} isAnimating={streaming}>{part.text}</MessageResponse>
+        // Keep one stable group at the first invocation, even across model requests.
+        if (part.type === 'tool') return part.id === calls[0]!.id
+          ? <ToolCallGroup key={part.id} calls={calls} streaming={streaming} /> : null
         // Pi may defer thinking_end until the whole response finishes. A later
         // content block is already evidence that the visible phase has moved on.
         const thinking = streaming && part.status === 'streaming' && index === content.length - 1
-        if (part.type === 'reasoning') return (
+        return (
           <Reasoning key={part.id} defaultOpen={false} isStreaming={thinking} className="mb-0" data-testid="reasoning">
             <ReasoningTrigger getThinkingMessage={() => thinking
               ? <Shimmer>正在思考…</Shimmer>
@@ -59,18 +53,6 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
               {part.text || (part.status === 'streaming' ? '等待模型返回推理内容…' : '此阶段没有公开推理正文。')}
             </ReasoningContent>
           </Reasoning>
-        )
-        return (
-          <Tool key={part.id} className="mb-0" data-testid="tool-call">
-            <ToolHeader type="dynamic-tool" toolName={part.name} title={TOOL_NAMES[part.name] ?? (part.name || '工具调用')}
-              state={part.status === 'generating' || part.status === 'ready' ? 'input-streaming' : part.status === 'running' ? 'input-available' : part.status === 'done' ? 'output-available' : 'output-error'}
-              statusLabel={part.status === 'generating' ? '准备中' : part.status === 'ready' ? '等待执行' : part.status === 'interrupted' ? '已中断' : undefined} />
-            <ToolContent className="text-xs text-muted-foreground">
-              {(part.input !== undefined || part.inputText !== undefined) && (
-                <ToolInput input={part.input} inputText={part.inputText} className="max-h-96 overflow-y-auto overscroll-contain" />
-              )}
-            </ToolContent>
-          </Tool>
         )
       })}
       {streaming && !content.some((part, index) => part.type === 'reasoning' && part.status === 'streaming' && index === content.length - 1

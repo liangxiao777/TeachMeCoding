@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { AgentDisplayPart, RunEvent, SessionDetail } from '../../packages/contracts/src/workspace';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 async function create(page: Page, goal: string) {
@@ -11,6 +12,157 @@ async function send(page: Page, text: string) {
   await page.getByLabel('回复 Agent', { exact: true }).fill(text);
   await page.getByRole('button', { name: '发送', exact: true }).click();
 }
+
+// Browser-only public projection fixtures; the underlying test server is disposable.
+async function mockToolRun(page: Page, goal: string, parts: AgentDisplayPart[], live = false) {
+  await create(page, goal);
+  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  const saved = await workspace(page, goal);
+  const runId: string = saved.runs[0].id;
+  await page.route(`**/api/spaces/${saved.id}`, async (route) => {
+    const response = await route.fetch(), body = await response.json();
+    if (live) body.runs = body.runs.map((run: { id: string }) => run.id === runId ? { ...run, state: 'running' } : run);
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(`**/api/spaces/${saved.id}/sessions/*`, async (route) => {
+    const response = await route.fetch(), body = await response.json() as SessionDetail;
+    body.messages = body.messages.map((message) => message.id === runId
+      ? { ...message, parts, sequence: 1000, status: live ? 'streaming' : 'done' } : message);
+    await route.fulfill({ response, json: body });
+  });
+  if (live) await page.addInitScript((runId) => {
+    const original = window.fetch;
+    window.fetch = async (input, init) => String(input).includes(`/runs/${runId}/stream?after=`)
+      ? new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(': opened\n\n'));
+        window.addEventListener('tool-test-event', (event) => controller.enqueue(new TextEncoder().encode(
+          `data: ${JSON.stringify((event as CustomEvent).detail)}\n\n`)));
+        init?.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), { once: true });
+      } }), { headers: { 'Content-Type': 'text/event-stream' } })
+      : original(input, init);
+  }, runId);
+  await page.reload();
+  await expect(page.getByTestId('tool-call-group')).toBeVisible();
+  return runId;
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`tool groups bound long interleaved histories and retain failures (${theme})`, async ({ page }, info) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const parts: AgentDisplayPart[] = [{ type: 'text', id: 'intro', text: '检查公开文件。' }];
+    for (let index = 0; index < 20; index++) {
+      if (index === 5) parts.push({ type: 'text', id: 'middle', text: '继续检查其他文件。' });
+      if (index === 10) parts.push({ type: 'reasoning', id: 'thought', text: '核对调用记录。', status: 'done' });
+      parts.push({ type: 'tool', id: `call-${index}`, name: ['ls', 'read', 'grep'][index % 3]!,
+        input: { path: `src/file-${index}.ts`, limit: 7 },
+        status: index === 3 ? 'error' : index === 7 ? 'interrupted' : index === 19 ? 'running' : 'done' });
+    }
+    parts.push({ type: 'text', id: 'outcome', text: '公开结果仍显示在工具组外。' });
+    await mockToolRun(page, `通用工具分组 ${theme} ${info.project.name}`, parts);
+    const group = page.getByTestId('tool-call-group'), toggle = group.getByRole('button', { name: '工具调用', exact: true });
+    await expect(group).toHaveCount(1);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(group).toContainText('20 次调用');
+    await expect(group).toContainText('17 次成功');
+    await expect(group.getByTestId('tool-call-issues')).toContainText('1 次失败 · 1 次中断');
+    await expect(page.getByTestId('tool-call-history')).toHaveCount(0);
+    await expect(page.getByText('继续检查其他文件。', { exact: true })).toBeVisible();
+    await expect(page.getByText('公开结果仍显示在工具组外。', { exact: true })).toBeVisible();
+    expect((await group.boundingBox())!.height).toBeLessThan(130);
+    await group.screenshot({ path: `.amp/in/artifacts/tool-group-collapsed-${theme}-${info.project.name}.png` });
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    const history = group.getByTestId('tool-call-history');
+    await expect(group.getByTestId('tool-call')).toHaveCount(20);
+    expect(await group.getByTestId('tool-call').evaluateAll((els) => els.map((el) => el.getAttribute('data-call-id'))))
+      .toEqual(Array.from({ length: 20 }, (_, index) => `call-${index}`));
+    expect((await history.boundingBox())!.height).toBeLessThanOrEqual(320);
+    expect(await history.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    const first = group.getByTestId('tool-call').first();
+    await first.getByRole('button').click();
+    await expect(first.locator('pre')).toContainText('"path": "src/file-0.ts"');
+    await expect(first.locator('pre')).toContainText('"limit": 7');
+    await expect(first.getByText('参数', { exact: true })).toHaveCount(0);
+    await expect(group.getByText('已返回', { exact: true })).toHaveCount(0);
+    await group.screenshot({ path: `.amp/in/artifacts/tool-group-expanded-${theme}-${info.project.name}.png` });
+    await history.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(group.getByTestId('tool-call').last().getByText('执行中', { exact: true })).toBeVisible();
+    await toggle.click();
+    await expect(group.getByTestId('tool-call-issues')).toBeVisible();
+    await page.reload();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(group).toContainText('20 次调用');
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await group.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  });
+}
+
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`tool ticker advances on invocation IDs, not argument updates (${reducedMotion})`, async ({ page }, info) => {
+    await page.emulateMedia({ reducedMotion });
+    const runId = await mockToolRun(page, `工具滚动 ${reducedMotion} ${info.project.name} ${info.repeatEachIndex}`, [
+      { type: 'tool', id: 'first', name: 'ls', input: {}, status: 'done' },
+      { type: 'tool', id: 'second', name: 'read', input: { path: 'src/index.ts' }, status: 'running' },
+    ], true);
+    const group = page.getByTestId('tool-call-group');
+    const ticker = group.getByTestId('tool-call-ticker');
+    await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+    await expect(ticker.locator('code')).toHaveText('read');
+    const emit = (seq: number, data: RunEvent['data']) => page.evaluate((event) => {
+      window.dispatchEvent(new CustomEvent('tool-test-event', { detail: event }));
+    }, { runId, seq, data });
+    await emit(1001, { type: 'tool', callId: 'second', name: 'read', phase: 'end' });
+    await expect(group).toContainText('2 次成功');
+    const frames = await ticker.evaluate(async (el, runId) => {
+      const old = el.querySelector('code')!;
+      const group = el.closest('[data-testid="tool-call-group"]')!;
+      const height = group.getBoundingClientRect().height;
+      window.dispatchEvent(new CustomEvent('tool-test-event', { detail: { runId, seq: 1002,
+        data: { type: 'tool', callId: 'third', name: 'grep', phase: 'input', inputDelta: '{' } } }));
+      const frames = [], start = performance.now();
+      while (performance.now() - start < 350) {
+        await new Promise(requestAnimationFrame);
+        const current = el.querySelector<HTMLElement>('[data-call-id="third"]');
+        frames.push({ oldY: old.isConnected ? old.getBoundingClientRect().y - el.getBoundingClientRect().y : null,
+          newY: current ? current.getBoundingClientRect().y - el.getBoundingClientRect().y : null,
+          height: group.getBoundingClientRect().height - height });
+      }
+      return frames;
+    }, runId);
+    expect(frames.every((frame) => Math.abs(frame.height) < 0.5)).toBe(true);
+    if (reducedMotion === 'no-preference') {
+      expect(frames.some((frame) => frame.oldY !== null && frame.oldY < -1 && frame.newY !== null && frame.newY > 1)).toBe(true);
+    } else {
+      expect(frames.every((frame) => frame.newY === null || Math.abs(frame.newY) < 0.5)).toBe(true);
+    }
+    await expect(ticker.locator('[data-call-id="second"]')).toHaveCount(0);
+    const current = ticker.locator('[data-call-id="third"]');
+    await expect(current).toHaveText('grep');
+    await expect(group).toContainText('3 次调用');
+    await current.evaluate((el) => el.setAttribute('data-retained', 'yes'));
+    await emit(1003, { type: 'tool', callId: 'third', name: 'grep', phase: 'input', inputDelta: '"pattern":"export"}' });
+    await emit(1004, { type: 'tool', callId: 'third', name: 'grep', phase: 'start', input: { pattern: 'export' } });
+    await expect(group).toContainText('3 次调用');
+    await expect(group).toContainText('2 次成功');
+    await expect(current).toHaveAttribute('data-retained', 'yes');
+    await expect(ticker.locator('[data-call-id="second"]')).toHaveCount(0);
+    await group.getByRole('button', { name: '工具调用', exact: true }).click();
+    await group.getByTestId('tool-call').first().getByRole('button').click();
+    // A repeated tool name is still a new invocation. Open history must stay open.
+    await emit(1005, { type: 'tool', callId: 'third', name: 'grep', phase: 'end' });
+    await emit(1006, { type: 'tool', callId: 'fourth', name: 'grep', phase: 'start', input: { pattern: 'import' } });
+    await expect(group.getByTestId('tool-call')).toHaveCount(4);
+    await expect(group.getByTestId('tool-call').first().locator('pre')).toBeVisible();
+    await expect(ticker.locator('[data-call-id="fourth"]')).toHaveText('grep');
+    await expect(ticker.locator('[data-call-id="third"]')).toHaveCount(0);
+    // Replay of an old sequence does not create a duplicate invocation.
+    await emit(1006, { type: 'tool', callId: 'duplicate', name: 'read', phase: 'start' });
+    await expect(group).toContainText('4 次调用');
+    await expect(group.getByTestId('tool-call')).toHaveCount(4);
+  });
+}
+
 test('formal intake uses streamed API output, editable drafts and explicit confirmation', async ({ page }, info) => {
   test.setTimeout(60000);
   const opening = `我想做一个命令行工具，有 Python 自动化经验，每周 3 小时，计划 6 周完成。${info.project.name}`;
@@ -234,12 +386,17 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await page.reload();
   await expect(title).toBeVisible();
   await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveCount(0);
+  const toolGroup = page.getByTestId('tool-call-group');
+  await expect(toolGroup).toContainText('1 次成功', { timeout: 10000 });
+  await expect(toolGroup.getByRole('button', { name: '工具调用', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await toolGroup.getByRole('button', { name: '工具调用', exact: true }).click();
   const stageTool = page.getByTestId('tool-call').first();
-  await expect(stageTool.getByText('已返回', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(stageTool.getByText('成功', { exact: true })).toBeVisible();
   await expect(page.getByText('生成路线内容', { exact: true }).locator('../..')).toHaveClass(/text-foreground/);
   await expect(page.getByText('校验路线结构', { exact: true }).locator('../..')).toHaveClass(/text-muted-foreground\/50/);
   await stageTool.getByRole('button').click();
   await expect(stageTool.locator('pre')).toContainText('"title": "工具基础"');
+  await expect(toolGroup).toHaveCount(1);
   await page.screenshot({ path: `.amp/in/artifacts/planning-progress-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
   await expect(title).toHaveCount(0);
@@ -337,7 +494,7 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
   await expect(reasoning).toHaveCount(2);
   const sequence = await page.getByTestId('run-content').locator(':scope > *').evaluateAll((elements) => elements.map((el) => (el as HTMLElement).dataset.testid ?? 'text'));
-  expect(sequence).toEqual(['reasoning', 'text', 'tool-call', 'reasoning', 'text']);
+  expect(sequence).toEqual(['reasoning', 'text', 'tool-call-group', 'reasoning', 'text']);
   await reasoning.first().getByRole('button').click();
   await expect(reasoning.first()).toContainText('先核对已有基础。再区分目标与时间。最后整理需求。');
   await reasoning.last().getByRole('button').click();
@@ -345,10 +502,11 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(page.getByRole('table')).toContainText('每周两次');
   await expect(page.getByText('我会先整理目标。', { exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
-  await page.getByRole('button', { name: /整理学习需求.*已返回/ }).click();
-  await expect(page.getByText('submit_requirement_draft', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '工具调用', exact: true }).click();
+  await page.getByRole('button', { name: /submit_requirement_draft.*成功/ }).click();
   await expect(page.getByTestId('tool-call').locator('pre')).toContainText('已有变量基础');
   await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"schedule": "每周两次"');
+  await expect(page.getByTestId('tool-call').getByText('参数', { exact: true })).toHaveCount(0);
   await page.getByTestId('tool-call').screenshot({ path: `.amp/in/artifacts/tool-arguments-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.locator('button button')).toHaveCount(0);
   const snapshots = await page.evaluate(async () => {
@@ -361,6 +519,13 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   expect(snapshots).not.toContain('PRIVATE-SIGNATURE');
   await page.setViewportSize({ width: 1440, height: 1200 });
   await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-complete-${info.project.name}.png`, animations: 'disabled' });
+  await send(page, '再核对一次学习需求');
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  const groups = page.getByTestId('tool-call-group');
+  await expect(groups).toHaveCount(2);
+  await expect(groups.first().getByTestId('tool-call-count')).toHaveText('1 次调用');
+  await expect(groups.last().getByTestId('tool-call-count')).toHaveText('1 次调用');
+  await expect(groups.last().getByRole('button', { name: '工具调用', exact: true })).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   await expect(page.getByLabel('编辑 agent_example.py', { exact: true })).toHaveValue('print("hello")');
   await page.getByRole('button', { name: '保存文件', exact: true }).click();
@@ -419,6 +584,7 @@ test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dar
   await expect(agent.getByTestId('reasoning').first()).toContainText('先核对已有基础。');
   await expect(agent.getByRole('table')).toContainText('每周两次');
   await expect(agent.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
+  await agent.getByRole('button', { name: '工具调用', exact: true }).click();
   const tool = agent.getByTestId('tool-call');
   await tool.getByRole('button').click();
   await expect(tool.locator('pre')).toContainText('根据已有基础继续练习。');
@@ -442,10 +608,14 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   await page.getByLabel('时间安排', { exact: true }).fill('PLAN-STREAM-ERROR');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  const group = page.getByTestId('tool-call-group');
+  await expect(group).toContainText('1 次调用');
+  await expect(group).toContainText('0 次成功');
+  await group.getByRole('button', { name: '工具调用', exact: true }).click();
   const tool = page.getByTestId('tool-call');
   await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
   await tool.getByRole('button').click();
-  await expect(tool.getByText('add_route_stage', { exact: true })).toHaveCount(0);
+  await expect(tool.getByText('add_route_stage', { exact: true })).toBeVisible();
   await expect(tool.locator('pre')).toContainText('工具基础：参数、错误与输出');
   await expect(tool).not.toContainText(/已接收|字符|尚未执行|尚未调用/);
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
@@ -458,6 +628,8 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   const resumed: number[] = [];
   page.on('request', (r) => { if (r.url().includes('/stream?after=')) resumed.push(Number(new URL(r.url()).searchParams.get('after'))); });
   await page.reload();
+  await expect(group).toContainText('1 次调用');
+  await group.getByRole('button', { name: '工具调用', exact: true }).click();
   await expect(tool.getByText('准备中', { exact: true })).toBeVisible();
   await tool.getByRole('button').click();
   await expect(tool.locator('pre')).toContainText('工具基础：参数、错误与输出');
@@ -471,6 +643,8 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   await expect(page.getByRole('button', { name: '停止规划', exact: true })).toBeEnabled();
   await page.screenshot({ path: `.amp/in/artifacts/planning-clean-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(group.getByTestId('tool-call-issues')).toContainText('1 次中断');
+  await group.getByRole('button', { name: '工具调用', exact: true }).click();
   await expect(tool.getByText('已中断', { exact: true })).toBeVisible();
   await expect(page.getByTestId('run-inactivity')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '重试规划', exact: true })).toBeEnabled();
@@ -480,6 +654,8 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   expect(failed.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(1);
   await page.reload();
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible();
+  await expect(group.getByTestId('tool-call-issues')).toContainText('1 次中断');
+  await group.getByRole('button', { name: '工具调用', exact: true }).click();
   await expect(tool.getByText('已中断', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText('模型响应未正常完成');
   await expect(page.getByRole('alert')).not.toContainText('检查模型服务状态');
@@ -519,6 +695,8 @@ test('a silent event connection recovers the terminal state by polling every dur
   expect([1, 2]).toContain(cursors[0]);
   expect(cursors[1]).toBe(cursors[0]! + 500);
   await expect(page.locator('body')).not.toContainText(/事件连接中断|正在重连/);
+  await expect(page.getByTestId('tool-call-issues')).toContainText('1 次中断');
+  await page.getByRole('button', { name: '工具调用', exact: true }).click();
   await expect(page.getByTestId('tool-call').getByText('已中断', { exact: true })).toBeVisible();
   await page.getByTestId('reasoning').getByRole('button').click();
   await expect(page.getByTestId('reasoning')).toContainText('核对需求。'.repeat(121));

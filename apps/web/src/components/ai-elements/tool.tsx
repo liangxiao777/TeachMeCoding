@@ -53,7 +53,7 @@ const statusLabels: Record<ToolPart["state"], string> = {
   "approval-responded": "已回应",
   "input-available": "执行中",
   "input-streaming": "等待执行",
-  "output-available": "已返回",
+  "output-available": "成功",
   "output-denied": "已拒绝",
   "output-error": "失败",
 };
@@ -63,7 +63,7 @@ const statusIcons: Record<ToolPart["state"], ReactNode> = {
   "approval-responded": <CheckCircleIcon className="size-4 text-blue-600" />,
   "input-available": <ClockIcon className="size-4 animate-pulse" />,
   "input-streaming": <CircleIcon className="size-4" />,
-  "output-available": <CheckCircleIcon className="size-4 text-green-600" />,
+  "output-available": <CheckCircleIcon className="size-4 text-muted-foreground" />,
   "output-denied": <XCircleIcon className="size-4 text-orange-600" />,
   "output-error": <XCircleIcon className="size-4 text-red-600" />,
 };
