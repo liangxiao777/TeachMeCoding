@@ -17,6 +17,7 @@ import {
   SquareTerminal,
   X,
 } from 'lucide-react'
+import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { BrandMark, isComposing } from '@/components/shared'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
@@ -41,6 +42,7 @@ import {
 import { findUnit, relativeTime, scopedSessions, sessionUnitId } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
+import { uiMotion } from '@/lib/motion'
 import type { Message, Quote, QuoteSource } from '@/app/types'
 
 const SOURCE_ICON: Record<QuoteSource, typeof FileText> = {
@@ -326,9 +328,20 @@ function EmptyChat() {
 export function AgentPanel() {
   const space = useSpace()
   const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
+  const isPresent = useIsPresent()
+  const reducedMotion = useReducedMotion()
 
   return (
-    <aside aria-label="Agent" className="flex w-96 shrink-0 flex-col border-l bg-sidebar">
+    <motion.aside
+      aria-label="Agent"
+      aria-hidden={!isPresent}
+      inert={!isPresent}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: reducedMotion || space.view !== 'route' ? 0 : uiMotion.panel }}
+      className="flex w-96 shrink-0 flex-col border-l bg-sidebar"
+    >
       <div className="flex h-12 shrink-0 items-center gap-1 border-b px-2">
         <div className="min-w-0 flex-1">
           <SessionMenu />
@@ -336,7 +349,10 @@ export function AgentPanel() {
         <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label="新建会话">
           <Plus />
         </Button>
-        <Button variant="ghost" size="icon-sm" onClick={() => toggleAgent(false)} aria-label="收起 Agent">
+        <Button variant="ghost" size="icon-sm" onClick={() => {
+          document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]')?.focus({ preventScroll: true })
+          toggleAgent(false)
+        }} aria-label="收起 Agent">
           <X />
         </Button>
       </div>
@@ -389,6 +405,6 @@ export function AgentPanel() {
         </Conversation>
       )}
       <Composer />
-    </aside>
+    </motion.aside>
   )
 }

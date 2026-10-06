@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress'
 import { allUnits, findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
+import { uiMotion } from '@/lib/motion'
 import type { Unit } from '@/app/types'
 
 function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string; isCurrent: boolean; isLast: boolean }) {
@@ -255,9 +256,9 @@ export function RouteView() {
           <div>
             <motion.div
               initial={false}
-              animate={{ gridTemplateRows: space.agentOpen ? '0fr' : '1fr' }}
-              transition={{ duration: reducedMotion ? 0 : 0.2, ease: 'easeInOut' }}
-              className={cn('grid', space.agentOpen && 'invisible')}
+              animate={{ gridTemplateRows: space.agentOpen ? '0fr' : '1fr', opacity: space.agentOpen ? 0 : 1 }}
+              transition={{ duration: reducedMotion ? 0 : uiMotion.panel }}
+              className="grid"
               inert={space.agentOpen}
               aria-hidden={space.agentOpen}
             >

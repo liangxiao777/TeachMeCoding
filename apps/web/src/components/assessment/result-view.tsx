@@ -177,7 +177,7 @@ export function ResultView() {
         <Section icon={Quote} title={unverified ? '作答反馈（仅供修改参考）' : '为什么是这个结果'} items={record.evidence} tone="muted" />
         <Section icon={CircleAlert} title="下一步怎么改" items={record.concerns} tone="accent" onAsk={ask} />
         {record.execution && <ExecutionResult execution={record.execution} showSummary={record.summary !== execution?.summary} />}
-        {(record.mastered.length > 0 || record.toVerify.length > 0) && <Collapsible className="rounded-xl border bg-card">
+        {(record.mastered.length > 0 || record.toVerify.length > 0) && <Collapsible className="result-disclosure rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">
             补充反馈
             <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden />
@@ -190,7 +190,7 @@ export function ResultView() {
           </CollapsibleContent>
         </Collapsible>}
 
-        <Collapsible className="rounded-xl border bg-card">
+        <Collapsible className="result-disclosure rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">
             查看我的回答
             <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden />

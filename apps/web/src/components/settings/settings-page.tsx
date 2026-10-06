@@ -1,8 +1,10 @@
 import { ArrowLeft, Blocks, BookOpen, Plug, Settings2 } from 'lucide-react'
+import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ThemeToggle } from '@/app/theme'
+import { uiMotion } from '@/lib/motion'
 import { ModelSettingsForm } from './model-settings'
 import { McpSettingsForm } from './mcp-settings'
 import { SkillsSettingsForm } from './skills-settings'
@@ -26,9 +28,11 @@ const categories = [
   { id: 'skills', label: 'Skills', icon: BookOpen },
 ] as const
 
-export function SettingsPage({ onBack }: { onBack: () => void }) {
+export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEntered: () => void }) {
   const [category, setCategory] = useState('model')
   const [desktop, setDesktop] = useState(() => matchMedia('(min-width: 768px)').matches)
+  const isPresent = useIsPresent()
+  const reducedMotion = useReducedMotion()
   const title = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     title.current?.focus()
@@ -39,7 +43,17 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
   }, [])
 
   return (
-    <section aria-label="应用设置" className="flex h-dvh min-w-0 flex-col bg-background text-foreground">
+    <motion.section
+      aria-label="应用设置"
+      aria-hidden={!isPresent}
+      inert={!isPresent}
+      initial={{ opacity: 0, y: reducedMotion ? 0 : 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: reducedMotion ? 0 : 4 }}
+      transition={{ duration: reducedMotion ? 0 : uiMotion.content }}
+      onAnimationComplete={() => { if (isPresent) onEntered() }}
+      className="fixed inset-0 z-50 flex h-dvh min-w-0 flex-col bg-background text-foreground"
+    >
       <header className="flex h-16 shrink-0 items-center gap-4 border-b px-4 md:px-6">
         <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" /> 返回学习</Button>
         <span className="h-5 border-l" aria-hidden />
@@ -64,13 +78,13 @@ export function SettingsPage({ onBack }: { onBack: () => void }) {
                 <h2 className="text-2xl font-semibold tracking-tight">{label}</h2>
                 {id === 'model' && <p className="text-sm text-muted-foreground">选择教学模型、推理强度与登录方式。</p>}
               </div>}
-              {id === 'model' && <ModelSettingsForm active={category === id} />}
-              {id === 'mcp' && <McpSettingsForm active={category === id} />}
-              {id === 'skills' && <SkillsSettingsForm active={category === id} />}
+              {id === 'model' && <ModelSettingsForm active={category === id && isPresent} />}
+              {id === 'mcp' && <McpSettingsForm active={category === id && isPresent} />}
+              {id === 'skills' && <SkillsSettingsForm active={category === id && isPresent} />}
             </div>
           </TabsContent>
         ))}
       </Tabs>
-    </section>
+    </motion.section>
   )
 }
