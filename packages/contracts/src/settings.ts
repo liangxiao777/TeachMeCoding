@@ -40,18 +40,24 @@ export interface ModelSettings {
   providers: ProviderSummary[];
 }
 
-export const searchProviderSchema = z.enum(['brave', 'tavily', 'exa']);
+export const searchProviderSchema = z.enum(['brave', 'tavily', 'exa', 'firecrawl', 'parallel', 'perplexity', 'minimax',
+  'gemini', 'grok', 'kimi', 'codex', 'duckduckgo', 'firecrawl-free', 'ollama']);
 export type SearchProvider = z.infer<typeof searchProviderSchema>;
+export const searchModelSchema = z.string().trim().min(1).max(100).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
+export const searchRegionSchema = z.enum(['global', 'cn']);
 export const searchSettingsUpdateSchema = z.object({
   enabled: z.boolean().optional(),
   provider: searchProviderSchema.optional(),
   /** Omitted or empty retains the selected provider's credential; never returned by GET. */
   apiKey: z.string().trim().max(4096).regex(/^[^\r\n]*$/).optional(),
+  model: searchModelSchema.optional(),
+  region: searchRegionSchema.optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, '至少提供一个设置字段。');
 export interface SearchSettings {
   enabled: boolean;
   provider: SearchProvider;
-  providers: { id: SearchProvider; name: string; apiKeyUrl: string; configured: 'saved' | 'environment' | null }[];
+  providers: { id: SearchProvider; name: string; authentication: 'api_key' | 'none' | 'oauth'; apiKeyUrl?: string;
+    configured: 'saved' | 'environment' | 'account' | null; ready: boolean; model?: string; region?: 'global' | 'cn' }[];
 }
 export const webSearchInputSchema = z.object({
   query: z.string().trim().min(1).max(1000),
@@ -62,6 +68,8 @@ export interface WebSearchResponse {
   provider: SearchProvider;
   query: string;
   results: WebSearchResult[];
+  /** Search-side synthesized answer, when this provider returns an answer rather than ranked snippets. */
+  answer?: string;
   tookMs: number;
   /** Search snippets are external evidence, not instructions or fetched page bodies. */
   untrusted: true;

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SearchProvider } from '@teach-me-coding/contracts';
 import { SearchService } from './search.js';
+import type { CodexAuthSource } from './codex-search.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { reply, response, teachingModel } from '../agents/test-support.js';
 import { Learning } from '../modules/learning.js';
@@ -17,29 +20,178 @@ function fixture(request: typeof fetch = async () => { throw new Error('Unexpect
   return { service, root, path, close() { service.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
-test('search defaults off, keeps provider-specific credentials, and writes a private recoverable configuration', () => {
+test('all requested providers are registered, no-key services are ready without leaking or falling back to teaching credentials', async () => {
+  const { service, close } = fixture(undefined, (name) => name === 'OPENROUTER_API_KEY' ? 'teaching-only-secret' : undefined);
+  try {
+    const settings = await service.settings();
+    assert.deepEqual(settings.providers.map((entry) => entry.id), ['brave', 'tavily', 'exa', 'firecrawl', 'parallel', 'perplexity', 'minimax',
+      'gemini', 'grok', 'kimi', 'codex', 'duckduckgo', 'firecrawl-free', 'ollama']);
+    assert.deepEqual(settings.providers.map((entry) => entry.name), ['Brave Search', 'Tavily', 'Exa', 'Firecrawl', 'Parallel', 'Perplexity Search',
+      'MiniMax Search', 'Gemini', 'Grok', 'Kimi', 'Codex Hosted Search', 'DuckDuckGo', 'Firecrawl Free', 'Ollama Web Search']);
+    for (const entry of settings.providers) {
+      assert.equal(entry.authentication, entry.id === 'codex' ? 'oauth' : ['duckduckgo', 'firecrawl-free'].includes(entry.id) ? 'none' : 'api_key');
+      assert.equal(entry.ready, ['duckduckgo', 'firecrawl-free'].includes(entry.id));
+      assert.equal(entry.configured, null);
+      await service.save({ provider: entry.id, enabled: true });
+      assert.equal((await service.tools()).length, entry.ready ? 1 : 0);
+    }
+    assert.doesNotMatch(JSON.stringify(settings), /teaching-only-secret/);
+    for (const provider of ['duckduckgo', 'firecrawl-free', 'codex']) {
+      assert.throws(() => service.save({ provider, apiKey: 'must-not-save' }), /不使用 API Key/);
+    }
+  } finally { close(); }
+});
+
+test('HTTP services dispatch saved configuration through ordinary tools, including no-key diagnostics while disabled', async () => {
+  let provider: SearchProvider = 'brave', calls = 0;
+  const url = 'https://doc.rust-lang.org/reference/';
+  const { service, close } = fixture(async (_url, options) => {
+    calls++;
+    const headers = new Headers(options?.headers);
+    if (provider === 'duckduckgo' || provider === 'firecrawl-free') assert.equal(headers.get('authorization'), null);
+    else assert.ok([...headers.values()].some((value) => value.includes(`synthetic-${provider}-key`)), 'only this search provider receives its key');
+    const result = { title: 'Rust Reference', url, snippet: 'Documentation' };
+    switch (provider) {
+      case 'brave': return Response.json({ type: 'search', query: { original: 'Rust' }, web: { results: [{ ...result, description: result.snippet }] } });
+      case 'tavily': case 'ollama': return Response.json({ results: [{ ...result, content: result.snippet }] });
+      case 'exa': return Response.json({ results: [{ ...result, highlights: [result.snippet] }] });
+      case 'firecrawl': case 'firecrawl-free': return Response.json({ success: true, data: { web: [{ ...result, description: result.snippet }] } });
+      case 'parallel': return Response.json({ results: [{ ...result, excerpts: [result.snippet] }] });
+      case 'minimax': return Response.json({ organic: [{ ...result, link: url }], base_resp: { status_code: 0 } });
+      case 'gemini': return Response.json({ candidates: [{ content: { parts: [{ text: 'Documentation' }] }, groundingMetadata: { groundingChunks: [{ web: { uri: url, title: result.title } }] } }] });
+      case 'grok': return Response.json({ status: 'completed', output_text: 'Documentation', citations: [{ url, title: result.title }] });
+      case 'kimi': return Response.json({ choices: [{ message: { content: 'Documentation' }, finish_reason: 'stop' }], search_results: [{ url, title: result.title }] });
+      case 'duckduckgo': return new Response(`<div class="result"><a class="result__a" href="${url}">Rust Reference</a><div class="result__snippet">Documentation</div></div>`);
+      default: return Response.json({ results: [result] });
+    }
+  }, (name) => name === 'FIRECRAWL_API_KEY' ? 'unused-paid-firecrawl-key' : undefined);
+  try {
+    for (const entry of (await service.settings()).providers.filter((entry) => entry.id !== 'codex')) {
+      provider = entry.id;
+      await service.save({ provider, enabled: false, ...(entry.authentication === 'api_key' ? { apiKey: `synthetic-${provider}-key` } : {}) });
+      const diagnostic = await service.test({ query: 'Rust', count: 1 });
+      assert.equal(diagnostic.provider, provider); assert.equal(diagnostic.untrusted, true);
+      assert.equal(diagnostic.results[0]?.url, url); assert.equal(diagnostic.results[0]?.title, 'Rust Reference');
+      assert.equal(diagnostic.answer, ['gemini', 'grok', 'kimi'].includes(provider) ? 'Documentation' : undefined);
+      assert.equal((await service.settings()).enabled, false);
+      await service.save({ enabled: true });
+      const tool = (await service.tools())[0]!;
+      const output = await tool.execute(`test-${provider}`, { query: 'Rust', count: 1 });
+      assert.equal(tool.name, 'web_search'); assert.equal(output.content[0]?.type, 'text');
+      const value = JSON.parse((output.content[0] as { text: string }).text);
+      assert.equal(value.provider, provider); assert.equal(value.results[0].url, url);
+      assert.doesNotMatch(JSON.stringify(output), /synthetic-.*-key|unused-paid-firecrawl-key/);
+    }
+    assert.equal(calls, 26);
+  } finally { close(); }
+});
+
+test('provider model/region options persist independently and tools freeze their original endpoint/model/key', async () => {
+  const calls: { url: string; model: string; key: string | null }[] = [];
+  const { service, path, close } = fixture(async (url, options) => {
+    calls.push({ url: String(url), model: JSON.parse(String(options?.body)).model, key: new Headers(options?.headers).get('authorization') });
+    return Response.json({ choices: [{ message: { content: 'Grounded answer' }, finish_reason: 'stop' }], search_results: [{ url: 'https://example.org/source' }] });
+  });
+  try {
+    await service.save({ provider: 'kimi', apiKey: 'synthetic-old-key', model: 'kimi-k2.5', region: 'cn', enabled: true });
+    const previous = (await service.tools())[0]!;
+    await service.save({ model: 'kimi-k2.6', region: 'global', apiKey: 'synthetic-new-key' });
+    await previous.execute('old', { query: 'Rust' }); await (await service.tools())[0]!.execute('new', { query: 'Rust' });
+    assert.deepEqual(calls, [
+      { url: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.5', key: 'Bearer synthetic-old-key' },
+      { url: 'https://api.moonshot.ai/v1/chat/completions', model: 'kimi-k2.6', key: 'Bearer synthetic-new-key' },
+    ]);
+    await service.save({ provider: 'gemini', model: 'gemini-2.5-flash', apiKey: 'synthetic-gemini-key' });
+    await service.save({ provider: 'minimax', region: 'cn' });
+    await service.save({ enabled: false }); await service.save({ provider: 'kimi', apiKey: '' });
+    const stored = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual(stored.providerOptions, { kimi: { model: 'kimi-k2.6', region: 'global' }, gemini: { model: 'gemini-2.5-flash' }, minimax: { region: 'cn' } });
+    const metadata = (await service.settings()).providers;
+    assert.equal(metadata.find((entry) => entry.id === 'gemini')?.model, 'gemini-2.5-flash');
+    assert.equal(metadata.find((entry) => entry.id === 'minimax')?.region, 'cn');
+    assert.equal(metadata.find((entry) => entry.id === 'grok')?.model, 'grok-4.7');
+    const reopened = new SearchService(path, { env: () => undefined });
+    assert.deepEqual(await reopened.settings(), await service.settings()); reopened.close();
+    for (const input of [{ provider: 'brave', model: 'wrong' }, { provider: 'grok', region: 'cn' }, { provider: 'codex', model: 'wrong' },
+      { provider: 'gemini', model: '../private' }, { provider: 'kimi', region: 'private' }]) assert.throws(() => service.save(input));
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), stored);
+    await service.save({ provider: 'parallel', apiKey: 'synthetic-parallel-key' });
+    assert.throws(() => service.test({ query: 'x'.repeat(201) }), /200/);
+    assert.equal(calls.length, 2);
+  } finally { close(); }
+});
+
+test('Codex readiness follows login, executes a private hosted worker, and the master switch interrupts it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-codex-service-'));
+  let loggedIn = false, mode = 'early', privateRoot = '', entered!: () => void;
+  const children: ChildProcessWithoutNullStreams[] = [];
+  const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-one' } })).toString('base64url');
+  const auth: CodexAuthSource = { checkAuth: async () => loggedIn ? { type: 'oauth' } : undefined,
+    getAuth: async () => loggedIn ? { source: 'OAuth', auth: { apiKey: `eyJhbGciOiJub25lIn0.${payload}.c3ludGhldGlj` } } : undefined };
+  const service = new SearchService(join(root, 'search.json'), { env: () => undefined, codex: auth,
+    fetch: async () => { throw new Error('Codex must not use HTTP search or teaching-model requests'); },
+    codexLaunch: { launch(command, args, options) {
+      privateRoot = dirname(String(options.cwd));
+      const child = spawn(command, [fileURLToPath(new URL('../../../../tests/fixtures/codex-search.mjs', import.meta.url)), mode, ...args.slice(1)], { ...options, stdio: 'pipe' });
+      children.push(child);
+      let buffer = '';
+      child.stdout.on('data', (data: Buffer) => {
+        buffer += data.toString(); let end: number;
+        while ((end = buffer.indexOf('\n')) !== -1) {
+          const value = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+          if (value.method === 'fixture/request' && value.params.method === 'turn/start') entered?.();
+        }
+      });
+      return child;
+    } },
+  });
+  try {
+    await service.save({ provider: 'codex', enabled: true }); assert.deepEqual(await service.tools(), []);
+    await assert.rejects(service.test({ query: 'Rust' }), /请先登录 Codex/);
+    assert.equal(children.length, 0);
+    loggedIn = true;
+    const settings = await service.settings();
+    assert.deepEqual(settings.providers.find((entry) => entry.id === 'codex'), { id: 'codex', name: 'Codex Hosted Search', authentication: 'oauth', configured: 'account', ready: true });
+    const tool = (await service.tools())[0]!, output = await tool.execute('hosted', { query: 'Rust', count: 2 });
+    const result = JSON.parse((output.content[0] as { text: string }).text);
+    assert.equal(result.provider, 'codex'); assert.match(result.answer, /Rust Book/);
+    assert.deepEqual(result.results.map((row: { url: string }) => row.url), ['https://doc.rust-lang.org/book/', 'https://example.org/reference']);
+    assert.equal(lstatSync(privateRoot, { throwIfNoEntry: false }), undefined);
+    mode = 'cancel-after-ack';
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const pending = tool.execute('cancel', { query: 'Rust' }); await started;
+    await service.save({ enabled: false }); await assert.rejects(pending, /已取消/);
+    assert.equal(lstatSync(privateRoot, { throwIfNoEntry: false }), undefined);
+    const completed = children.at(-1)!;
+    assert.ok(completed.signalCode || completed.exitCode !== null);
+    loggedIn = false; await service.save({ enabled: true }); assert.deepEqual(await service.tools(), []);
+    assert.doesNotMatch(JSON.stringify(await service.settings()), /eyJhbGci|account-one/);
+  } finally { service.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('search defaults off, keeps provider-specific credentials, and writes a private recoverable configuration', async () => {
   const { service, root, path, close } = fixture();
   try {
-    assert.equal(service.settings().enabled, false); assert.deepEqual(service.tools(), []);
-    service.save({ enabled: true }); assert.deepEqual(service.tools(), [], 'missing credentials must not advertise a usable tool');
+    assert.equal((await service.settings()).enabled, false); assert.deepEqual(await service.tools(), []);
+    await service.save({ enabled: true }); assert.deepEqual(await service.tools(), [], 'missing credentials must not advertise a usable tool');
     service.save({ apiKey: '  synthetic-brave-secret  ' });
-    assert.equal(service.tools().length, 1);
+    assert.equal((await service.tools()).length, 1);
     service.save({ provider: 'tavily', apiKey: 'synthetic-tavily-secret' });
     service.save({ enabled: false }); service.save({ provider: 'brave', apiKey: '' });
-    assert.deepEqual(service.tools(), []);
+    assert.deepEqual(await service.tools(), []);
     assert.equal(lstatSync(path).mode & 0o777, 0o600);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { enabled: false, provider: 'brave',
       apiKeys: { brave: 'synthetic-brave-secret', tavily: 'synthetic-tavily-secret' } });
     const reopened = new SearchService(path, { env: () => undefined });
-    assert.deepEqual(reopened.settings(), service.settings()); reopened.close();
-    assert.doesNotMatch(JSON.stringify(service.settings()), /synthetic-.*-secret/);
+    assert.deepEqual(await reopened.settings(), await service.settings()); reopened.close();
+    assert.doesNotMatch(JSON.stringify(await service.settings()), /synthetic-.*-secret/);
     for (const invalid of [{}, { provider: 'unknown' }, { enabled: 'true' }, { apiKey: 'bad\nheader' }, { apiKey: null }, { enabled: true, extra: 1 }]) {
       assert.throws(() => service.save(invalid));
     }
     const before = readFileSync(path, 'utf8');
     mkdirSync(`${path}.tmp`);
     assert.throws(() => service.save({ enabled: true, apiKey: 'failed-write-secret' }));
-    assert.equal(service.settings().enabled, false); assert.equal(readFileSync(path, 'utf8'), before);
+    assert.equal((await service.settings()).enabled, false); assert.equal(readFileSync(path, 'utf8'), before);
     rmSync(`${path}.tmp`, { recursive: true });
     writeFileSync(join(root, 'invalid.json'), '{broken');
     assert.throws(() => new SearchService(join(root, 'invalid.json'), { env: () => undefined }));
@@ -55,16 +207,16 @@ test('environment credentials remain private, saved keys take precedence, and se
     keys.push(new Headers(options?.headers).get('x-api-key')!); return Response.json({ results: [] });
   }, (name) => name === 'EXA_API_KEY' ? 'synthetic-env-secret' : name === 'OPENROUTER_API_KEY' ? 'private-model-secret' : undefined);
   try {
-    assert.equal(service.settings().providers.find((entry) => entry.id === 'exa')?.configured, 'environment');
+    assert.equal((await service.settings()).providers.find((entry) => entry.id === 'exa')?.configured, 'environment');
     service.save({ provider: 'exa' });
     await service.test({ query: 'documentation' });
-    assert.equal(service.settings().enabled, false, 'manual testing must not enable Agent search');
+    assert.equal((await service.settings()).enabled, false, 'manual testing must not enable Agent search');
     service.save({ apiKey: 'synthetic-saved-secret' }); await service.test({ query: 'documentation' });
     assert.deepEqual(keys, ['synthetic-env-secret', 'synthetic-saved-secret']);
     service.save({ provider: 'tavily', enabled: true });
-    assert.deepEqual(service.tools(), []);
+    assert.deepEqual(await service.tools(), []);
     assert.throws(() => service.test({ query: 'documentation' }), /API Key/);
-    assert.equal(keys.length, 2); assert.doesNotMatch(JSON.stringify(service.settings()), /secret/);
+    assert.equal(keys.length, 2); assert.doesNotMatch(JSON.stringify(await service.settings()), /secret/);
   } finally { close(); }
 });
 
@@ -214,11 +366,11 @@ test('disable, shutdown and parent cancellation abort active Agent searches; dis
     }));
     try {
       service.save({ provider: 'tavily', apiKey: 'synthetic-private-secret', enabled: true });
-      const tool = service.tools()[0]!, controller = new AbortController();
+      const tool = (await service.tools())[0]!, controller = new AbortController();
       const pending = tool.execute('cancel', { query: 'docs' }, controller.signal); await ready;
       if (action === 'disable') service.save({ enabled: false }); else if (action === 'shutdown') service.close(); else controller.abort();
       await assert.rejects(pending, /取消/);
-      if (action === 'disable') { assert.deepEqual(service.tools(), []); await assert.rejects(tool.execute('later', { query: 'docs' }), /关闭/); }
+      if (action === 'disable') { assert.deepEqual(await service.tools(), []); await assert.rejects(tool.execute('later', { query: 'docs' }), /关闭/); }
     } finally { close(); }
   }
 });
@@ -231,49 +383,63 @@ test('running tools keep their selected provider/key; new runs receive updated c
     return Response.json(provider === 'brave' ? { type: 'search', query: { original: 'docs' }, web: { results: [] } } : { results: [] });
   });
   try {
-    service.save({ enabled: true, apiKey: 'original-brave-secret' }); const previous = service.tools()[0]!;
+    service.save({ enabled: true, apiKey: 'original-brave-secret' }); const previous = (await service.tools())[0]!;
     service.save({ provider: 'tavily', apiKey: 'new-tavily-secret' });
-    await previous.execute('old', { query: 'docs' }); await service.tools()[0]!.execute('new', { query: 'docs' });
+    await previous.execute('old', { query: 'docs' }); await (await service.tools())[0]!.execute('new', { query: 'docs' });
     assert.deepEqual(calls, [{ provider: 'brave', key: 'original-brave-secret' }, { provider: 'tavily', key: 'Bearer new-tavily-secret' }]);
   } finally { close(); }
 });
 
-test('a DeepSeek teaching model calls ordinary web_search, receives citations, and retains only source metadata', async () => {
-  const db = openDatabase(':memory:'), model = { ...teachingModel, id: 'deepseek-chat', provider: 'deepseek' };
-  const selection = { provider: 'deepseek', model: 'deepseek-chat', thinkingLevel: 'high' as const };
-  let searches = 0, turns = 0;
-  const { service, close } = fixture(async (_url, options) => {
-    searches++; assert.equal(new Headers(options?.headers).get('Authorization'), 'Bearer synthetic-search-secret');
-    return Response.json({ results: [{ title: 'Rust Book', url: 'https://doc.rust-lang.org/book/', content: 'TRANSIENT-SEARCH-EVIDENCE' }] });
-  });
-  const runtime = new TeachingRuntime(new Learning(db), { current: () => ({ selection, model }), resolve: () => model }, {
-    search: service, stream: (current, context) => {
-      assert.equal(current.provider, 'deepseek'); assert.doesNotMatch(JSON.stringify(context), /synthetic-search-secret/);
-      const system = context.messages.find((entry) => entry.role === 'system'); assert.ok(system?.role === 'system');
-      if (++turns === 3) {
-        assert.ok(!system.toolsAdded?.some((tool) => tool.name === 'web_search'));
-        return response({ ...reply([{ type: 'text', text: 'Search is disabled.' }]), provider: model.provider, model: model.id });
+for (const provider of ['tavily', 'gemini'] as const) {
+  test(`a DeepSeek teaching model calls ${provider} through ordinary web_search and retains only source metadata`, async () => {
+    const db = openDatabase(':memory:'), model = { ...teachingModel, id: 'deepseek-chat', provider: 'deepseek' };
+    const selection = { provider: 'deepseek', model: 'deepseek-chat', thinkingLevel: 'high' as const };
+    let searches = 0, turns = 0;
+    const { service, close } = fixture(async (url, options) => {
+      searches++;
+      const headers = new Headers(options?.headers);
+      assert.equal(headers.get(provider === 'gemini' ? 'x-goog-api-key' : 'Authorization'),
+        provider === 'gemini' ? 'synthetic-search-secret' : 'Bearer synthetic-search-secret');
+      if (provider === 'gemini') {
+        assert.equal(String(url), 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent');
+        return Response.json({ candidates: [{ content: { parts: [{ text: 'TRANSIENT-SEARCH-ANSWER' }] },
+          groundingMetadata: { groundingChunks: [{ web: { title: 'Rust Book', uri: 'https://doc.rust-lang.org/book/' } }] } }] });
       }
-      assert.ok(system.toolsAdded?.some((tool) => tool.name === 'web_search'));
-      if (turns === 1) return response({ ...reply([{ type: 'toolCall', id: 'search-1', name: 'web_search', arguments: { query: 'Rust ownership', count: 2 } }], 'toolUse'), provider: model.provider, model: model.id });
-      const result = context.messages.find((entry) => entry.role === 'toolResult' && entry.toolName === 'web_search'); assert.ok(result?.role === 'toolResult');
-      assert.equal(result.isError, false); assert.match(JSON.stringify(result.content), /TRANSIENT-SEARCH-EVIDENCE/);
-      return response({ ...reply([{ type: 'text', text: 'See the [Rust Book](https://doc.rust-lang.org/book/).' }]), provider: model.provider, model: model.id });
-    },
+      return Response.json({ results: [{ title: 'Rust Book', url: 'https://doc.rust-lang.org/book/', content: 'TRANSIENT-SEARCH-EVIDENCE' }] });
+    });
+    const runtime = new TeachingRuntime(new Learning(db), { current: () => ({ selection, model }), resolve: () => model }, {
+      search: service, stream: (current, context) => {
+        assert.equal(current.provider, 'deepseek'); assert.equal(current.id, 'deepseek-chat');
+        assert.doesNotMatch(JSON.stringify(context), /synthetic-search-secret/);
+        const system = context.messages.find((entry) => entry.role === 'system'); assert.ok(system?.role === 'system');
+        if (++turns === 3) {
+          assert.ok(!system.toolsAdded?.some((tool) => tool.name === 'web_search'));
+          return response({ ...reply([{ type: 'text', text: 'Search is disabled.' }]), provider: model.provider, model: model.id });
+        }
+        assert.ok(system.toolsAdded?.some((tool) => tool.name === 'web_search'));
+        if (turns === 1) return response({ ...reply([{ type: 'toolCall', id: 'search-1', name: 'web_search', arguments: { query: 'Rust ownership', count: 2 } }], 'toolUse'), provider: model.provider, model: model.id });
+        const result = context.messages.find((entry) => entry.role === 'toolResult' && entry.toolName === 'web_search'); assert.ok(result?.role === 'toolResult');
+        assert.equal(result.isError, false);
+        assert.match(JSON.stringify(result.content), provider === 'gemini' ? /TRANSIENT-SEARCH-ANSWER/ : /TRANSIENT-SEARCH-EVIDENCE/);
+        return response({ ...reply([{ type: 'text', text: 'See the [Rust Book](https://doc.rust-lang.org/book/).' }]), provider: model.provider, model: model.id });
+      },
+    });
+    try {
+      await service.save({ enabled: true, provider, apiKey: 'synthetic-search-secret' });
+      const space = runtime.createSpace(randomUUID(), { name: 'Search', goal: 'Find Rust documentation.' }), run = space.runs[0]!;
+      await runtime.idle(run.id); assert.equal(runtime.get(space.id, run.id).state, 'succeeded'); assert.equal(searches, 1);
+      const native = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
+      assert.match(native, /omitted/); assert.doesNotMatch(native, /TRANSIENT-SEARCH-(EVIDENCE|ANSWER)|synthetic-search-secret/);
+      const manifests = db.prepare('SELECT value FROM context_manifests ORDER BY request').all() as { value: string }[];
+      const sources = JSON.parse(manifests[1]!.value).toolSources[0].sources;
+      assert.doesNotMatch(JSON.stringify(manifests), /TRANSIENT-SEARCH-(EVIDENCE|ANSWER)|synthetic-search-secret/);
+      assert.equal(sources[0].kind, 'web'); assert.equal(sources[0].provider, provider); assert.equal(sources[0].url, 'https://doc.rust-lang.org/book/');
+      assert.equal(sources[0].title, 'Rust Book');
+      assert.equal(sources[0].hash, createHash('sha256').update(provider === 'gemini' ? 'TRANSIENT-SEARCH-ANSWER' : 'TRANSIENT-SEARCH-EVIDENCE').digest('hex'));
+      assert.ok(runtime.events(space.id, run.id).events.some((entry) => entry.data.type === 'tool' && entry.data.name === 'web_search' && entry.data.phase === 'end' && !entry.data.failed));
+      await service.save({ enabled: false });
+      const second = runtime.createSpace(randomUUID(), { name: 'No search', goal: 'Answer without search.' });
+      await runtime.idle(second.runs[0]!.id); assert.equal(searches, 1); assert.equal(turns, 3);
+    } finally { await runtime.close(); db.close(); close(); }
   });
-  try {
-    service.save({ enabled: true, provider: 'tavily', apiKey: 'synthetic-search-secret' });
-    const space = runtime.createSpace(randomUUID(), { name: 'Search', goal: 'Find Rust documentation.' }), run = space.runs[0]!;
-    await runtime.idle(run.id); assert.equal(runtime.get(space.id, run.id).state, 'succeeded'); assert.equal(searches, 1);
-    const native = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
-    assert.match(native, /omitted/); assert.doesNotMatch(native, /TRANSIENT-SEARCH-EVIDENCE|synthetic-search-secret/);
-    const manifests = db.prepare('SELECT value FROM context_manifests ORDER BY request').all() as { value: string }[];
-    const sources = JSON.parse(manifests[1]!.value).toolSources[0].sources;
-    assert.equal(sources[0].kind, 'web'); assert.equal(sources[0].provider, 'tavily'); assert.equal(sources[0].url, 'https://doc.rust-lang.org/book/');
-    assert.equal(sources[0].title, 'Rust Book'); assert.match(sources[0].hash, /^[a-f0-9]{64}$/);
-    assert.ok(runtime.events(space.id, run.id).events.some((entry) => entry.data.type === 'tool' && entry.data.name === 'web_search' && entry.data.phase === 'end' && !entry.data.failed));
-    service.save({ enabled: false });
-    const second = runtime.createSpace(randomUUID(), { name: 'No search', goal: 'Answer without search.' });
-    await runtime.idle(second.runs[0]!.id); assert.equal(searches, 1); assert.equal(turns, 3);
-  } finally { await runtime.close(); db.close(); close(); }
-});
+}

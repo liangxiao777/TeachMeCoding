@@ -16,6 +16,7 @@ import { Executions } from './modules/executions.js';
 import { McpService } from './extensions/mcp.js';
 import { SkillService } from './extensions/skills.js';
 import { SearchService } from './extensions/search.js';
+import { codexAuthSource } from './extensions/codex-search.js';
 
 try {
   const config = serverConfig();
@@ -23,9 +24,10 @@ try {
   const data = openDataDirectory(dataDirectory());
   const access = createLocalAccess(config);
   const env = serverEnvironment();
+  const credentials = new FileCredentialStore(join(data.root, 'credentials.json'));
   let models: ModelService | null = null;
   try {
-    models = new ModelService(data.db, { env, credentials: new FileCredentialStore(join(data.root, 'credentials.json')), fallback: defaultModel(env) });
+    models = new ModelService(data.db, { env, credentials, fallback: defaultModel(env) });
     await models.refresh();
   } catch { /* Missing or unreadable model configuration must not block saved learning data. */ }
   let mcp: McpService | undefined, skills: SkillService | undefined, search: SearchService | undefined;
@@ -33,7 +35,9 @@ try {
   catch { /* Invalid MCP files remain untouched and their settings API reports unavailable. */ }
   try { skills = new SkillService(data.db, data.root); }
   catch { /* Preserve unreadable Skills configuration, rather than resetting it. */ }
-  try { search = new SearchService(join(data.root, 'search.json'), { env }); }
+  try { search = new SearchService(join(data.root, 'search.json'), { env,
+    ...(models ? { codex: codexAuthSource(models.models, credentials) } : {}),
+  }); }
   catch { /* Invalid search configuration must not block learning or other settings. */ }
   const learning = new Learning(data.db);
   const projects = new Projects(data.root);

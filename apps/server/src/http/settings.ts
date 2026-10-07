@@ -21,8 +21,8 @@ export function settingsApi(models?: ModelService, mcp?: McpService, skills?: Sk
     }
     await next();
   });
-  api.get('/settings/search', (c) => c.json(search!.settings()));
-  api.post('/settings/search', async (c) => c.json(search!.save(await c.req.json())));
+  api.get('/settings/search', async (c) => c.json(await search!.settings()));
+  api.post('/settings/search', async (c) => c.json(await search!.save(await c.req.json())));
   api.post('/settings/search/test', async (c) => c.json(await search!.test(await c.req.json(), c.req.raw.signal)));
   api.get('/settings/mcp', (c) => c.json(mcp!.settings()));
   api.post('/settings/mcp', async (c) => c.json(await mcp!.save(await c.req.json())));

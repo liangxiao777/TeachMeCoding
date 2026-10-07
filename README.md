@@ -40,13 +40,28 @@ pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 AP
 
 ## 搜索服务
 
-在「设置 → 搜索服务」中开启独立总开关，选择 Brave Search、Tavily 或 Exa 并保存 API Key。默认关闭；搜索服务不绑定教学模型，DeepSeek 等支持工具调用的模型也通过普通 `web_search` 工具使用它。不自动选择其他服务或在失败后回退。服务端可从 `BRAVE_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY` 读取凭据；设置页保存的密钥优先，模型凭据不会被当作搜索凭据。
+在「设置 → 搜索服务」中选择服务商并开启独立总开关，默认关闭。现支持 14 个服务：Brave Search、Tavily、Exa、Firecrawl、Parallel、Perplexity Search、MiniMax Search、Gemini、Grok、Kimi、Codex Hosted Search、DuckDuckGo、Firecrawl Free、Ollama Web Search。所有服务都通过普通 `web_search` 工具提供给教学 Agent，DeepSeek 等支持工具调用的教学模型无需更换。不自动选择其他服务或在失败后回退。
 
-开关直接保存，关闭时保留配置，阻止后续内置搜索调用并取消正在执行的搜索请求；不保证服务商撤销已接收的请求或费用，也不关闭 MCP、Skills 或其他联网路径。服务商与密钥在每次 Agent 运行开始时固定，修改用于新运行。凭据及配置原子保存在数据目录的 `search.json`（600），读取设置只返回配置状态，不返回密钥；输入留空保留当前服务的凭据，切换服务不会覆盖其他服务的密钥。损坏配置不会自动重建，也不阻止其他设置和学习数据读取。
+- DuckDuckGo、Firecrawl Free 无需 API Key；Free 模式不会发送付费 Firecrawl 凭据。匿名搜索仍可能限流、遇到验证码或受上游可用性影响。
+- Codex Hosted Search 使用「登录 Codex」的 ChatGPT OAuth，复用模型设置中的同一账号，不改变教学模型选择。退出会移除该账号凭据，也会影响使用该账号的 Codex 教学模型。
+- 其他服务使用各自的 API Key。Gemini、Grok、Kimi 可独立配置搜索模型；MiniMax、Kimi 可选择全球或中国服务区域。Ollama 使用 `ollama.com/api/web_search` 托管服务，不调用本地 Ollama 模型或守护进程。MiniMax Search 需要支持搜索接口的 Coding Plan 凭据。
+- 服务端环境变量为 `BRAVE_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`、`FIRECRAWL_API_KEY`、`PARALLEL_API_KEY`、`PERPLEXITY_API_KEY`、`GEMINI_API_KEY`、`XAI_API_KEY`、`OLLAMA_API_KEY`。MiniMax 按顺序读取 `MINIMAX_CODE_PLAN_KEY`、`MINIMAX_CODING_API_KEY`、`MINIMAX_OAUTH_TOKEN`、`MINIMAX_API_KEY`；Kimi 优先 `KIMI_API_KEY`，其次 `MOONSHOT_API_KEY`。设置页保存的密钥优先；不借用教学模型的凭据，也不自动读取本机 Codex 登录文件。
 
-「保存配置」不调用服务商。「测试搜索」使用已保存配置查询「Rust 官方文档」，直接调用同一搜索适配器、显示结果链接与耗时，不调用教学模型；即使 Agent 搜索关闭也可手动测试。测试与 Agent 搜索都可能产生服务费用，查询会发送给所选服务商；请勿在查询中包含凭据或不宜发送的私人信息。搜索不是全文抓取：默认返回 5 条、最多 10 条带标题和 URL 的结果片段，按上游顺序保留，作为不可信外部材料提供给 Agent，并提示引用来源链接。工具正文仅保留在当前运行，后续请求清单记录来源 URL、标题、时间与片段 hash，不额外持久化整份检索正文。
+开关直接保存，关闭时保留配置，阻止后续内置搜索调用并取消正在执行的搜索请求；不保证服务商撤销已接收的请求或费用，也不关闭 MCP、Skills 或其他联网路径。服务商、搜索模型、区域和 API Key 在每次 Agent 运行开始时固定，修改用于新运行；Codex OAuth 在调用时检查。API Key 及搜索配置原子保存在数据目录的 `search.json`（600），OAuth 使用已有服务端凭据存储。读取设置只返回配置状态，不返回密钥；输入留空保留当前服务的凭据，切换服务不会覆盖其他服务的配置。损坏配置不会自动重建，也不阻止其他设置和学习数据读取。
 
-HTTP 适配参考 [OpenClaw 的普通搜索工具](https://github.com/openclaw/openclaw/blob/6693bb9665ced2a4fea3e286f62acfd0116e2c72/src/agents/tools/web-search.ts)：固定 HTTPS 服务端点、禁止重定向、30 秒超时、响应大小与片段长度限制、取消传播和安全错误。不复用其插件宿主，不注入当前模型的原生搜索，不自动重试或缓存结果。Codex 等独立搜索任务及其他 Provider 尚未接入。
+「保存配置」不调用服务商。「测试搜索」使用已保存配置查询「Rust 官方文档」，直接调用同一搜索适配器、显示结果链接与耗时，不调用教学模型；即使 Agent 搜索关闭也可手动测试。测试与 Agent 搜索都可能产生服务费用，查询会发送给所选服务商；请勿在查询中包含凭据或不宜发送的私人信息。搜索不是全文抓取：默认返回 5 条、最多 10 条带标题和 URL 的结果片段，按上游顺序保留；Gemini、Grok、Kimi、Codex 返回有搜索依据的回答及可用来源。回答和片段作为不可信外部材料提供给 Agent，设置页只显示文本，不执行 HTML 或 Markdown 中的图片。工具正文仅保留在当前运行，后续请求清单记录来源 URL、标题、时间与正文 hash，不额外持久化整份检索正文。
+
+适配参考 [OpenClaw 的普通搜索工具](https://github.com/openclaw/openclaw/blob/6693bb9665ced2a4fea3e286f62acfd0116e2c72/src/agents/tools/web-search.ts)：固定 HTTPS 服务端点、禁止 HTTP 重定向、30 秒总期限、1 MiB 响应／协议输出限制、取消传播和安全错误。Kimi 的工具重放最多三轮，共用一个期限。不复用 OpenClaw 插件宿主，不注入当前教学模型的原生搜索，不自动重试或缓存结果。
+
+Codex 通过固定版本 `@openai/codex@0.160.0` 的 app-server 执行独立 hosted-search 任务，使用私有临时 HOME、最小环境和无本地执行环境的只读线程；禁用命令、文件修改、MCP、插件及额外 Agent，检查实际搜索完成后才接受回答，调用结束清理进程组及临时目录。这些是能力限制，不是完整操作系统隔离；当前不支持 Windows。协议和取消流程由离线 fixture 覆盖，并验证了真实二进制的初始化及受限线程创建；付费服务和真实 OAuth 搜索仍需用有效账号实测。
+
+## 网页抓取
+
+Agent 默认提供模型无关的 `web_fetch`，用于读取已知公开网址或进一步读取搜索结果。与 [OpenClaw 的网页抓取工具](https://github.com/openclaw/openclaw/blob/6693bb9665ced2a4fea3e286f62acfd0116e2c72/src/agents/tools/web-fetch.ts) 一样，直接抓取不需要搜索 API Key，不受 `web_search` 开关约束。参数为 `url`、`extractMode`（`markdown` 或 `text`，默认 Markdown）和 `maxChars`（100–20,000，默认 20,000，包含不可信内容边界标记）。本次没有新增设置项。
+
+只执行 HTTP(S) GET，不传递模型凭据、应用凭据或 Cookie。HTML 使用 Readability 提取正文，失败时读取本地清理后的 HTML，保留代码块与安全来源链接；也支持 Markdown、纯文本及 JSON。返回原始／最终 URL、标题、状态、格式、时间、截断标记和有界正文。下载最多 750,000 字节，超过时只提取前缀并明确警告；最多 3 次重定向，每一跳重新验证地址。30 秒网络期限覆盖 DNS、连接、重定向与正文读取；停止 Agent 或关闭应用会取消请求，不返回取消后的成功结果。不执行 JavaScript、登录或 PDF 提取，不调用付费抓取服务，不自动重试、缓存或写入正文临时文件。
+
+拒绝本机、内网、元数据、保留地址及 IPv6 转换／隧道地址；DNS 的全部结果均须通过校验，再固定到 Undici 连接的 lookup 中，避免连接时重新解析导致 DNS 重绑定。使用直接连接，不委托环境代理解析目标地址；依赖代理或 fake-IP 网络的部署可能无法抓取。网页及其元数据是不可信外部资料，不能改变 Agent 指令或确认规则；工具正文只用于当前运行，持久化沿用正文省略规则，仅在来源清单记录 URL、标题、时间与 hash。不要把私人资料或凭据放进 URL／查询参数。
 
 ## MCP 与 Skills
 

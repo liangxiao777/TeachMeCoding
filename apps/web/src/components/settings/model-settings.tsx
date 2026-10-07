@@ -30,7 +30,7 @@ function ProviderAuth({ provider }: { provider: ProviderSummary }) {
   return <Badge variant="outline" className="font-normal text-muted-foreground">未配置凭据</Badge>
 }
 
-function LoginFlow({ session, onAnswer, onCancel, answering }: {
+export function LoginFlow({ session, onAnswer, onCancel, answering }: {
   session: LoginSession
   onAnswer: (promptId: string, value: string) => void
   onCancel: () => void
@@ -169,7 +169,11 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
       }
     }).catch((error: unknown) => { setLoadError(error instanceof Error ? error.message : '无法读取模型设置。') })
   }, [])
-  useEffect(load, [load])
+  useEffect(() => {
+    if (!active) return
+    if (!settings) load()
+    else void refresh().catch((error: unknown) => { setSaveError(error instanceof Error ? error.message : '无法读取模型设置。') })
+  }, [active, load, refresh])
 
   useEffect(() => {
     if (!provider) return

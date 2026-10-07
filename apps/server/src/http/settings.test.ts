@@ -216,12 +216,12 @@ test('search settings and diagnostics work without a model, protect every route 
     }
     const tested = await post('/test', { query: 'Rust references', count: 2 }); assert.equal(tested.status, 200);
     assert.deepEqual((await tested.json()).results, [{ title: 'Rust reference', url: 'https://doc.rust-lang.org/reference/', snippet: 'Language reference' }]);
-    assert.equal(search.settings().enabled, false); assert.equal(requests, 1);
+    assert.equal((await search.settings()).enabled, false); assert.equal(requests, 1);
     failed = true;
     const failure = await post('/test', { query: 'Rust references', count: 2 }); assert.equal(failure.status, 503);
     assert.doesNotMatch(await failure.text(), /synthetic-search-secret|reflected/);
-    assert.equal((await post('', { enabled: true })).status, 200); assert.equal(search.tools().length, 1);
-    assert.equal((await post('', { enabled: false })).status, 200); assert.deepEqual(search.tools(), []);
+    assert.equal((await post('', { enabled: true })).status, 200); assert.equal((await search.tools()).length, 1);
+    assert.equal((await post('', { enabled: false })).status, 200); assert.deepEqual(await search.tools(), []);
     assert.doesNotMatch(await (await app.request('/api/settings/search', { headers })).text(), /synthetic-search-secret/);
     assert.equal((await createApp(access, undefined, undefined, undefined, undefined, new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root }))
       .request('/api/settings/search', { headers })).status, 503);
