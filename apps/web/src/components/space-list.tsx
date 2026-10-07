@@ -55,8 +55,9 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
           </PromptInputFooter>
       </PromptInput>
       <div className="startup-examples flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
+        <span className="text-[13px] text-muted-foreground">试一试：</span>
         {EXAMPLES.map((ex) => (
-          <Suggestion key={ex.goal} suggestion={ex.goal} aria-label={ex.goal} variant="ghost" className="startup-example" disabled={busy} onClick={start}>
+          <Suggestion key={ex.goal} suggestion={ex.goal} aria-label={ex.goal} variant="ghost" className="startup-example" disabled={busy} onClick={setText}>
             {ex.label}
             <ArrowUpRight className="size-3" aria-hidden />
           </Suggestion>

@@ -129,15 +129,54 @@ test('startup light moves without moving content, softens while writing and resp
   await page.screenshot({ path: `.amp/in/artifacts/startup-dark-mobile-${info.project.name}.png` });
 });
 
-test('short example labels still submit the complete selected goal', async ({ page }) => {
-  await page.goto('/preview');
-  const input = page.getByRole('textbox', { name: '你想学什么', exact: true });
-  await input.fill('不要提交这条未发送的草稿');
-  await page.getByRole('button', { name: '我想用 PyTorch 训练一个图像分类模型', exact: true }).click();
-  await expect(page.getByText('我想用 PyTorch 训练一个图像分类模型', { exact: true })).toBeVisible();
-  await expect(page.getByText('不要提交这条未发送的草稿', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.startup-field')).toHaveCount(0);
-});
+for (const mode of ['preview', 'persistent'] as const) {
+  test(`startup examples only fill the complete goal until manual submission (${mode})`, async ({ page }, info) => {
+    const mutations: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() !== 'GET' && new URL(request.url()).pathname.startsWith('/api/')) mutations.push(new URL(request.url()).pathname);
+    });
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.goto(mode === 'preview' ? '/preview' : '/');
+    const url = page.url();
+    const input = page.getByRole('textbox', { name: '你想学什么', exact: true });
+    const start = page.getByRole('button', { name: '开始', exact: true });
+    await expect(page.locator('.startup-examples').getByText('试一试：', { exact: true })).toBeVisible();
+    await expect(start).toBeDisabled();
+    if (mode === 'persistent') await page.screenshot({ path: `.amp/in/artifacts/startup-suggestions-default-${info.project.name}.png`, animations: 'disabled' });
+    await input.fill('不要提交这条未发送的草稿');
+    for (const goal of ['我想学习 Rust，最后能写一个命令行工具', '我想用 PyTorch 训练一个图像分类模型', '我想学会用 Go 写后端服务']) {
+      await page.getByRole('button', { name: goal, exact: true }).click();
+      await expect(input).toHaveValue(goal);
+      await expect(start).toBeEnabled();
+      await expect(page).toHaveURL(url);
+      await expect(page.getByRole('heading', { name: '今天你想学习什么?' })).toBeVisible();
+    }
+    if (mode === 'persistent') {
+      await page.screenshot({ path: `.amp/in/artifacts/startup-suggestions-filled-${info.project.name}.png`, animations: 'disabled' });
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: `.amp/in/artifacts/startup-suggestions-mobile-${info.project.name}.png`, animations: 'disabled' });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
+    expect(mutations).toEqual([]);
+    const editedGoal = '我想学会用 Go 写后端服务，先实现一个健康检查接口';
+    await input.fill(editedGoal);
+    if (mode === 'preview') await start.click();
+    else {
+      const creation = page.waitForRequest((request) => request.method() === 'POST' && new URL(request.url()).pathname === '/api/spaces');
+      await input.press('Enter');
+      expect((await creation).postDataJSON()).toMatchObject({ goal: editedGoal });
+    }
+    await expect(page.locator('.startup-field')).toHaveCount(0);
+    if (mode === 'preview') {
+      await expect(page.getByText(editedGoal, { exact: true })).toBeVisible();
+      expect(mutations).toEqual([]);
+    } else {
+      await expect(page.getByRole('textbox', { name: '学习空间名称', exact: true })).toHaveValue(editedGoal);
+      expect(mutations).toEqual(['/api/spaces']);
+    }
+  });
+}
 
 test('explicit preview creates a space only after a goal and confirms edited requirements', async ({ page }, info) => {
   const businessRequests: string[] = [];
