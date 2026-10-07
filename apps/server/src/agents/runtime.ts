@@ -17,8 +17,8 @@ import { sealToolCalls } from '../storage/agent-messages.js';
 import type { McpService } from '../extensions/mcp.js';
 import type { SkillService } from '../extensions/skills.js';
 import type { SearchService } from '../extensions/search.js';
-import { createWebFetchTool, type WebFetchOptions } from '../extensions/web-fetch.js';
-import { readTools } from './read-tools.js';
+import type { WebFetchOptions } from '../extensions/web-fetch.js';
+import { prepareTools } from './tools.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -287,16 +287,12 @@ export class TeachingRuntime {
       }
       const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
       const skills = this.options.skills?.snapshot(text);
-      const external = await this.options.mcp?.tools(entry.controller.signal) ?? [];
+      const prepared = await prepareTools({ scenarioTools: scenario.tools,
+        cwd: () => this.options.projectDirectory?.(space) ?? process.cwd(), hasSkills: !!skills?.skills.length,
+        mcp: this.options.mcp, search: this.options.search, webFetch: this.options.webFetch, signal: entry.controller.signal });
       if (!active(this.get(space, id))) return;
-      const skillReads = skills?.skills.length ? readTools(this.options.projectDirectory?.(space) ?? process.cwd())
-        .filter((tool) => !scenario.tools.some((existing) => existing.name === tool.name)) : [];
-      const searchTools = await this.options.search?.tools(entry.controller.signal) ?? [];
-      if (!active(this.get(space, id))) return;
-      const availableTools = [...scenario.tools, ...skillReads, ...external, ...searchTools, createWebFetchTool(this.options.webFetch)];
-      const tools = availableTools.map(({ name, description, parameters, outputSchema }) => ({ name, description, parameters, ...(outputSchema ? { outputSchema } : {}) }));
       const agent = new Agent({
-        initialState: { model: choice.model, tools: availableTools, thinkingLevel: choice.selection.thinkingLevel },
+        initialState: { model: choice.model, tools: prepared.tools, thinkingLevel: choice.selection.thinkingLevel },
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
         beforeToolCall: async () => {
           if (failure) return { block: true, reason: failure, terminate: true };
@@ -310,12 +306,12 @@ export class TeachingRuntime {
           try {
             request++;
             if (!active(this.get(space, id))) return failureStream(model, '运行已停止。', true);
-            const compiled = compileRequest(frozen, history, context.messages, tools, skills?.prompt);
+            const compiled = compileRequest(frozen, history, context.messages, prepared.declarations, skills?.prompt);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
               model: choice.model.id, provider: choice.model.provider, thinkingLevel: choice.selection.thinkingLevel,
               modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
-              extensions: { skills: skills?.digest ?? null, mcpTools: external.map((tool) => tool.name) },
-              toolSources, actualUsage: null };
+              extensions: { skills: skills?.digest ?? null, mcpTools: prepared.inventory.filter((tool) => tool.source === 'mcp').map((tool) => tool.name) },
+              toolInventory: prepared.inventory, toolSources, actualUsage: null };
             this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
             if (this.options.debugDirectory) {
               mkdirSync(this.options.debugDirectory, { recursive: true, mode: 0o700 });

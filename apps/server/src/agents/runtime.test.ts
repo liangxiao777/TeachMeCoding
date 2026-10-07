@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
@@ -13,6 +13,9 @@ import { openDataDirectory } from '../storage/data-directory.js';
 import { createApp } from '../http/app.js';
 import { createLocalAccess } from '../http/local-access.js';
 import { serverConfig } from '../config/server.js';
+import { McpService } from '../extensions/mcp.js';
+import { SearchService } from '../extensions/search.js';
+import { SkillService } from '../extensions/skills.js';
 import { TeachingRuntime } from './runtime.js';
 import { providerStream } from './model.js';
 import type { ModelSelection } from '@teach-me-coding/contracts';
@@ -484,4 +487,113 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
       await runtime.close(); db.close();
     }
   }
+});
+
+test('tool name conflicts fail before requesting a model, executing tools or committing a scene', async () => {
+  for (const source of ['scenario', 'web-fetch'] as const) {
+    const { db, learning, a, sa } = setup();
+    const requirement = structuredClone(learning.space(a.id).requirement);
+    let requests = 0, executions = 0, commits = 0;
+    const first: AgentTool = { name: source === 'scenario' ? 'duplicate_scene' : 'web_fetch', label: 'First',
+      description: 'PRIVATE-FIRST-DESCRIPTION', parameters: Type.Object({ path: Type.String() }),
+      async execute() { executions++; return { content: [], details: {} }; } };
+    const second: AgentTool = { ...first, label: 'Second', parameters: Type.Object({ count: Type.Integer() }) };
+    const runtime = new TeachingRuntime(learning, syntheticSource, {
+      scenario: () => ({ tools: source === 'scenario' ? [first, second] : [first], commit() { commits++; } }),
+      projectDirectory: () => { assert.fail('Without Skills, assembly must not resolve a project directory.'); },
+      stream: () => { requests++; return response(reply([{ type: 'text', text: 'Must not start.' }])); },
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('assemble conflicting tools'));
+      await runtime.idle(run.id);
+      const failed = runtime.get(a.id, run.id);
+      assert.equal(failed.state, 'failed');
+      assert.ok(failed.error?.includes(first.name) && failed.error.includes(`scenario / ${source}`));
+      assert.doesNotMatch(failed.error!, /PRIVATE-FIRST-DESCRIPTION/);
+      assert.deepEqual({ requests, executions, commits }, { requests: 0, executions: 0, commits: 0 });
+      assert.equal(db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM context_manifests').get()!.n, 0);
+      assert.deepEqual(learning.space(a.id).requirement, requirement);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('each request records the same run tool inventory while provider selection happens only once', async () => {
+  const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), 'tmc-tool-inventory-'));
+  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+  const search = new SearchService(join(root, 'search.json'), { env: () => undefined });
+  const skills = new SkillService(db, root), skill = join(skills.directory, 'inventory-fixture');
+  mkdirSync(skill);
+  writeFileSync(join(skill, 'SKILL.md'), '---\nname: inventory-fixture\ndescription: Inspect the fixture tools.\n---\nPRIVATE-SKILL-BODY');
+  let mcpSelections = 0, searchSelections = 0, requests = 0, executions = 0, commits = 0;
+  const read: AgentTool = { name: 'read', label: 'Fixture read', description: 'PRIVATE-READ-DESCRIPTION', parameters: Type.Object({ path: Type.String() }),
+    async execute() { assert.fail('The fixture never requests read.'); } };
+  const mcpTool: AgentTool = { name: 'mcp__fixture__subtract', label: 'Subtract', description: 'PRIVATE-MCP-DESCRIPTION',
+    parameters: Type.Object({ left: Type.Number(), right: Type.Number() }), outputSchema: Type.Object({ difference: Type.Number() }),
+    async execute() { executions++; return { content: [{ type: 'text', text: 'PRIVATE-MCP-BODY' }], structuredContent: { difference: 17 },
+      details: { sources: [{ kind: 'mcp', server: 'fixture', tool: 'subtract' }] } }; } };
+  const searchTool: AgentTool = { name: 'web_search', label: 'Search', description: 'PRIVATE-SEARCH-DESCRIPTION', parameters: Type.Object({ query: Type.String() }),
+    async execute() { executions++; return { content: [{ type: 'text', text: 'PRIVATE-SEARCH-BODY' }],
+      details: { sources: [{ kind: 'web', provider: 'fixture', url: 'https://example.com/docs' }] } }; } };
+  let selectedMcp = [mcpTool], selectedSearch = [searchTool];
+  mcp.tools = async () => { mcpSelections++; return selectedMcp; };
+  search.tools = async () => { searchSelections++; return selectedSearch; };
+  const inventory = [
+    { name: 'read', source: 'scenario' },
+    { name: 'ls', source: 'skills-read' }, { name: 'find', source: 'skills-read' }, { name: 'grep', source: 'skills-read' },
+    { name: 'mcp__fixture__subtract', source: 'mcp' }, { name: 'web_search', source: 'search' }, { name: 'web_fetch', source: 'web-fetch' },
+  ];
+  const runtime = new TeachingRuntime(learning, syntheticSource, { mcp, search, skills,
+    projectDirectory: () => { assert.equal(mcpSelections, 1, 'Resolve the Skills cwd only after MCP selection.'); return root; },
+    scenario: () => ({ tools: [read], commit() { commits++; } }), stream: (_model, context) => {
+      const system = context.messages.find((m) => m.role === 'system'); assert.ok(system?.role === 'system');
+      assert.deepEqual(system.toolsAdded?.map((t) => t.name), inventory.map((t) => t.name));
+      assert.deepEqual(system.toolsAdded?.find((t) => t.name === mcpTool.name), {
+        name: mcpTool.name, description: 'PRIVATE-MCP-DESCRIPTION', parameters: mcpTool.parameters, outputSchema: mcpTool.outputSchema,
+      });
+      requests++;
+      if (requests === 1) {
+        selectedMcp = [{ ...mcpTool, name: 'mcp__fixture__replacement' }]; selectedSearch = [];
+        return response(reply([{ type: 'toolCall', id: 'fixed-mcp', name: mcpTool.name, arguments: { left: 31, right: 14 } }], 'toolUse'));
+      }
+      if (requests === 2) return response(reply([{ type: 'toolCall', id: 'fixed-search', name: 'web_search', arguments: { query: 'public documentation' } }], 'toolUse'));
+      return response(reply([{ type: 'text', text: 'Finished.' }]));
+    } });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('use the selected tools'));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+    assert.deepEqual({ mcpSelections, searchSelections, requests, executions, commits },
+      { mcpSelections: 1, searchSelections: 1, requests: 3, executions: 2, commits: 1 });
+    const manifests = (db.prepare('SELECT value FROM context_manifests ORDER BY request').all() as { value: string }[]).map((row) => JSON.parse(row.value));
+    assert.equal(manifests.length, 3);
+    for (const manifest of manifests) {
+      assert.deepEqual(manifest.toolInventory, inventory);
+      assert.deepEqual(manifest.extensions.mcpTools, ['mcp__fixture__subtract']);
+      assert.equal(typeof manifest.extensions.skills, 'string');
+      assert.doesNotMatch(JSON.stringify(manifest), /PRIVATE-|replacement/);
+    }
+    assert.deepEqual(manifests.map((manifest) => manifest.toolSources.map((s: { callId: string }) => s.callId)),
+      [[], ['fixed-mcp'], ['fixed-mcp', 'fixed-search']]);
+    assert.doesNotMatch(JSON.stringify(db.prepare('SELECT value FROM agent_messages').all()), /PRIVATE-MCP-BODY|PRIVATE-SEARCH-BODY|PRIVATE-SKILL-BODY/);
+  } finally { await Promise.all([runtime.close(), mcp.close(), skills.close()]); search.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('stopping during search tool selection rejects late tools without a model request or commit', async () => {
+  const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), 'tmc-tool-selection-'));
+  const search = new SearchService(join(root, 'search.json'), { env: () => undefined });
+  let enter!: () => void, release!: () => void, requests = 0, commits = 0;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  search.tools = async () => { enter(); await held; return []; };
+  const runtime = new TeachingRuntime(learning, syntheticSource, { search,
+    scenario: () => ({ tools: [], commit() { commits++; } }),
+    stream: () => { requests++; return response(reply([{ type: 'text', text: 'Must not start.' }])); },
+  });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('cancel selection'));
+    await entered; runtime.stop(a.id, run.id); release(); await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
+    assert.deepEqual({ requests, commits }, { requests: 0, commits: 0 });
+    assert.equal(db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM context_manifests').get()!.n, 0);
+  } finally { release(); await runtime.close(); search.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
