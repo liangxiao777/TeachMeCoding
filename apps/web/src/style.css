@@ -216,9 +216,9 @@
 }
 
 .startup-page {
-  --startup-light-strong: light-dark(rgb(0 0 0 / 18%), rgb(255 255 255 / 16%));
-  --startup-light-soft: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 6%));
-  --startup-light-secondary: light-dark(rgb(0 0 0 / 15%), rgb(255 255 255 / 13%));
+  --startup-light-strong: light-dark(rgb(0 0 0 / 21.6%), rgb(255 255 255 / 19.2%));
+  --startup-light-soft: light-dark(rgb(0 0 0 / 8.4%), rgb(255 255 255 / 7.2%));
+  --startup-light-secondary: light-dark(rgb(0 0 0 / 18%), rgb(255 255 255 / 15.6%));
   background: light-dark(#fbfbfb, #101010);
 }
 
