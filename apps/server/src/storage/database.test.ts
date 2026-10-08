@@ -18,7 +18,7 @@ test('schema enforces cross-space ownership and atomically rolls back incomplete
     assert.throws(() => session.run('b', 'missing', 'unit', 'absent', 'Missing'), /FOREIGN KEY/);
     assert.throws(() => db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?)').run('a', 'sb', 'm', 'user', 'wrong', null, 1), /FOREIGN KEY/);
     assert.throws(() => db.transaction(() => {
-      db.prepare('INSERT INTO routes VALUES (?,0,?)').run('a', '{"note":"incomplete"}');
+      db.prepare('INSERT INTO routes(space_id,revision,content) VALUES (?,0,?)').run('a', '{"note":"incomplete"}');
       db.prepare('INSERT INTO units(space_id,id) VALUES (?,?)').run('a', 'u3');
       session.run('a', 'invalid', 'unit', 'missing', 'Broken');
     })(), /FOREIGN KEY/);

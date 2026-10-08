@@ -7,7 +7,7 @@ import { createRouteTools } from './route-tools.js';
 import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { TeachingRuntime } from './runtime.js';
-import { reply, response, routeReply, syntheticSource } from './test-support.js';
+import { conceptIntake, reply, response, routeReply, syntheticSource } from './test-support.js';
 
 function caller(draft: ReturnType<typeof createRouteTools>) {
   return async (name: string, args: ToolCall['arguments']) => {
@@ -79,7 +79,7 @@ test('granular planning crosses old request/tool/token ceilings and commits only
     return response(next);
   } });
   try {
-    const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'Plan thirteen units' }, confirmed: true });
+    const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'Plan thirteen units' }, intake: conceptIntake, confirmed: true });
     await runtime.idle(run.id);
     assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
     assert.equal(requests, 17);
@@ -111,7 +111,7 @@ test('a rejected route tool can be corrected, but edits after submission cannot 
       return response(step ? reply([{ type: 'toolCall', id: `repair-${requests}`, ...step }], 'toolUse') : reply([]));
     } });
     try {
-      const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'Repair a tool call' }, confirmed: true });
+      const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'Repair a tool call' }, intake: conceptIntake, confirmed: true });
       await runtime.idle(run.id);
       assert.equal(runtime.get(space.id, run.id).state, finalEdit ? 'failed' : 'succeeded');
       if (finalEdit) assert.equal(learning.space(space.id).route.content, null);

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
-import { createSpaceSchema } from '@teach-me-coding/contracts';
+import { createSpaceSchema, researchRefSchema } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
 import type { TeachingRuntime } from '../agents/runtime.js';
@@ -16,6 +16,19 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   });
   api.get('/spaces', (c) => c.json(learning.list()));
   api.get('/spaces/:space', (c) => c.json(learning.space(c.req.param('space'))));
+  api.get('/spaces/:space/research/:id/:revision', (c) => {
+    const ref = researchRefSchema.parse({ id: c.req.param('id'), revision: Number(c.req.param('revision')) });
+    learning.space(c.req.param('space'));
+    const dossier = learning.intake.research(c.req.param('space'), ref);
+    return c.req.query('format') === 'markdown' ? c.text(dossier.content, 200,
+      { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="research-${ref.id}-v${ref.revision}.md"` }) : c.json(dossier);
+  });
+  api.post('/spaces/:space/research/:id/:revision', async (c) => {
+    const ref = researchRefSchema.parse({ id: c.req.param('id'), revision: Number(c.req.param('revision')) });
+    const input: unknown = await c.req.json();
+    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input,
+      () => learning.saveResearch(c.req.param('space'), ref, input)));
+  });
   api.get('/spaces/:space/sessions/:session', (c) => c.json(learning.session(c.req.param('space'), c.req.param('session'))));
   api.get('/spaces/:space/units/:unit', (c) => c.json(learning.unit(c.req.param('space'), c.req.param('unit'))));
   api.get('/spaces/:space/records/:record', (c) => c.json(learning.record(c.req.param('space'), c.req.param('record'))));
@@ -45,6 +58,8 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   });
   if (agents) {
     api.post('/spaces/:space/plan', async (c) => c.json(agents.plan(c.req.param('space'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
+    api.post('/spaces/:space/sessions/:session/questions/:round/answer', async (c) => c.json(agents.answer(
+      c.req.param('space'), c.req.param('session'), c.req.param('round'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/tasks/:task/retry', (c) => c.json(agents.retryTask(c.req.param('space'), c.req.param('task'), c.req.header('Idempotency-Key') ?? '')));
     api.post('/spaces/:space/units/:unit/tasks', async (c) => c.json(agents.generate(
       c.req.param('space'), c.req.param('unit'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));

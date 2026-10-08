@@ -1,10 +1,11 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { ActionProposal, AgentDisplayPart, CodeExecution, LearningConclusion, ProjectFile, Proposal, WorkStatus } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, ProjectFile, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 import type { LocalTerminal } from '@/lib/terminal'
 
 type Action = () => void
 type EntryResult = string | null | Promise<string | null>
+export type RequirementDraft = Requirement & { intake?: IntakeMetadata | null }
 
 /** Data and actions consumed by the original UI, independent of storage or demo scripts. */
 export interface AppModel {
@@ -22,7 +23,7 @@ export interface AppModel {
   openSpace: (id: string) => void
   createSpace: (goal: string) => void
   onboardSend: (text: string) => void
-  updateRequirement: (value: Partial<Requirement>) => void | Promise<boolean>
+  updateRequirement: (value: Partial<RequirementDraft>) => void | Promise<boolean>
   renameSpace: (name: string) => void
   confirmRequirement: Action
   setView: (view: SpaceView) => void
@@ -69,8 +70,15 @@ export interface AppModel {
     retry: Action
     requirementConfirmed: boolean
     planning: { run?: WorkStatus; error: string | null }
-    requirementDraft: Requirement | null
-    setRequirementDraft: (value: Requirement | null) => void
+    intake: IntakeMetadata | null
+    readiness?: IntakeReadiness
+    questions: QuestionRound[]
+    answerQuestions: (round: string, answers: QuestionAnswer) => Promise<boolean>
+    loadResearch: (ref: ResearchRef) => Promise<ResearchDossier>
+    saveResearch: (ref: ResearchRef, content: string) => Promise<ResearchDossier>
+    exportResearch: (ref: ResearchRef) => Promise<void>
+    requirementDraft: RequirementDraft | null
+    setRequirementDraft: (value: RequirementDraft | null) => void
     saveName: Action
     assessmentDirty: boolean
     fileDirty: boolean

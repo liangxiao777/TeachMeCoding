@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { codePlanSchema, type CodeExecution } from './execution.js';
+import { intakeMetadataSchema, type IntakeMetadata, type IntakeReadiness, type QuestionRound, type ResearchDossier } from './intake.js';
 
 export const idSchema = z.string().uuid();
 const text = z.string().max(100_000);
@@ -13,7 +14,8 @@ export const requirementSchema = z.object({ goal: title, background: text, outco
 // The opening request is a user message, not the structured requirement's short goal.
 export const createSpaceSchema = z.object({ name: title, goal: text.trim().min(1) }).strict();
 export const renameSpaceSchema = z.object({ name: title, previousName: z.string().min(1).max(200) }).strict();
-export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean() }).strict();
+export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean(),
+  intake: intakeMetadataSchema.nullable().optional() }).strict();
 export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title }).strict()
   .refine((v) => (v.scope === 'unit') === (v.unitId !== null), 'Unit sessions require a unit; other scopes forbid it');
 export const sessionDraftSchema = z.object({ revision: z.number().int().nonnegative(), text, quote: quoteSchema.nullable(), routeSuggestion: text }).strict();
@@ -51,17 +53,17 @@ export type RouteContent = z.infer<typeof routeContentSchema>;
 export type Lesson = z.infer<typeof lessonSchema> & { revision?: number };
 export type AssessmentSpec = z.infer<typeof assessmentSpecSchema> & { revision?: number };
 export interface SpaceSummary { id: string; name: string; createdAt: number }
-export interface RequirementState { revision: number; confirmed: boolean; value: Requirement }
+export interface RequirementState { revision: number; confirmed: boolean; value: Requirement; intake?: IntakeMetadata | null }
 export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'; unitId: string | null; title: string }
 export type AgentDisplayPart = { type: 'text'; id: string; text: string }
   | { type: 'reasoning'; id: string; text: string; status: 'streaming' | 'done' | 'interrupted' }
   | { type: 'tool'; id: string; name: string; input?: unknown; inputText?: string; status: 'generating' | 'ready' | 'running' | 'done' | 'error' | 'interrupted' };
 export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
-export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[] }
+export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
   valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
-export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent }
+export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent; intake?: IntakeMetadata | null }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
@@ -109,13 +111,15 @@ export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEv
 export interface LearningConclusion { id: string; unitId: string; runId: string; text: string; revision: number; adopted: boolean; valid: boolean; sources: { requirement: number; route: number; lesson: number } }
 export interface Workspace extends SpaceSummary {
   requirement: RequirementState;
-  route: { revision: number; content: RouteContent | null };
+  readiness?: IntakeReadiness;
+  route: { revision: number; content: RouteContent | null; intake?: IntakeMetadata | null };
   sessions: SessionSummary[];
   proposals: Proposal[];
   tasks: WorkStatus[];
   runs: WorkStatus[];
   conclusions: LearningConclusion[];
 }
+export interface ResearchSaveResult { document: ResearchDossier; workspace: Workspace }
 export interface UnitDetail {
   id: string; status: 'not_started' | 'learning' | 'needs_work' | 'passed' | 'skipped';
   lesson: Lesson | null; assessment: AssessmentSpec | null; draft: AssessmentDraft;

@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
-  type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
+  type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type ResearchRef, type ResearchSaveResult, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
+import { Intake } from './intake.js';
 
 export class BusinessError extends Error {
   constructor(public status: 400 | 404 | 409 | 413 | 422 | 503, message: string) { super(message); }
@@ -12,7 +13,8 @@ export class BusinessError extends Error {
 const conflict = () => new BusinessError(409, '内容已改变，请重新读取后再保存；本次修改未写入。');
 
 export class Learning {
-  constructor(readonly db: Database.Database) {}
+  readonly intake: Intake;
+  constructor(readonly db: Database.Database) { this.intake = new Intake(db); }
   private one<T>(sql: string, ...params: unknown[]): T {
     const row = this.db.prepare(sql).get(...params) as T | undefined;
     if (!row) throw new BusinessError(404, '所属空间、单元或记录不存在。');
@@ -40,14 +42,15 @@ export class Learning {
   space(id: string): Workspace {
     idSchema.parse(id);
     const base = this.one<SpaceSummary>('SELECT id,name,created_at AS createdAt FROM spaces WHERE id=?', id);
-    const req = this.one<{ revision: number; confirmed: number; value: string }>('SELECT revision,confirmed,value FROM requirements WHERE space_id=?', id);
-    const route = this.one<{ revision: number; content: string | null }>('SELECT revision,content FROM routes WHERE space_id=?', id);
-    const proposals = this.all<{ id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: string }>(
-      'SELECT id,base_revision AS baseRevision,requirement_revision AS requirementRevision,state,content FROM proposals WHERE space_id=? ORDER BY rowid', id);
-    return { ...base, requirement: { ...req, confirmed: !!req.confirmed, value: JSON.parse(req.value) },
-      route: { revision: route.revision, content: route.content === null ? null : JSON.parse(route.content) },
+    const { intake, ...req } = this.one<{ revision: number; confirmed: number; value: string; intake: string | null }>('SELECT revision,confirmed,value,intake FROM requirements WHERE space_id=?', id);
+    const route = this.one<{ revision: number; content: string | null; intake: string | null }>('SELECT revision,content,intake FROM routes WHERE space_id=?', id);
+    const proposals = this.all<{ id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: string; intake: string | null }>(
+      'SELECT id,base_revision AS baseRevision,requirement_revision AS requirementRevision,state,content,intake FROM proposals WHERE space_id=? ORDER BY rowid', id);
+    const requirement = { ...req, confirmed: !!req.confirmed, value: JSON.parse(req.value), ...(intake ? { intake: JSON.parse(intake) } : {}) };
+    return { ...base, requirement, readiness: this.intake.readiness(id, requirement),
+      route: { revision: route.revision, content: route.content === null ? null : JSON.parse(route.content), ...(route.intake ? { intake: JSON.parse(route.intake) } : {}) },
       sessions: this.all('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id),
-      proposals: proposals.map((p) => ({ ...p, content: JSON.parse(p.content) })),
+      proposals: proposals.map(({ intake, ...p }) => ({ ...p, content: JSON.parse(p.content), ...(intake ? { intake: JSON.parse(intake) } : {}) })),
       tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=? ORDER BY rowid', id),
       runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=? ORDER BY rowid', id),
       conclusions: this.conclusions(id),
@@ -74,12 +77,33 @@ export class Learning {
     return { id: space, name: v.name, createdAt: current.createdAt };
   }
   saveRequirement(space: string, input: unknown) {
-    this.space(space);
     const v = saveRequirementSchema.parse(input);
-    const result = this.db.prepare('UPDATE requirements SET value=?,confirmed=?,revision=revision+1 WHERE space_id=? AND revision=?')
-      .run(JSON.stringify(v.value), Number(v.confirmed), space, v.revision);
-    if (!result.changes) throw conflict();
-    return this.space(space).requirement;
+    return this.db.transaction(() => {
+      const current = this.space(space).requirement;
+      if (current.revision !== v.revision) throw conflict();
+      const changedScope = v.value.goal !== current.value.goal || v.value.outcome !== current.value.outcome;
+      const intake = v.intake === undefined ? changedScope ? null : current.intake : v.intake;
+      if (intake) this.intake.validateMetadata(space, intake);
+      if (v.confirmed) this.intake.assertReady(space, { ...v, intake });
+      this.db.prepare('UPDATE requirements SET value=?,intake=?,confirmed=?,revision=revision+1 WHERE space_id=? AND revision=?')
+        .run(JSON.stringify(v.value), intake ? JSON.stringify(intake) : null, Number(v.confirmed), space, v.revision);
+      this.intake.supersede(space);
+      return this.space(space).requirement;
+    })();
+  }
+  saveResearch(space: string, reference: ResearchRef, input: unknown): ResearchSaveResult {
+    const ref = researchRefSchema.parse(reference), value = researchInputSchema.parse(input);
+    return this.db.transaction(() => {
+      const workspace = this.space(space), previous = this.intake.research(space, ref);
+      const intake = workspace.requirement.intake;
+      if (!intake?.researchRef || intake.researchRef.id !== ref.id || intake.researchRef.revision !== ref.revision) throw conflict();
+      if (previous.content === value.content) return { document: previous, workspace };
+      const document = this.intake.prepareResearch(this.intake.nextResearch(space, ref), null, previous.target, value);
+      this.intake.saveResearch(space, document);
+      this.saveRequirement(space, { ...workspace.requirement, confirmed: false,
+        intake: { ...intake, researchRef: { id: document.id, revision: document.revision } } });
+      return { document, workspace: this.space(space) };
+    })();
   }
   session(space: string, id: string): SessionDetail {
     idSchema.parse(space); idSchema.parse(id);
@@ -105,6 +129,7 @@ export class Learning {
         messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
           ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
         })),
+        ...(row.scope === 'intake' ? { questions: this.intake.questions(space, id) } : {}),
       };
     })();
   }
@@ -124,13 +149,14 @@ export class Learning {
     if (!result.changes) throw conflict();
     return this.session(space, id);
   }
-  addMessage(space: string, id: string, input: unknown) {
+  addMessage(space: string, id: string, input: unknown, clearDraft = true) {
     const v = messageInputSchema.parse(input);
     return this.db.transaction(() => {
       const session = this.session(space, id);
       if (session.draft.revision !== v.draftRevision) throw conflict();
+      if (session.scope === 'intake') this.intake.supersede(space, id);
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?)').run(space, id, randomUUID(), 'user', v.text, v.quote ? JSON.stringify(v.quote) : null, Date.now());
-      this.saveSessionDraft(space, id, { ...session.draft, text: '', quote: null });
+      if (clearDraft) this.saveSessionDraft(space, id, { ...session.draft, text: '', quote: null });
       return this.session(space, id); // No Agent invocation or fabricated reply.
     })();
   }
@@ -190,13 +216,14 @@ export class Learning {
     const content = routeContentSchema.parse(input);
     const current = this.space(space);
     if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, '路线提案需要已确认需求及路线会话。');
+    this.intake.assertReady(space, current.requirement);
     const base = baseline ?? { requirement: current.requirement.revision, route: current.route.revision };
     if (base.requirement !== current.requirement.revision || base.route !== current.route.revision) throw conflict();
     const ids = content.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
     if (new Set(ids).size !== ids.length) throw new BusinessError(422, '路线中的阶段和单元标识不能重复。');
     const id = randomUUID();
-    this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content) VALUES (?,?,?,?,?,?)')
-      .run(space, id, session, base.route, base.requirement, JSON.stringify(content));
+    this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content,intake) VALUES (?,?,?,?,?,?,?)')
+      .run(space, id, session, base.route, base.requirement, JSON.stringify(content), JSON.stringify(current.requirement.intake));
     return this.space(space).proposals.find((p) => p.id === id)!;
   }
   applyProposal(space: string, id: string) {
@@ -207,11 +234,12 @@ export class Learning {
       if (!p) throw new BusinessError(404, '路线提案不存在。');
       if (p.state === 'applied') return current;
       if (!current.requirement.confirmed || p.requirementRevision !== current.requirement.revision || p.baseRevision !== current.route.revision) throw conflict();
+      this.intake.assertReady(space, current.requirement);
       const units = p.content.stages.flatMap((s) => s.units);
       const existing = this.all<{ id: string }>('SELECT id FROM units WHERE space_id=?', space);
       if (existing.some((u) => !units.some((v) => v.id === u.id))) throw new BusinessError(409, '提案不能移除已有单元及学习记录。');
       for (const u of units) this.db.prepare('INSERT INTO units(space_id,id) VALUES (?,?) ON CONFLICT DO NOTHING').run(space, u.id);
-      this.db.prepare('UPDATE routes SET content=?,revision=revision+1 WHERE space_id=?').run(JSON.stringify(p.content), space);
+      this.db.prepare('UPDATE routes SET content=?,intake=?,revision=revision+1 WHERE space_id=?').run(JSON.stringify(p.content), p.intake ? JSON.stringify(p.intake) : null, space);
       this.db.prepare("UPDATE proposals SET state='applied' WHERE space_id=? AND id=?").run(space, id);
       return this.space(space);
     })();

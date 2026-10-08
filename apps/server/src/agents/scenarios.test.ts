@@ -5,7 +5,7 @@ import type { RouteContent } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { TeachingRuntime } from './runtime.js';
-import { reply, response, routeReply, syntheticSource } from './test-support.js';
+import { conceptIntake, reply, response, routeReply, syntheticSource } from './test-support.js';
 
 test('the opening request starts intake once, and only its tool fills the editable requirement', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
@@ -29,7 +29,7 @@ test('the opening request starts intake once, and only its tool fills the editab
     assert.equal(runtime.createSpace(key, input).runs.length, 1);
     assert.equal(turns, 2);
     assert.throws(() => runtime.submit(space.id, space.sessions[1]!.id, randomUUID(), { text: 'plan', quote: null, draftRevision: 0 }), /先确认/);
-    const edited = learning.saveRequirement(space.id, { revision: 1, value: { ...expected, schedule: '每周 7 小时' }, confirmed: false });
+    const edited = learning.saveRequirement(space.id, { revision: 1, value: { ...expected, schedule: '每周 7 小时' }, intake: conceptIntake, confirmed: false });
     assert.equal(edited.value.schedule, '每周 7 小时');
     assert.equal(learning.saveRequirement(space.id, { ...edited, confirmed: true }).confirmed, true);
     assert.equal(learning.space(space.id).route.content, null);
@@ -64,7 +64,7 @@ test('invalid, truncated and late intake artifacts preserve valid drafts and new
   for (const variant of ['invalid', 'truncated', 'late'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const created = learning.create({ name: variant, goal: 'initial request' });
-    learning.saveRequirement(created.id, { ...created.requirement, value: { ...created.requirement.value, goal: 'keep goal' } });
+    learning.saveRequirement(created.id, { ...created.requirement, value: { ...created.requirement.value, goal: 'keep goal' }, intake: conceptIntake });
     const space = learning.space(created.id), session = space.sessions[0]!.id;
     let calls = 0;
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
@@ -112,7 +112,7 @@ test('initial roadmap applies on success while adjustments require confirmation 
   for (const change of ['none', 'requirement', 'route'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const space = learning.create({ name: change, goal: 'learn A not B' }), session = space.sessions[1]!.id;
-    learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A not B' }, confirmed: true });
+    learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A not B' }, intake: conceptIntake, confirmed: true });
     let content: RouteContent = { note: 'plan', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
       assert.match(JSON.stringify(context), /learn A not B/);
@@ -165,7 +165,7 @@ test('initial roadmap applies on success while adjustments require confirmation 
 test('confirmation and planning commit atomically, retry once, and persist the initial route without a subscriber', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
   const space = learning.create({ name: 'Atomic plan', goal: 'learn' });
-  const input = { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A' }, confirmed: true }, key = randomUUID();
+  const input = { ...space.requirement, value: { ...space.requirement.value, goal: 'learn A' }, intake: conceptIntake, confirmed: true }, key = randomUUID();
   const content = { note: 'A before B', stages: [{ id: randomUUID(), title: 'first', units: [{ id: randomUUID(), title: 'A', summary: 'intro', goals: ['A'] }] }] };
   let calls = 0;
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
@@ -209,7 +209,7 @@ test('missing, invalid, truncated and cancelled initial routes cannot be publish
       return response(routeReply(context.messages, content) ?? reply([], !retrying && variant === 'truncated' ? 'length' : 'stop'));
     } });
     try {
-      const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'A' }, confirmed: true });
+      const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { ...space.requirement.value, goal: 'A' }, intake: conceptIntake, confirmed: true });
       if (variant === 'cancelled') runtime.stop(space.id, run.id);
       await runtime.idle(run.id);
       assert.equal(runtime.get(space.id, run.id).state, variant === 'cancelled' ? 'interrupted' : 'failed');

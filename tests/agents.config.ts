@@ -3,7 +3,7 @@ import existing from '../playwright.config';
 
 export default defineConfig({
   ...existing,
-  testDir: './browser', testIgnore: [], testMatch: 'teaching.spec.ts',
+  testDir: './browser', testIgnore: [], testMatch: ['teaching.spec.ts', 'intake.spec.ts'],
   outputDir: '../.amp/in/artifacts/teaching-browser',
   webServer: [
     { command: 'pnpm exec tsx tests/serve-agents.ts production', cwd: '..', url: 'http://127.0.0.1:14320/api/health', reuseExistingServer: false, gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 } },

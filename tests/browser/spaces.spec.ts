@@ -190,9 +190,14 @@ test('explicit preview creates a space only after a goal and confirms edited req
   await page.getByRole('button', { name: '创建学习空间', exact: true }).click();
   await page.getByLabel('你想学什么', { exact: true }).fill('我想学习 Rust，最后能写一个命令行工具');
   await page.getByRole('button', { name: '开始', exact: true }).click();
-  await page.getByRole('button', { name: '熟悉 Python，写过一些自动化脚本，没接触过 C/C++', exact: true }).click();
-  await page.getByRole('button', { name: '每周大概 5 小时，希望两个月内完成', exact: true }).click();
-  await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeVisible();
+  const composer = page.getByLabel('回复 Agent', { exact: true });
+  await composer.fill('熟悉 Python，写过一些自动化脚本，没接触过 C/C++');
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
+  await composer.press('Enter');
+  await composer.fill('每周大概 5 小时，希望两个月内完成');
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
+  await composer.press('Enter');
+  await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeEnabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('时间安排', { exact: true }).fill('每周 7 小时，先学所有权');
   await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeDisabled();

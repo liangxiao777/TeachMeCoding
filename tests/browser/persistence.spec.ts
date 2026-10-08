@@ -64,6 +64,9 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await visible(page, '学习目标').fill('理解持久化数据的生命周期');
   await visible(page, '已有基础').fill('Python 基础，尚未学习 Rust');
+  await page.getByLabel('学习对象类型', { exact: true }).selectOption('concept');
+  await visible(page, '概念名称').fill('数据持久化');
+  await visible(page, '学习 / 核验范围').fill('数据生命周期、重启与恢复');
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   // The requirement editor is unmounted, but its unsaved values belong to the provider.
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
@@ -122,6 +125,9 @@ test('a delayed requirement response preserves sessions created while saving', a
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await visible(page, '学习目标').fill('学习保存和会话隔离');
   await visible(page, '已有基础').fill('保存期间继续创建会话');
+  await page.getByLabel('学习对象类型', { exact: true }).selectOption('concept');
+  await visible(page, '概念名称').fill('会话隔离');
+  await visible(page, '学习 / 核验范围').fill('保存与会话归属');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('dd').filter({ hasText: /^保存期间继续创建会话$/ })).toBeVisible();
   let release!: () => void;

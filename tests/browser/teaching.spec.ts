@@ -427,6 +427,7 @@ test('planning response loss, provider failure and cancellation remain recoverab
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('时间安排', { exact: true }).fill('PLAN-FAIL-ONCE PLAN-SLOW');
   await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeEnabled();
   let dropped = false, failedRefresh = false, confirmations = 0;
   await page.route('**/plan', async (route) => {
     confirmations++;
@@ -437,7 +438,10 @@ test('planning response loss, provider failure and cancellation remain recoverab
     if (!failedRefresh) { failedRefresh = true; await route.abort(); } else await route.continue();
   });
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toBeVisible();
+  // A lost receipt leaves intake visible until the confirmation is known.
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toHaveCount(0);
+  await expect(page.getByText('学习需求摘要', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect.poll(() => failedRefresh).toBe(true);
   await page.getByRole('button', { name: '重试', exact: true }).click();

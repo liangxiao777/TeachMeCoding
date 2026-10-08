@@ -19,7 +19,7 @@ test('real scene and task tool sets never include side effects, cross-scene arti
   const input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
     scenario: 'intake', requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, references: [] };
   try {
-    const expected = { intake: ['submit_requirement_draft'], roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
+    const expected = { intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'], roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
       lesson: ['submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
       const frozen = { ...input, scenario };

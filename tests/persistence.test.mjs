@@ -43,7 +43,8 @@ test('real process restart and crash recovery preserve business data, idempotenc
     const other = await call('/spaces', { name: 'Restart B', goal: 'Independent space' });
     const session = space.sessions[0].id;
     const quote = { source: 'code', label: 'nested/main.rs', text: 'quoted snapshot 31' };
-    await call(`/spaces/${space.id}/requirement`, { ...space.requirement, value: { ...space.requirement.value, goal: 'Precise persistence' }, confirmed: true });
+    await call(`/spaces/${space.id}/requirement`, { ...space.requirement, value: { ...space.requirement.value, goal: 'Precise persistence' },
+      intake: { target: { kind: 'concept', name: '数据持久化', scope: '保存、重启与恢复的通用语义' }, researchRef: null }, confirmed: true });
     await call(`/spaces/${space.id}/sessions/${session}/messages`, { text: 'Question 17', quote, draftRevision: 1 });
     await call(`/spaces/${space.id}/sessions/${session}/draft`, { revision: 2, text: 'Unsent draft 29', quote, routeSuggestion: '' });
     await call(`/spaces/${space.id}/project/create`, { path: 'nested', kind: 'directory' });

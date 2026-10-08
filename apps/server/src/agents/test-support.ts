@@ -1,13 +1,16 @@
 import { createAssistantMessageEventStream, type AssistantMessage, type Message } from '@earendil-works/pi-ai';
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
-import type { RouteContent } from '@teach-me-coding/contracts';
+import type { IntakeMetadata, RouteContent } from '@teach-me-coding/contracts';
 import type { ModelSource } from '../models/service.js';
 import { randomUUID } from 'node:crypto';
 import type { Learning } from '../modules/learning.js';
 
+// Unrelated route/task tests use generic programming concepts, not verified technology claims.
+export const conceptIntake: IntakeMetadata = { target: { kind: 'concept', name: '编程基础', scope: '通用控制流、输入输出和反例练习' }, researchRef: null };
+
 export function populated(learning: Learning, name = 'Rust') {
   const space = learning.create({ name, goal: `学习 ${name}` });
-  learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: `学习 ${name}` }, confirmed: true });
+  learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: `学习 ${name}` }, intake: conceptIntake, confirmed: true });
   const unit = () => ({ id: randomUUID(), title: 'Unit', summary: 'Summary', goals: ['Goal'] });
   const units = [unit(), unit()];
   const routeSession = space.sessions.find((s) => s.scope === 'route')!.id;

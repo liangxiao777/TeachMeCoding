@@ -77,6 +77,22 @@ export const migrations = [
   `CREATE TABLE code_executions (space_id TEXT NOT NULL, id TEXT NOT NULL, unit_id TEXT NOT NULL,
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id));`,
   `CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK(json_valid(value)));`,
+  `ALTER TABLE requirements ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   ALTER TABLE routes ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   ALTER TABLE proposals ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   CREATE TABLE research_dossiers (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL, revision INTEGER NOT NULL,
+     run_id TEXT NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id,revision),
+     FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   CREATE TABLE intake_questions (space_id TEXT NOT NULL, id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT NOT NULL,
+     value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id),
+     FOREIGN KEY(space_id,session_id) REFERENCES sessions(space_id,id), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   CREATE UNIQUE INDEX one_pending_question ON intake_questions(space_id,session_id) WHERE json_extract(value,'$.state')='pending';`,
+  `CREATE TABLE research_dossiers_next (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL, revision INTEGER NOT NULL,
+     run_id TEXT, value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id,revision),
+     FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   INSERT INTO research_dossiers_next SELECT * FROM research_dossiers;
+   DROP TABLE research_dossiers;
+   ALTER TABLE research_dossiers_next RENAME TO research_dossiers;`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

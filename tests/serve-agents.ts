@@ -24,7 +24,16 @@ const data = openDataDirectory(root), learning = new Learning(data.db);
 const projects = new Projects(root), terminals = new Terminals((space) => projects.root(space));
 const actions = new Actions(learning, projects);
 const executions = new Executions(learning);
-const agents = new TeachingRuntime(learning, syntheticSource, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions, executions });
+const agents = new TeachingRuntime(learning, syntheticSource, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions, executions,
+  webFetch: {
+    lookup: async (hostname) => { if (hostname !== 'docs.example.org') throw new Error('Unexpected fixture host'); return [{ address: '8.8.8.8', family: 4 }]; },
+    fetch: async (url) => {
+      if (url.href !== 'https://docs.example.org/cedar/4.7.2') throw new Error('Unexpected fixture URL');
+      return new Response('Cedar is a streaming parser toolkit.\nVersion 4.7.2 requires Node 24.\nFULL-PAGE-ONLY: irrelevant text is not saved.',
+        { headers: { 'content-type': 'text/plain' } });
+    },
+  },
+});
 const config = serverConfig({ NODE_ENV: mode, PORT: mode === 'production' ? '14320' : '14321', TMC_WEB_PORT: '15173' });
 const access = createLocalAccess(config);
 const server = serve({ hostname: config.hostname, port: config.port, fetch: createApp(access, learning, projects, agents).fetch });

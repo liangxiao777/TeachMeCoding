@@ -1,16 +1,61 @@
-import { createAssistantMessageEventStream, type AssistantMessage } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
+import { createAssistantMessageEventStream, type AssistantMessage, type JsonObject } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
 import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-agent-core/dist/index.js';
-import { reply, response, routeReply } from '../apps/server/src/agents/test-support.js';
+import { conceptIntake, reply, response, routeReply } from '../apps/server/src/agents/test-support.js';
 
 // Deterministic test provider ONLY. Real HTTP, SQLite, Pi loop and UI are not mocked.
 let evaluationFailed = false;
 let planningFailed = false;
+const failedIntakeAnswers = new Set<string>();
 export const agentTransport: StreamFn = async (_model, context, options) => {
   const last = context.messages.at(-1);
   const user = [...context.messages].reverse().find((m) => m.role === 'user');
   const text = JSON.stringify(user?.content);
   const all = JSON.stringify(context);
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
+  if (has('ask_user_question') && all.includes('自适应问答验收')) {
+    const current = context.messages.slice(context.messages.findLastIndex((m) => m.role === 'user') + 1);
+    const results = current.filter((m) => m.role === 'toolResult');
+    const fields = { goal: '学习流式解析', background: '会写循环，尚未做过解析器', outcome: '处理本地流水账的坏输入', schedule: '每周两次，每次 30 分钟' };
+    const target = { kind: 'technology', name: 'Cedar（验收用项目）', version: '4.7.2', scope: '命令行账本的流式解析' };
+    const call = (name: string, args: JsonObject) => response(reply([{ type: 'toolCall', id: `intake-${results.length}-${name}`, name, arguments: args }], 'toolUse'));
+    if (text.includes('自适应问答验收')) {
+      if (!results.length) return response(reply([
+        { type: 'toolCall', id: 'intake-draft', name: 'submit_requirement_draft', arguments: { ...fields, intake: { target } } },
+        { type: 'toolCall', id: 'intake-questions', name: 'ask_user_question', arguments: { questions: [
+          { prompt: '希望先完成哪一种成果？', multiple: false, options: [
+            { label: '离线命令行工具', description: '读取本地文件，不部署服务' },
+            { label: '浏览器演示', description: '交互展示解析过程' },
+          ] },
+          { prompt: '优先练习哪些能力？', multiple: true, options: [
+            { label: '识别坏输入', description: '练习错误处理与边界' },
+            { label: '测量内存', description: '理解流式处理的资源限制' },
+            { label: '解释状态', description: '能说明分块时需要保留什么' },
+          ] },
+          { prompt: '练习时优先使用什么材料？', multiple: false, options: [
+            { label: '合成记录', description: '先用可公开的例子' },
+            { label: '自己的脱敏数据', description: '不上传原始私人资料' },
+          ] },
+          { prompt: '如何检查练习成果？', multiple: true, options: [
+            { label: '自动化测试', description: '检查输出与边界' },
+            { label: '逐步解释', description: '说明处理过程' },
+          ] },
+        ].slice(0, text.includes('单题问答') ? 1 : text.includes('四题问答') ? 4 : 2) } },
+      ], 'toolUse'));
+      return response(reply([{ type: 'text', text: '先确认成果与练习重点，再核验影响路线的技术资料。' }]));
+    }
+    const space = all.match(/spaceId=\\"([^\\]+)\\"/)?.[1] ?? '';
+    if (text.includes('回答后失败一次') && !failedIntakeAnswers.has(space)) {
+      failedIntakeAnswers.add(space); return response(reply([], 'error'));
+    }
+    if (!results.length) return call('web_fetch', { url: 'https://docs.example.org/cedar/4.7.2', extractMode: 'text' });
+    if (results.length === 1) {
+      const content = '# Cedar（验收用项目） 4.7.2\n\nCedar 用来逐块解析记录（确定性验收材料，不是实际产品资料）。\n\n## 学习范围\n\n处理命令行账本中的坏输入，练习分块状态和错误处理。\n\n| 项目 | 内容 |\n| --- | --- |\n| 适用版本 | 4.7.2 |\n| 运行环境 | Node 24 |\n\n## 练习建议\n\n从坏输入与分块边界开始，再比较内存使用。\n\n```ts\n  parse("a");\n```\n\n## 待补充\n\n性能基准留到练习阶段，不阻塞路线。\n\n## 资料来源\n\n[官方资料](https://docs.example.org/cedar/4.7.2)\n';
+      const hostile = all.includes('不可信 Markdown 验收') ? '\n<script>window.__researchInjected = true</script>\n<img src="https://research-tracker.example/raw" onerror="window.__researchInjected = true">\n\n![追踪图片](https://research-tracker.example/pixel)\n\n[危险脚本](javascript:alert(1))\n\n[本地服务](http://127.0.0.1:4310/private)\n\n[含凭据链接](https://user:secret@public.org/private)\n' : '';
+      return call('write_research_document', { content: content + hostile });
+    }
+    if (results.length === 2) return call('submit_requirement_draft', { ...fields, intake: { target } });
+    return response(reply([{ type: 'text', text: '已保存回答与固定版本资料，请核对摘要后再确认。' }]));
+  }
   if (text.includes('推理验收')) {
     if (options?.reasoning !== 'high') throw new Error('Expected high reasoning');
     const message = last?.role === 'toolResult'
@@ -20,7 +65,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         { type: 'text', text: '我会先整理目标。' },
         has('submit_learning_conclusion') ? { type: 'toolCall', id: 'reasoning-conclusion', name: 'submit_learning_conclusion', arguments: { text: '根据已有基础继续练习。' } }
         : { type: 'toolCall', id: 'reasoning-draft', name: 'submit_requirement_draft', arguments: {
-          goal: '学习 Python', background: '已有变量基础', outcome: '编写小程序', schedule: '每周两次',
+          goal: '学习 Python', background: '已有变量基础', outcome: '编写小程序', schedule: '每周两次', intake: conceptIntake,
         } }], 'toolUse');
     const stream = createAssistantMessageEventStream();
     void (async () => {
@@ -80,7 +125,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
     } }], 'toolUse'));
     if (!has('submit_route_proposal') && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
-      goal: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周',
+      goal: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周', intake: conceptIntake,
     } }], 'toolUse'));
   }
   if (has('submit_route_proposal')) {

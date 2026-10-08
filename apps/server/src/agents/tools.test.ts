@@ -22,7 +22,7 @@ test('all six scenes retain their ordered business tools across independent Skil
   const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning);
   const actions = new Actions(learning, new Projects('/synthetic/data'));
   const expected = {
-    intake: ['submit_requirement_draft'],
+    intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'],
     roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'],
     tutor: ['read', 'ls', 'find', 'grep', 'propose_file_change', 'propose_command', 'submit_learning_conclusion'],
     lesson: ['submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'],
