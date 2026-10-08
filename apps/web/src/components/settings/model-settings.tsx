@@ -1,20 +1,19 @@
 'use client'
 
-import { CheckCircle2, ExternalLink, KeyRound, Loader2, LogIn, LogOut, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, ExternalLink, KeyRound, Loader2, LogIn, LogOut, Search, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LoginSession, ModelSelection, ModelSettings, ModelSummary, ProviderSummary } from '@teach-me-coding/contracts'
 import { api, ApiError } from '@/lib/api'
 import { useApp } from '@/app/context'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from '@/components/ui/combobox'
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Card, CardContent, CardFooter } from '@/components/ui/card'
+import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxTrigger, ComboboxValue } from '@/components/ui/combobox'
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { InputGroupAddon } from '@/components/ui/input-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
-import { cn } from '@/lib/utils'
 
 const LEVEL_LABELS: Record<string, string> = {
   off: '关闭', minimal: '极简', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高',
@@ -23,11 +22,12 @@ const LEVEL_LABELS: Record<string, string> = {
 function ProviderAuth({ provider }: { provider: ProviderSummary }) {
   if (provider.configured)
     return (
-      <Badge variant="secondary" className="font-normal">
-        已配置{provider.configured.source ? ` · ${provider.configured.source}` : provider.configured.type === 'oauth' ? ' · OAuth' : ''}
-      </Badge>
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <CheckCircle2 className="size-3.5" aria-hidden="true" />
+        已配置{provider.configured.type === 'oauth' ? ' · OAuth' : ''}
+      </span>
     )
-  return <Badge variant="outline" className="font-normal text-muted-foreground">未配置凭据</Badge>
+  return <span className="text-xs text-muted-foreground">未配置凭据</span>
 }
 
 export function LoginFlow({ session, onAnswer, onCancel, answering }: {
@@ -129,6 +129,7 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
   const [login, setLogin] = useState<LoginSession | null>(null)
   const [startingLogin, setStartingLogin] = useState(false)
   const [answering, setAnswering] = useState(false)
+  const modelList = useRef<HTMLDivElement | null>(null)
   const poll = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const loginRef = useRef<LoginSession | null>(null)
   const loginGeneration = useRef(0)
@@ -265,23 +266,19 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
   )
   if (!settings) return <div role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Spinner /> 正在读取设置…</div>
   return (
-    <div className="flex flex-col gap-6">
-      <Alert role="status" className={cn('p-4', settings.ready ? 'border-emerald-600/25 bg-emerald-600/5' : 'border-amber-600/25 bg-amber-600/5')}>
-        {settings.ready ? <CheckCircle2 className="text-emerald-600" /> : <TriangleAlert className="text-amber-600" />}
-        <AlertTitle>{settings.ready ? '教学模型已就绪' : '教学模型不可用'}</AlertTitle>
-        <AlertDescription className="min-w-0 break-words">
-          {settings.issue ?? (settings.selection ? `${settings.selection.provider} / ${settings.selection.model} · 推理强度 ${LEVEL_LABELS[settings.selection.thinkingLevel] ?? settings.selection.thinkingLevel}` : '')}
-        </AlertDescription>
-      </Alert>
-
-      <Card>
-        <CardHeader><CardTitle><h3>模型选择</h3></CardTitle></CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="settings-provider">Provider</FieldLabel>
+    <Card className="gap-6 [--card-spacing:--spacing(5)] sm:[--card-spacing:--spacing(8)]">
+      <CardContent className="flex min-w-0 flex-col gap-8">
+        {!settings.ready && <Alert role="status">
+          <TriangleAlert />
+          <AlertTitle>教学模型不可用</AlertTitle>
+          <AlertDescription className="min-w-0 break-words">{settings.issue ?? '请选择模型并配置凭据。'}</AlertDescription>
+        </Alert>}
+        <FieldGroup className="gap-6">
+          <Field className="grid items-start @md/field-group:grid-cols-[7rem_minmax(0,1fr)] @md/field-group:gap-x-8">
+            <FieldLabel htmlFor="settings-provider" className="@md/field-group:pt-2.5">Provider</FieldLabel>
+            <FieldContent className="min-w-0">
               <Select value={provider} disabled={loggingIn || saving} onValueChange={(value) => { if (value && value !== provider) { setProvider(value); setModel('') } }}>
-                <SelectTrigger id="settings-provider" className="w-full">
+                <SelectTrigger id="settings-provider" className="w-full px-3 data-[size=default]:h-10">
                   <SelectValue placeholder="选择 Provider">{current?.name}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -294,22 +291,32 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
                   ))}
                 </SelectContent>
               </Select>
-            </Field>
-            {provider && (
-              <Field>
-                <FieldLabel htmlFor="settings-model">模型</FieldLabel>
-                <Combobox key={provider} items={models} value={chosen ?? null} disabled={modelsLoading || saving}
+            </FieldContent>
+          </Field>
+          {provider && (
+            <Field className="grid items-start @md/field-group:grid-cols-[7rem_minmax(0,1fr)] @md/field-group:gap-x-8">
+              <FieldLabel id="settings-model-label" htmlFor="settings-model" className="@md/field-group:pt-2.5">模型</FieldLabel>
+              <FieldContent className="min-w-0 gap-2">
+                <Combobox key={provider} items={models} value={chosen ?? null} autoHighlight disabled={modelsLoading || saving}
                   itemToStringLabel={(m) => m.name} itemToStringValue={(m) => m.id}
                   isItemEqualToValue={(a, b) => a.id === b.id}
                   filter={(m, query) => `${m.name} ${m.id}`.toLowerCase().includes(query.trim().toLowerCase())}
+                  onInputValueChange={() => modelList.current?.scrollTo(0, 0)}
                   onValueChange={(m) => { setModel(m?.id ?? ''); if (m && !m.thinkingLevels.includes(level)) setLevel(m.thinkingLevels.at(-1) ?? 'off') }}>
-                  <ComboboxInput id="settings-model" placeholder={modelsLoading ? '正在加载模型…' : '搜索并选择模型'} />
-                  <ComboboxContent className="min-w-(--anchor-width)">
-                    <ComboboxEmpty>{models.length ? '没有匹配的模型。' : '此 Provider 暂无可用模型。'}</ComboboxEmpty>
-                    <ComboboxList aria-label="模型列表">
+                  <ComboboxTrigger id="settings-model" aria-labelledby="settings-model-label"
+                    aria-describedby={chosen ? 'settings-model-details' : undefined}
+                    render={<Button variant="outline" className="h-10 w-full min-w-0 justify-between px-3 font-normal" />}>
+                    <span className="min-w-0 truncate"><ComboboxValue placeholder={modelsLoading ? '正在加载模型…' : '搜索并选择模型'} /></span>
+                  </ComboboxTrigger>
+                  <ComboboxContent className="min-w-(--anchor-width)" aria-label="选择模型">
+                    <ComboboxInput aria-label="搜索模型" placeholder="搜索名称或模型 ID…" showTrigger={false}>
+                      <InputGroupAddon><Search aria-hidden="true" /></InputGroupAddon>
+                    </ComboboxInput>
+                    <ComboboxEmpty className="px-3 py-6">{models.length ? '没有匹配的模型。' : '此 Provider 暂无可用模型。'}</ComboboxEmpty>
+                    <ComboboxList ref={modelList} aria-label="模型列表">
                       {(m: ModelSummary) => (
-                        <ComboboxItem key={m.id} value={m} className="py-2">
-                          <span className="flex min-w-0 flex-col">
+                        <ComboboxItem key={m.id} value={m} className="px-3 py-2.5">
+                          <span className="flex min-w-0 flex-col gap-0.5">
                             <span className="truncate font-medium">{m.name}</span>
                             <span className="truncate text-xs text-muted-foreground">{m.id}</span>
                           </span>
@@ -318,59 +325,54 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
                     </ComboboxList>
                   </ComboboxContent>
                 </Combobox>
-                {modelsError && <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
+                {modelsError && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
                   {modelsError}<Button variant="outline" size="sm" onClick={() => setModelsRetry((n) => n + 1)}>重试</Button>
                 </div>}
-                {chosen && <FieldDescription className="text-xs">
+                {chosen && <FieldDescription id="settings-model-details" className="text-xs leading-relaxed">
                   <span className="break-all">{chosen.id}</span> · <span className="whitespace-nowrap">{Math.round(chosen.contextWindow / 1000)}k 上下文</span>
                   {chosen.reasoning && <> · <span className="whitespace-nowrap">支持推理</span></>}
                   {chosen.input.includes('image') && <> · <span className="whitespace-nowrap">图像</span></>}
                 </FieldDescription>}
-              </Field>
-            )}
-            {chosen && levels.length > 0 && (
-              <Field>
-                <FieldLabel htmlFor="settings-level">推理强度</FieldLabel>
+              </FieldContent>
+            </Field>
+          )}
+          {chosen && levels.length > 0 && (
+            <Field className="grid items-start @md/field-group:grid-cols-[7rem_minmax(0,1fr)] @md/field-group:gap-x-8">
+              <FieldLabel htmlFor="settings-level" className="@md/field-group:pt-2.5">推理强度</FieldLabel>
+              <FieldContent className="min-w-0">
                 <Select value={level} disabled={saving} onValueChange={(value) => setLevel(value as ModelSelection['thinkingLevel'])}>
-                  <SelectTrigger id="settings-level" className="w-full"><SelectValue>{LEVEL_LABELS[level] ?? level}</SelectValue></SelectTrigger>
+                  <SelectTrigger id="settings-level" className="w-full px-3 data-[size=default]:h-10"><SelectValue>{LEVEL_LABELS[level] ?? level}</SelectValue></SelectTrigger>
                   <SelectContent>
                     {levels.map((l) => <SelectItem key={l} value={l}>{LEVEL_LABELS[l] ?? l}</SelectItem>)}
                   </SelectContent>
                 </Select>
-              </Field>
-            )}
-          </FieldGroup>
-        </CardContent>
-        <CardFooter>
-          <Button disabled={!dirty || !provider || !chosen || saving} onClick={save}>
-            {saving && <Loader2 className="size-3.5 animate-spin" data-icon="inline-start" />}保存选择
-          </Button>
-        </CardFooter>
-      </Card>
-
-      {current && (
-        <Card>
-          <CardHeader>
+              </FieldContent>
+            </Field>
+          )}
+        </FieldGroup>
+        {current && (
+          <section aria-label={`${current.name} 凭据`} className="flex min-w-0 flex-col gap-4 border-t pt-6">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle><h3>凭据 · {current.name}</h3></CardTitle>
+              <h3 className="font-medium">凭据</h3>
               <ProviderAuth provider={current} />
             </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {current.stored && <p className="text-xs text-muted-foreground">已保存{current.stored === 'oauth' ? ' OAuth 凭据' : ' API Key'}，仅存储在本机数据目录。</p>}
+            <p className="text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+              {current.stored ? `已保存${current.stored === 'oauth' ? ' OAuth 凭据' : ' API Key'}，仅存储在本机数据目录。` : '凭据仅由服务端使用。'}
+              {current.configured?.source && <> 来源：{current.configured.source}</>}
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               {current.auth.apiKey?.login && (
-                <Button variant="outline" disabled={loggingIn} onClick={() => void startLogin('api_key')}>
+                <Button variant="outline" size="lg" disabled={loggingIn} onClick={() => void startLogin('api_key')}>
                   <KeyRound data-icon="inline-start" /> 输入 API Key
                 </Button>
               )}
               {current.auth.oauth && (
-                <Button variant="outline" disabled={loggingIn} onClick={() => void startLogin('oauth')}>
+                <Button variant="outline" size="lg" disabled={loggingIn} onClick={() => void startLogin('oauth')}>
                   <LogIn data-icon="inline-start" /> {current.auth.oauth.label ?? `${current.auth.oauth.name} 登录`}
                 </Button>
               )}
               {current.stored && (
-                <Button variant="ghost" className="text-destructive" disabled={loggingIn} onClick={() => void logout()}>
+                <Button variant="ghost" size="lg" className="text-destructive" disabled={loggingIn} onClick={() => void logout()}>
                   <LogOut data-icon="inline-start" /> 清除已存凭据
                 </Button>
               )}
@@ -378,10 +380,16 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
             {login && login.providerId === provider && (
               <LoginFlow key={login.id} session={login} answering={answering} onAnswer={(id, value) => void answerLogin(id, value)} onCancel={cancelLogin} />
             )}
-          </CardContent>
-        </Card>
-      )}
-      {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
-    </div>
+          </section>
+        )}
+        {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
+      </CardContent>
+      <CardFooter className="flex-wrap justify-end gap-3 border-t-0 pt-0">
+        {dirty && <p role="status" className="text-xs text-muted-foreground">有未保存的修改</p>}
+        <Button size="lg" disabled={!dirty || !provider || !chosen || saving} onClick={save}>
+          {saving && <Loader2 className="size-3.5 animate-spin" data-icon="inline-start" />}保存选择
+        </Button>
+      </CardFooter>
+    </Card>
   )
 }

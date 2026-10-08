@@ -394,7 +394,7 @@ test('returning to settings refreshes shared account readiness without replacing
   await panel.getByLabel('服务区域', { exact: true }).click(); await page.getByRole('option', { name: '中国', exact: true }).click();
   // Model login/logout updates this same server-side account while the search form is inactive.
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
-  await expect(region.getByLabel('模型', { exact: true })).toHaveValue('Teaching fixture');
+  await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   fixture.search.settings.providers = fixture.search.settings.providers.map((entry) => entry.id === 'codex'
     ? { ...entry, configured: 'account', ready: true } : entry.id === 'kimi' ? { ...entry, configured: 'environment' } : entry);
   fixture.teaching.providers[0]!.configured = null;
@@ -408,7 +408,7 @@ test('returning to settings refreshes shared account readiness without replacing
   await expect(panel.getByText('已登录 · Codex', { exact: true })).toBeVisible(); await expect(diagnose).toBeEnabled();
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
   await expect(region.getByText('合成教学凭据已移除', { exact: true })).toBeVisible();
-  await expect(region.getByLabel('模型', { exact: true })).toHaveValue('Teaching fixture');
+  await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   await expect(region.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
   fixture.search.settings.providers = fixture.search.settings.providers.map((entry) => entry.id === 'codex' ? { ...entry, configured: null, ready: false } : entry);
   await region.getByRole('tab', { name: '搜索服务', exact: true }).click();
@@ -420,7 +420,7 @@ test('returning to settings refreshes shared account readiness without replacing
   await region.getByRole('tab', { name: '搜索服务', exact: true }).click();
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
   await expect(region.getByText('合成模型状态读取失败', { exact: true })).toBeVisible();
-  await expect(region.getByLabel('模型', { exact: true })).toHaveValue('Teaching fixture');
+  await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   await expect(level.locator('[data-slot="select-value"]')).toHaveText('低');
   await expect(region.getByRole('button', { name: '保存选择', exact: true })).toBeEnabled();
   expect(fixture.starts).toBe(0); expect(fixture.teachingWrites).toBe(0); expect(fixture.search.writes).toEqual([]);
@@ -499,7 +499,7 @@ test('Codex OAuth uses existing login routes without selecting a teaching model;
   await panel.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(panel.getByText('未登录 · Codex', { exact: true })).toBeVisible(); await expect(diagnose).toBeDisabled(); expect(fixture.logouts).toBe(1);
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
-  await expect(region.getByLabel('模型', { exact: true })).toHaveValue('Teaching fixture');
+  await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   await expect(region.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
   expect(fixture.teachingWrites).toBe(0); expect(errors).toEqual([]);
 });

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
-import type { LoginSession, ModelSettings, ModelSummary } from '../../packages/contracts/src/settings';
+import type { LoginSession, ModelSelection, ModelSettings, ModelSummary } from '../../packages/contracts/src/settings';
 import type { seedWorkspaces } from '../seed-workspaces';
 
 for (const [name, viewport] of [
@@ -29,7 +29,7 @@ for (const [name, viewport] of [
     await expect(homeInput).toBeHidden();
     await expect(settingsPage.getByLabel('Provider', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('OpenRouter');
     await expect(settingsPage.getByLabel('推理强度', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('低');
-    await expect(settingsPage.getByLabel('模型', { exact: true })).toHaveValue('Space Bunny Alpha');
+    await expect(settingsPage.getByLabel('模型', { exact: true })).toHaveText('Space Bunny Alpha');
     await expect.poll(() => settingsPage.boundingBox()).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
     expect(await settingsPage.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     await expect(settingsPage.getByRole('tablist')).toHaveAttribute('data-orientation', viewport.width >= 768 ? 'vertical' : 'horizontal');
@@ -41,7 +41,8 @@ for (const [name, viewport] of [
     const providerOption = page.locator('[data-slot="select-content"]').getByRole('option', { name: /OpenRouter/ });
     await expect(providerOption).toBeVisible();
     await providerOption.click();
-    await settingsPage.getByLabel('模型', { exact: true }).fill('space-bunny');
+    await settingsPage.getByLabel('模型', { exact: true }).click();
+    await page.getByRole('combobox', { name: '搜索模型', exact: true }).fill('space-bunny');
     const popup = page.locator('[data-slot="combobox-content"]');
     const modelOption = popup.getByRole('option').filter({ hasText: 'stealth/space-bunny-alpha' });
     await expect(modelOption).toBeVisible();
@@ -72,9 +73,10 @@ for (const [name, viewport] of [
     await page.getByRole('button', { name: '应用设置', exact: true }).click();
     await expect(settingsPage.getByLabel('Provider', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('OpenRouter');
     await expect(settingsPage.getByLabel('推理强度', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('高');
-    await expect(settingsPage.getByLabel('模型', { exact: true })).toHaveValue('Space Bunny Alpha');
+    await expect(settingsPage.getByLabel('模型', { exact: true })).toHaveText('Space Bunny Alpha');
     const oauth = settingsPage.getByRole('button', { name: 'Sign in with OpenRouter', exact: true });
-    await oauth.scrollIntoViewIfNeeded();
+    // Center the control rather than measuring Chromium's fractional-pixel nearest-edge scroll.
+    await oauth.evaluate((element) => element.scrollIntoView({ block: 'center' }));
     expect((await oauth.boundingBox())!.y + (await oauth.boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
     expect((await settingsPage.getByRole('heading', { name: '设置', exact: true }).boundingBox())!.y).toBeLessThan(64);
     await settingsPage.getByRole('tabpanel', { name: '模型配置', exact: true }).evaluate((el) => el.scrollTo(0, 0));
@@ -83,7 +85,159 @@ for (const [name, viewport] of [
   });
 }
 
-test('settings cancellation waits for its terminal state and credential removal uses POST', async ({ page }) => {
+test('model search separates queries from selection and fits one card in both themes and narrow screens', async ({ page }, info) => {
+  const errors: string[] = [], writes: ModelSelection[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const settings: ModelSettings = {
+    selection: { provider: 'synthetic', model: 'vendor/reasoner-v2', thinkingLevel: 'high' }, ready: true, issue: null,
+    providers: [
+      { id: 'synthetic', name: 'Synthetic Provider', models: 3, stored: null, configured: { type: 'api_key', source: 'FIXTURE_API_KEY' },
+        auth: { apiKey: { name: 'Fixture key', login: true }, oauth: { name: 'Synthetic', label: '登录 Synthetic', subscription: false } } },
+      { id: 'other', name: 'Other Provider', models: 1, stored: null, configured: null, auth: { apiKey: { name: 'Other key', login: true } } },
+    ],
+  };
+  const catalogs: Record<string, ModelSummary[]> = {
+    synthetic: [
+      { id: 'vendor/reasoner-v2', name: 'Atlas Reasoner', reasoning: true, thinkingLevels: ['low', 'high'], contextWindow: 128000, maxTokens: 8192, input: ['text', 'image'] },
+      { id: 'vendor/plain-v3', name: 'Swift Chat', reasoning: false, thinkingLevels: ['off'], contextWindow: 32000, maxTokens: 4096, input: ['text'] },
+      { id: 'vendor/vision-v1', name: 'Atlas Vision', reasoning: true, thinkingLevels: ['medium'], contextWindow: 64000, maxTokens: 4096, input: ['text', 'image'] },
+    ],
+    other: [{ id: 'other-v4', name: 'Other Model', reasoning: false, thinkingLevels: [], contextWindow: 48000, maxTokens: 2048, input: ['text'] }],
+  };
+  await page.route('**/api/settings/model', (route) => {
+    if (route.request().method() === 'POST') {
+      const selection = route.request().postDataJSON() as ModelSelection;
+      writes.push(selection); settings.selection = selection;
+    }
+    return route.fulfill({ json: settings });
+  });
+  await page.route('**/api/settings/providers/*/models', (route) => {
+    const provider = new URL(route.request().url()).pathname.split('/')[4]!;
+    return route.fulfill({ json: catalogs[provider] });
+  });
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const region = page.getByRole('region', { name: '应用设置', exact: true });
+  const panel = region.getByRole('tabpanel', { name: '模型配置', exact: true });
+  const picker = panel.getByLabel('模型', { exact: true });
+  const save = panel.getByRole('button', { name: '保存选择', exact: true });
+  const popup = page.locator('[data-slot="combobox-content"]');
+  const search = page.getByRole('combobox', { name: '搜索模型', exact: true });
+  await expect(picker).toHaveText('Atlas Reasoner');
+  await expect(save).toBeDisabled();
+  await expect(panel.locator('[data-slot="card"]')).toHaveCount(1);
+  await expect(panel.getByText('教学模型已就绪', { exact: true })).toHaveCount(0);
+  await expect(panel.getByText('128k 上下文', { exact: true })).toHaveCount(1);
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-default-${info.project.name}.png`, animations: 'disabled' });
+  await picker.focus(); await page.keyboard.press('Enter');
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('');
+  await search.fill('  aTLas  ');
+  await expect(popup.getByRole('option')).toHaveText(['Atlas Reasonervendor/reasoner-v2', 'Atlas Visionvendor/vision-v1']);
+  await search.fill('  PLAIN-v3  ');
+  await expect(popup.getByRole('option')).toHaveText(['Swift Chatvendor/plain-v3']);
+  await search.fill('no-such-model');
+  await expect(popup.getByText('没有匹配的模型。', { exact: true })).toBeVisible();
+  await expect(popup.getByRole('option')).toHaveCount(0);
+  await search.press('Escape');
+  await expect(picker).toBeFocused();
+  await expect(picker).toHaveText('Atlas Reasoner');
+  await expect(save).toBeDisabled();
+  await picker.click();
+  await expect(search).toHaveValue('');
+  await expect(popup.getByRole('option')).toHaveCount(3);
+  await search.fill('plain-v3');
+  await expect(popup.getByRole('option')).toHaveAttribute('data-highlighted', '');
+  await search.press('Enter');
+  await expect(picker).toHaveText('Swift Chat');
+  await expect(panel.getByLabel('推理强度', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('关闭');
+  await expect(panel.getByText('有未保存的修改', { exact: true })).toBeVisible();
+  await expect(save).toBeEnabled();
+  // Re-open search without losing the dirty selection; all three controls must share their right column.
+  for (const [device, width, height, theme] of [
+    ['desktop-light', 1440, 1000, 'light'], ['desktop-dark', 1440, 1000, 'dark'],
+    ['mobile-dark', 390, 844, 'dark'], ['mobile-light', 390, 844, 'light'], ['narrow-light', 320, 780, 'light'],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator('html')).toHaveClass(theme === 'dark' ? /\bdark\b/ : /\blight\b/);
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await panel.locator('[data-slot="card-footer"]').evaluate((element) =>
+      getComputedStyle(element).backgroundColor === getComputedStyle(element.closest('[data-slot="card"]')!).backgroundColor)).toBe(true);
+    if (width === 1440) {
+      const controls = await Promise.all(['Provider', '模型', '推理强度'].map((name) => panel.getByLabel(name, { exact: true }).boundingBox()));
+      expect(controls.map((bounds) => [bounds!.x, bounds!.width, bounds!.height])).toEqual(Array(3).fill([controls[0]!.x, controls[0]!.width, 40]));
+      const labels = await panel.locator('label').all();
+      for (const [index, label] of labels.entries()) {
+        const bounds = (await label.boundingBox())!;
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(controls[index]!.y + controls[index]!.height);
+      }
+    }
+    await region.getByRole('heading', { name: '设置', exact: true }).focus();
+    await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-${device}-${info.project.name}.png`, animations: 'disabled' });
+    await picker.click(); await expect(search).toHaveValue('');
+    await search.fill('atlas');
+    await expect(popup.getByRole('option')).toHaveCount(2);
+    expect(await popup.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const bounds = (await popup.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-search-${device}-${info.project.name}.png`, animations: 'disabled' });
+    await search.press('Escape');
+    await expect(picker).toHaveText('Swift Chat'); await expect(save).toBeEnabled();
+  }
+  await save.click(); await expect(save).toBeDisabled();
+  expect(writes).toEqual([{ provider: 'synthetic', model: 'vendor/plain-v3', thinkingLevel: 'off' }]);
+  await panel.getByLabel('Provider', { exact: true }).click();
+  await page.getByRole('option', { name: /Other Provider/ }).click();
+  await expect(picker).toHaveText('搜索并选择模型');
+  await expect(save).toBeDisabled();
+  await expect(panel.getByText('未配置凭据', { exact: true })).toBeVisible();
+  await picker.click(); await expect(search).toHaveValue('');
+  await expect(popup.getByRole('option')).toHaveText(['Other Modelother-v4']);
+  await popup.getByRole('option').click();
+  await expect(panel.getByLabel('推理强度', { exact: true })).toHaveCount(0);
+  await expect(save).toBeEnabled();
+  expect(writes).toHaveLength(1); expect(errors).toEqual([]);
+});
+
+test('filtering a long model catalog reveals the first match without selecting it', async ({ page }) => {
+  const models: ModelSummary[] = Array.from({ length: 24 }, (_, index) => ({
+    id: `catalog/${index + 1}`, name: `Catalog Model ${String(index + 1).padStart(2, '0')}`,
+    reasoning: false, thinkingLevels: ['off'], contextWindow: 32000, maxTokens: 4096, input: ['text'],
+  }));
+  const settings: ModelSettings = {
+    selection: { provider: 'synthetic', model: 'catalog/24', thinkingLevel: 'off' }, ready: true, issue: null,
+    providers: [{ id: 'synthetic', name: 'Synthetic Provider', models: 24, stored: null, configured: { type: 'api_key' }, auth: {} }],
+  };
+  await page.route('**/api/settings/model', (route) => {
+    expect(route.request().method()).toBe('GET');
+    return route.fulfill({ json: settings });
+  });
+  await page.route('**/api/settings/providers/synthetic/models', (route) => route.fulfill({ json: models }));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const panel = page.getByRole('tabpanel', { name: '模型配置', exact: true });
+  const picker = panel.getByLabel('模型', { exact: true });
+  await expect(picker).toHaveText('Catalog Model 24');
+  await picker.click();
+  const popup = page.locator('[data-slot="combobox-content"]');
+  await expect(popup.getByRole('option').last()).toBeInViewport({ ratio: 1 });
+  const search = page.getByRole('combobox', { name: '搜索模型', exact: true });
+  await search.fill('  CATALOG  ');
+  await expect(popup.getByRole('option')).toHaveCount(24);
+  await expect(popup.getByRole('option').first()).toBeInViewport({ ratio: 1 });
+  await expect(popup.getByRole('option').first()).toHaveAttribute('data-highlighted', '');
+  await search.press('Escape');
+  await expect(picker).toHaveText('Catalog Model 24');
+  await expect(panel.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
+});
+
+test('settings cancellation waits for its terminal state and credential removal uses POST', async ({ page }, info) => {
   let cancelled = false;
   const methods: string[] = [];
   const settings: ModelSettings = {
@@ -122,11 +276,30 @@ test('settings cancellation waits for its terminal state and credential removal 
   const settingsPage = page.getByRole('region', { name: '应用设置', exact: true });
   await settingsPage.getByRole('button', { name: '输入 API Key', exact: true }).click();
   await expect(settingsPage.getByText('Enter a synthetic key.', { exact: true })).toBeVisible();
+  await expect(settingsPage.locator('input[type="password"]')).toHaveValue('');
+  for (const [device, width, height, theme] of [
+    ['desktop-light', 1440, 1000, 'light'], ['desktop-dark', 1440, 1000, 'dark'],
+    ['mobile-dark', 390, 844, 'dark'], ['mobile-light', 390, 844, 'light'],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+    const panel = settingsPage.getByRole('tabpanel', { name: '模型配置', exact: true });
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await expect(settingsPage.getByRole('button', { name: '取消登录', exact: true })).toBeVisible();
+    await panel.evaluate((element) => element.scrollTo(0, 0));
+    await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-login-${device}-${info.project.name}.png`, animations: 'disabled' });
+    if (width < 768) {
+      await settingsPage.getByRole('button', { name: '保存选择', exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-login-${device}-bottom-${info.project.name}.png`, animations: 'disabled' });
+    }
+  }
   await settingsPage.getByRole('button', { name: '取消登录', exact: true }).click();
   await expect(settingsPage.getByText('已取消。', { exact: true })).toBeVisible();
   await settingsPage.getByRole('button', { name: '清除已存凭据', exact: true }).click();
   await expect(settingsPage.getByRole('button', { name: '清除已存凭据', exact: true })).toHaveCount(0);
   await expect(settingsPage.getByText('未配置凭据', { exact: true })).toBeVisible();
+  await expect(settingsPage.getByText('尚未配置凭据。', { exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-unconfigured-${info.project.name}.png`, animations: 'disabled' });
   expect(methods).toEqual(['POST cancel', 'POST logout']);
 });
 

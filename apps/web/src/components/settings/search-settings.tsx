@@ -277,7 +277,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
               </Field>}
             </FieldGroup>
           </CardContent>
-          <CardFooter className="flex-col items-start gap-3 bg-card">
+          <CardFooter className="flex-col items-start gap-3">
             <div className="flex flex-wrap gap-2">
               <Button disabled={blocked || !dirty || current?.model !== undefined && !model.trim()} onClick={() => void write('save', {
                 provider, ...(current?.authentication === 'api_key' && apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
