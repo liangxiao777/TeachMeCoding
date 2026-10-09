@@ -42,8 +42,8 @@ test('standalone library uploads arbitrary bytes, retries safely, shares globall
   await picker.setInputFiles([
     { name: names[0]!, mimeType: 'application/octet-stream', buffer: bytes },
     { name: names[1]!, mimeType: 'text/markdown', buffer: Buffer.from('# 学习笔记\n参考资料') },
-    { name: names[2]!, mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\nUpload fixture, not a parser test.') },
-    { name: names[3]!, mimeType: 'application/octet-stream', buffer: Buffer.from('Original fixture bytes') },
+    { name: names[2]!, mimeType: 'application/pdf', buffer: readFileSync(new URL('../fixtures/library-reference.pdf', import.meta.url)) },
+    { name: names[3]!, mimeType: 'application/octet-stream', buffer: readFileSync(new URL('../fixtures/library-reference.docx', import.meta.url)) },
   ]);
   await expect(library.getByRole('alert')).toBeVisible();
   await capture(page, info, 'retry');

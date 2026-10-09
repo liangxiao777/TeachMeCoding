@@ -195,6 +195,8 @@ TMC_DATA_DIR="$HOME/teach-me-coding-data" pnpm start
 
 `pnpm test` 包含会话归属、事务/幂等写入、项目路径边界、迁移故障、重复启动和真实进程恢复测试；进程集成测试使用 14310、14340、14341 端口及可丢弃目录。`pnpm check` 同时检查浏览器测试及截图脚本的类型。`pnpm test:browser --workers=1` 在开发代理和生产单服务两种模式验证交互与截图，保留原有访问保护检查，不复用已运行的用户服务。正式持久化检查由 `tests/serve-browser.ts` 创建并清理临时数据目录，内部业务入口写入明确标注的验收课件和路线；`/preview` 回归仍使用内存夹具。不需要模型密钥，不读写已有学习数据。
 
+资料库文档回归使用 `tests/fixtures/library-reference.docx`、双页 `library-reference.pdf` 和纯图片 `library-scanned.pdf`，验证上传后通过 Agent 原生工具提取中文、英文、XML 转义、表格及第二页正文，以及文字层为空和解析工具缺失的反馈。DOCX 命令只使用 Python 3 标准库，PDF 命令使用本机 `pdftotext`（Poppler）；运行 `pnpm test` 需要这两个命令，缺失时测试失败，不自动安装或跳过。模型工具选择仍是确定性流，实际文件、Bash 和解析进程均为真实执行；不代表真实模型已通过自主解析或 OCR 验收。
+
 本机执行专项使用真实 PTY 和可丢弃文件；Agent 回复使用确定性测试 Provider，不调用收费模型。先执行 `pnpm build`，再分别运行以下命令（两组共用测试端口，不能同时运行）：
 
 ```sh

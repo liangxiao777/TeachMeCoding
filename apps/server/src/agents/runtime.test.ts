@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
@@ -644,5 +644,85 @@ test('a bare teaching Agent discovers global references and reads Pi Bash contin
     assert.deepEqual(readdirSync(join(root, 'bash-output')), []);
     const retained = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
     assert.doesNotMatch(retained, /PRIVATE-REFERENCE-BODY|continuation-2200/);
+  } finally { await runtime.close(); await library.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// Real document bytes and native parsing; only the model's tool choices are scripted.
+for (const sample of [
+  { name: 'DOCX', fixture: 'library-reference.docx', missingParser: false,
+    paragraphs: ['资料库 DOCX 正文', 'Reading reference DOCX-7319', '表达式：A&B < C', '蓝色=17', '橙色=29'] },
+  { name: 'multi-page PDF', fixture: 'library-reference.pdf', missingParser: false,
+    paragraphs: ['资料库 PDF 正文', 'Reference PDF-4826', '表达式：A&B < C', '第二页事实：蓝色 17，橙色 29。', 'Second-page code: PDF-PAGE2-9281'] },
+  { name: 'image-only PDF without OCR', fixture: 'library-scanned.pdf', missingParser: false, paragraphs: [] },
+  { name: 'PDF with a missing parser', fixture: 'library-reference.pdf', missingParser: true, paragraphs: [] },
+]) test(`uploaded documents reach the teaching Agent through native tools: ${sample.name}`, async () => {
+  const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), "tmc-library docs-'"));
+  const library = new Library(root), outputPath = join(root, 'extracted text.txt');
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const filename = `课程参考 'A&B'.${sample.fixture.endsWith('.docx') ? 'docx' : 'pdf'}`;
+  const runtime = new TeachingRuntime(learning, syntheticSource, { library, stream: (_model, context) => {
+    const last = context.messages.filter((m) => m.role === 'toolResult').at(-1);
+    const call = (name: string, args: Record<string, string>) => response(reply([{ type: 'toolCall', id: randomUUID(), name, arguments: args }], 'toolUse'));
+    if (!last) return call('list_library_files', {});
+    const output = last.content.map((p) => p.type === 'text' ? p.text : '').join('');
+    if (last.toolName === 'list_library_files') {
+      assert.equal(last.isError, false, output);
+      const listing = JSON.parse(output);
+      const file = listing.files.find((file: { name: string }) => file.name === filename);
+      assert.ok(file, 'The Agent must discover the uploaded document, not a pre-supplied source body.');
+      const source = quote(file.path);
+      const command = sample.missingParser
+        ? `/usr/bin/env PATH=${quote(join(root, 'no-parsers'))} pdftotext ${source} -`
+        : sample.fixture.endsWith('.docx') ? `python3 - ${source} > ${quote(outputPath)} <<'PY'
+import sys
+from zipfile import ZipFile
+from xml.etree import ElementTree
+with ZipFile(sys.argv[1]) as archive:
+    document = ElementTree.fromstring(archive.read('word/document.xml'))
+namespace = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+for paragraph in document.findall('.//w:p', namespace):
+    print(''.join(node.text or '' for node in paragraph.findall('.//w:t', namespace)))
+PY` : `pdftotext -enc UTF-8 -nopgbrk ${source} ${quote(outputPath)}`;
+      return call('bash', { command });
+    }
+    if (last.toolName === 'bash') {
+      if (sample.missingParser) {
+        assert.equal(last.isError, true, 'A missing parser must not produce a successful tool result.');
+        assert.match(output, /pdftotext/);
+        assert.match(output, /Command exited with code 127/);
+        return response(reply([{ type: 'text', text: `未提取正文，解析工具不可用：\n${output}` }]));
+      }
+      assert.equal(last.isError, false, `Native parser failed; these tests require python3 and pdftotext:\n${output}`);
+      return call('read', { path: outputPath });
+    }
+    assert.equal(last.toolName, 'read');
+    assert.equal(last.isError, false, output);
+    const body = JSON.parse(output).text as string;
+    return response(reply([{ type: 'text', text: body.trim() || '未提取到文字层，需要 OCR。' }]));
+  } });
+  try {
+    const access = createLocalAccess({ port: 14333 });
+    const app = createApp(access, learning, undefined, runtime, undefined, undefined, undefined, undefined, library);
+    const bytes = readFileSync(new URL(`../../../../tests/fixtures/${sample.fixture}`, import.meta.url));
+    const uploaded = await app.request(`/api/library/files?name=${encodeURIComponent(filename)}`, {
+      method: 'POST', headers: { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token, 'Idempotency-Key': randomUUID() },
+      body: Uint8Array.from(bytes).buffer,
+    });
+    assert.equal(uploaded.status, 201);
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message(`读取资料库中的 ${filename}，只引用实际提取的正文；不能读取时说明限制。`));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded', runtime.get(a.id, run.id).error ?? '');
+    const answer = learning.session(a.id, sa).messages.at(-1)!.text;
+    if (sample.missingParser) {
+      assert.match(answer, /^未提取正文，解析工具不可用：/);
+      assert.match(answer, /pdftotext/);
+      assert.doesNotMatch(answer, /PDF-4826|PDF-PAGE2-9281/);
+    } else if (sample.paragraphs.length) {
+      // Ignore layout whitespace, not content, order, XML entities, tables or later pages.
+      assert.equal(answer.replace(/\s+/g, ''), sample.paragraphs.join('').replace(/\s+/g, ''));
+    } else {
+      assert.equal(answer, '未提取到文字层，需要 OCR。');
+      assert.equal(readFileSync(outputPath, 'utf8').trim(), '');
+    }
   } finally { await runtime.close(); await library.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
