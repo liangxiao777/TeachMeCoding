@@ -1,12 +1,13 @@
 'use client'
 
-import { Activity, useRef, useState } from 'react'
+import { Activity, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion, MotionConfig, useReducedMotion } from 'motion/react'
 import { AgentPanel } from '@/components/agent/agent-panel'
 import { AssessmentView } from '@/components/assessment/assessment-view'
 import { ResultView } from '@/components/assessment/result-view'
 import { Onboarding } from '@/components/onboarding'
 import { RouteView } from '@/components/route-view'
+import { LibraryNavigation, LibraryPage } from '@/components/library-page'
 import { SettingsNavigation, SettingsPage } from '@/components/settings/settings-page'
 import { SpaceList } from '@/components/space-list'
 import { TopBar } from '@/components/top-bar'
@@ -49,11 +50,40 @@ function SpaceBody() {
 
 export function AppShell() {
   const { current, persistence } = useApp()
+  const [libraryOpen, setLibraryOpen] = useState(() => !!persistence && location.pathname === '/library')
+  const libraryTrigger = useRef<HTMLElement | null>(null)
+  const libraryScroll = useRef({ x: 0, y: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsCovered, setSettingsCovered] = useState(false)
   const settingsOpenRef = useRef(false)
   const settingsTrigger = useRef<HTMLElement | null>(null)
   const learningScroll = useRef({ x: 0, y: 0 })
+  const openLibrary = () => {
+    libraryTrigger.current = document.activeElement as HTMLElement | null
+    libraryScroll.current = { x: window.scrollX, y: window.scrollY }
+    history.pushState({ tmcLibrary: true }, '', `/library${location.search}`)
+    setLibraryOpen(true)
+  }
+  const closeLibrary = () => {
+    if (history.state?.tmcLibrary) history.back()
+    else {
+      history.replaceState(null, '', `/${location.search}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
+  }
+  useEffect(() => {
+    if (!persistence) return
+    const navigate = () => {
+      const open = location.pathname === '/library'
+      setLibraryOpen(open)
+      if (!open) requestAnimationFrame(() => {
+        libraryTrigger.current?.focus({ preventScroll: true })
+        window.scrollTo({ left: libraryScroll.current.x, top: libraryScroll.current.y, behavior: 'instant' })
+      })
+    }
+    window.addEventListener('popstate', navigate)
+    return () => window.removeEventListener('popstate', navigate)
+  }, [!!persistence])
   const openSettings = () => {
     settingsTrigger.current = document.activeElement as HTMLElement | null
     learningScroll.current = { x: window.scrollX, y: window.scrollY }
@@ -75,9 +105,10 @@ export function AppShell() {
     <MotionConfig reducedMotion="user" transition={{ duration: uiMotion.content, ease: uiMotion.ease }}>
       <TooltipProvider delay={300}>
         <SettingsNavigation value={persistence ? openSettings : null}>
+        <LibraryNavigation value={persistence ? openLibrary : null}>
           <div className="min-h-dvh" style={uiMotionVariables}>
-            <div inert={settingsOpen} aria-hidden={settingsOpen}>
-              <Activity mode={settingsCovered && settingsOpen ? 'hidden' : 'visible'}>
+            <div inert={settingsOpen || libraryOpen} aria-hidden={settingsOpen || libraryOpen}>
+              <Activity mode={libraryOpen || settingsCovered && settingsOpen ? 'hidden' : 'visible'}>
                 <div className="app-layout" data-fixture={!persistence || undefined}>
                   {current ? <SpaceBody key={current.id} /> : <SpaceList />}
                   {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
@@ -100,12 +131,14 @@ export function AppShell() {
                 </div>
               </Activity>
             </div>
+            {libraryOpen && <LibraryPage onBack={closeLibrary} />}
             <AnimatePresence initial={false}>
               {settingsOpen && <SettingsPage onBack={closeSettings} onEntered={() => {
                 if (settingsOpenRef.current) setSettingsCovered(true)
               }} />}
             </AnimatePresence>
           </div>
+        </LibraryNavigation>
         </SettingsNavigation>
       </TooltipProvider>
     </MotionConfig>

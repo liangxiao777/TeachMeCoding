@@ -1,0 +1,101 @@
+diff --git a/dist/core/tools/bash.d.ts b/dist/core/tools/bash.d.ts
+index 64be599a321c7486ebe8c9a21608ad8ce61f7778..d32958510e276f8235746bfc6de0921bf3054679 100644
+--- a/dist/core/tools/bash.d.ts
++++ b/dist/core/tools/bash.d.ts
+@@ -78,6 +78,8 @@ export interface BashToolOptions {
+     exposeSessionEnvironment?: boolean;
+     /** Hook to adjust command, cwd, or env before execution */
+     spawnHook?: BashSpawnHook;
++    /** Host-owned directory for private output files. TeachMeCoding patch. */
++    tempDirectory?: string;
+ }
+ export type BashRenderState = {
+     startedAt: number | undefined;
+diff --git a/dist/core/tools/bash.js b/dist/core/tools/bash.js
+index e52c9d779bdb50667083810d946e11da6c7e29ba..fd0cf3f9a08fd72f79ecf561db5f02ff45eb932b 100644
+--- a/dist/core/tools/bash.js
++++ b/dist/core/tools/bash.js
+@@ -172,7 +172,7 @@ export function createShellToolDefinition(cwd, config, options) {
+         async execute(_toolCallId, { command, timeout }, signal, onUpdate, ctx) {
+             const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+             const spawnContext = resolveSpawnContext(resolvedCommand, ctx?.cwd || cwd, spawnHook, exposeSessionEnvironment, ctx);
+-            const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
++            const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix, tempDirectory: options?.tempDirectory });
+             let acceptingOutput = true;
+             let updateTimer;
+             let updateDirty = false;
+diff --git a/dist/core/tools/output-accumulator.d.ts b/dist/core/tools/output-accumulator.d.ts
+index 2e4ce2fba648d75e5585248e9ff24f20c9073d1c..e947aae7130083e5179f0da20232536355b95897 100644
+--- a/dist/core/tools/output-accumulator.d.ts
++++ b/dist/core/tools/output-accumulator.d.ts
+@@ -3,6 +3,7 @@ export interface OutputAccumulatorOptions {
+     maxLines?: number;
+     maxBytes?: number;
+     tempFilePrefix?: string;
++    tempDirectory?: string;
+ }
+ export interface OutputSnapshot {
+     content: string;
+@@ -26,6 +27,7 @@ export declare class OutputAccumulator {
+     private readonly maxBytes;
+     private readonly maxRollingBytes;
+     private readonly tempFilePrefix;
++    private readonly tempDirectory;
+     private readonly decoder;
+     private rawChunks;
+     private tailText;
+diff --git a/dist/core/tools/output-accumulator.js b/dist/core/tools/output-accumulator.js
+index e0a9e71b463457ec2747acc70a7bbd74deb1215b..0a8d216e08363e311a56f79d89b9adb9532cf3be 100644
+--- a/dist/core/tools/output-accumulator.js
++++ b/dist/core/tools/output-accumulator.js
+@@ -4,9 +4,9 @@ import { open } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateTail } from "./truncate.js";
+-function defaultTempFilePath(prefix) {
++function defaultTempFilePath(prefix, directory) {
+     const id = randomBytes(8).toString("hex");
+-    return join(tmpdir(), `${prefix}-${id}.log`);
++    return join(directory ?? tmpdir(), `${prefix}-${id}.log`);
+ }
+ function byteLength(text) {
+     return Buffer.byteLength(text, "utf-8");
+@@ -23,6 +23,7 @@ export class OutputAccumulator {
+     maxBytes;
+     maxRollingBytes;
+     tempFilePrefix;
++    tempDirectory;
+     decoder = new TextDecoder();
+     rawChunks = [];
+     tailText = "";
+@@ -42,6 +43,7 @@ export class OutputAccumulator {
+         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+         this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
+         this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
++        this.tempDirectory = options.tempDirectory;
+     }
+     append(data) {
+         if (this.finished) {
+@@ -100,6 +102,9 @@ export class OutputAccumulator {
+         }
+         const stream = this.tempFileStream;
+         this.tempFileStream = undefined;
++        if (stream.errored) {
++            throw stream.errored;
++        }
+         await new Promise((resolve, reject) => {
+             const onError = (error) => {
+                 stream.off("finish", onFinish);
+@@ -209,8 +214,10 @@ export class OutputAccumulator {
+         if (this.tempFilePath) {
+             return;
+         }
+-        this.tempFilePath = defaultTempFilePath(this.tempFilePrefix);
+-        this.tempFileStream = createWriteStream(this.tempFilePath);
++        this.tempFilePath = defaultTempFilePath(this.tempFilePrefix, this.tempDirectory);
++        this.tempFileStream = createWriteStream(this.tempFilePath, { flags: "wx", mode: 0o600 });
++        // Handle asynchronous write failures immediately; closeTempFile propagates stream.errored.
++        this.tempFileStream.on("error", () => {});
+         for (const chunk of this.rawChunks) {
+             this.tempFileStream.write(chunk);
+         }

@@ -19,6 +19,7 @@ import type { SkillService } from '../extensions/skills.js';
 import type { SearchService } from '../extensions/search.js';
 import type { WebFetchOptions } from '../extensions/web-fetch.js';
 import { prepareTools } from './tools.js';
+import type { Library } from '../modules/library.js';
 
 export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
 interface RuntimeOptions {
@@ -33,6 +34,7 @@ interface RuntimeOptions {
   skills?: SkillService;
   search?: SearchService;
   webFetch?: WebFetchOptions;
+  library?: Library;
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
@@ -289,7 +291,7 @@ export class TeachingRuntime {
       const skills = this.options.skills?.snapshot(text);
       const prepared = await prepareTools({ scenarioTools: scenario.tools,
         cwd: () => this.options.projectDirectory?.(space) ?? process.cwd(), hasSkills: !!skills?.skills.length,
-        mcp: this.options.mcp, search: this.options.search, webFetch: this.options.webFetch, signal: entry.controller.signal });
+        mcp: this.options.mcp, search: this.options.search, webFetch: this.options.webFetch, library: this.options.library, runId: id, signal: entry.controller.signal });
       if (!active(this.get(space, id))) return;
       const agent = new Agent({
         initialState: { model: choice.model, tools: prepared.tools, thinkingLevel: choice.selection.thinkingLevel },
@@ -405,6 +407,7 @@ export class TeachingRuntime {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
     } finally {
       if (timer) clearTimeout(timer);
+      this.options.library?.release(id);
       if (this.get(space, id).state !== 'succeeded') this.learning.db.transaction(() => sealToolCalls(this.learning.db,
         frozen.sessionId ? 'agent_messages' : 'task_messages', space, id))();
     }

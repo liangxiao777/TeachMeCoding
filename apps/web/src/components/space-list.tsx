@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
 import { SettingsButton } from '@/components/settings/settings-page'
+import { LibraryButton } from '@/components/library-page'
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { allUnits, findUnit, relativeTime } from '@/app/selectors'
 import { useApp } from '@/app/context'
@@ -142,15 +143,16 @@ function SpaceCard({ space }: { space: Space }) {
 }
 
 export function SpaceList() {
-  const { state, goHome, goSpaces } = useApp()
+  const { state, goHome, goSpaces, persistence } = useApp()
   const spaces = state.spaces
   const onHome = state.globalView === 'home'
   return (
     <div className={cn('min-h-dvh', onHome && 'startup-page relative isolate')}>
       <header className={cn('sticky top-0 z-10 border-b bg-background/80 backdrop-blur', onHome && 'startup-header')}>
-        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6">
+        <div className={cn('mx-auto flex h-14 max-w-6xl items-center justify-between px-6', persistence && 'max-sm:px-4')}>
           <Brand onClick={goHome} />
           <div className="startup-actions flex items-center gap-2">
+            <LibraryButton />
             <SettingsButton />
             {onHome ? (
               <Button variant="ghost" onClick={goSpaces}>

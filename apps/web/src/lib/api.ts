@@ -1,7 +1,8 @@
-import type { RunEvent } from '@teach-me-coding/contracts';
+import type { LibraryDocument, RunEvent } from '@teach-me-coding/contracts';
 
 let token: Promise<string> | undefined;
 const pending = new Map<string, string>();
+const uploads = new WeakMap<File, string>();
 
 function requestId() {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -38,6 +39,33 @@ export async function api<T>(path: string, input?: unknown): Promise<T> {
   if (!response.ok) throw new ApiError(response.status, result.error ?? '请求失败，请重试。');
   pending.delete(fingerprint);
   return result;
+}
+
+async function fileRequest(path: string, init?: RequestInit) {
+  const send = async () => fetch(`/api${path}`, { ...init, headers: { ...init?.headers, 'X-TMC-Token': await access() } });
+  let response = await send();
+  if (response.status === 401) { token = undefined; response = await send(); }
+  if (!response.ok) {
+    const result = await response.json() as { error?: string };
+    throw new ApiError(response.status, result.error ?? '文件传输失败，请重试。');
+  }
+  return response;
+}
+export async function uploadLibraryFile(file: File): Promise<LibraryDocument> {
+  if (!uploads.has(file)) uploads.set(file, requestId());
+  const response = await fileRequest(`/library/files?name=${encodeURIComponent(file.name)}`, {
+    method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream', 'Idempotency-Key': uploads.get(file)! },
+  });
+  const result = await response.json() as LibraryDocument;
+  uploads.delete(file);
+  return result;
+}
+export async function downloadLibraryFile(file: LibraryDocument) {
+  const response = await fileRequest(`/library/files/${file.id}`);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a'); link.href = url; link.download = file.name;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /** A subscription only reads durable events. Aborting it never stops the server run. */

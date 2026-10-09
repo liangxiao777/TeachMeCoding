@@ -186,10 +186,16 @@ export function usePersistentModel(): AppModel {
   }, [])
   useEffect(() => {
     if (!ready) return
-    const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
-    if (current?.currentUnitId) params.set('unit', current.currentUnitId)
-    if (current?.viewingRecordId) params.set('record', current.viewingRecordId)
-    history.replaceState(null, '', params.size ? `/?${params}` : '/')
+    const updateLocation = () => {
+      if (location.pathname === '/library') return
+      const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
+      if (current?.currentUnitId) params.set('unit', current.currentUnitId)
+      if (current?.viewingRecordId) params.set('record', current.viewingRecordId)
+      history.replaceState(null, '', params.size ? `/?${params}` : '/')
+    }
+    updateLocation()
+    window.addEventListener('popstate', updateLocation)
+    return () => window.removeEventListener('popstate', updateLocation)
   }, [ready, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
 
   const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || !!s.requirementDraft && !same(s.requirementDraft, s.saved.requirement.value)

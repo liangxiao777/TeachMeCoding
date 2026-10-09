@@ -17,6 +17,7 @@ import { McpService } from './extensions/mcp.js';
 import { SkillService } from './extensions/skills.js';
 import { SearchService } from './extensions/search.js';
 import { codexAuthSource } from './extensions/codex-search.js';
+import { Library } from './modules/library.js';
 
 try {
   const config = serverConfig();
@@ -40,21 +41,24 @@ try {
   }); }
   catch { /* Invalid search configuration must not block learning or other settings. */ }
   const learning = new Learning(data.db);
+  let library: Library | undefined;
+  try { library = new Library(data.root); }
+  catch { /* Keep saved learning accessible when the document library is unavailable. */ }
   const projects = new Projects(data.root);
   const terminals = new Terminals((space) => projects.root(space));
   const actions = new Actions(learning, projects);
   const executions = new Executions(learning);
   const agents = new TeachingRuntime(learning, models, {
-    actions, executions, mcp, skills, search,
+    actions, executions, mcp, skills, search, library,
     projectDirectory: (space) => projects.root(space),
     debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
-  const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined, mcp, skills, search).fetch, hostname, port }, () => {
+  const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined, mcp, skills, search, library).fetch, hostname, port }, () => {
     console.log(`TeachMeCoding listening on http://${hostname}:${port}`);
     if (hostname === '0.0.0.0') console.warn('Network access enabled without login. Use only on a trusted network.');
   });
   server.on('upgrade', terminalUpgradeGate(access, terminals, (space) => learning.space(space)));
-  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close(), skills?.close(), search?.close()]).then(() => models?.close());
+  const close = () => Promise.all([agents.close(), terminals.close(), actions.close(), executions.close(), mcp?.close(), skills?.close(), search?.close(), library?.close()]).then(() => models?.close());
   server.on('error', () => {
     void close().finally(() => data.close());
     console.error('Cannot start local server. Check whether PORT is already in use.');

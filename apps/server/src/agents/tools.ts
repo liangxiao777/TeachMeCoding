@@ -5,11 +5,12 @@ import type { SearchService } from '../extensions/search.js';
 import { createWebFetchTool, type WebFetchOptions } from '../extensions/web-fetch.js';
 import { BusinessError } from '../modules/learning.js';
 import { readTools } from './read-tools.js';
+import type { Library } from '../modules/library.js';
 
 export interface PreparedTools {
   tools: AgentTool[];
   declarations: Tool[];
-  inventory: { name: string; source: 'scenario' | 'skills-read' | 'mcp' | 'search' | 'web-fetch' }[];
+  inventory: { name: string; source: 'scenario' | 'skills-read' | 'mcp' | 'search' | 'web-fetch' | 'library' }[];
 }
 
 /** Assemble once per run; providers retain their own configuration and execution lifecycle. */
@@ -20,18 +21,21 @@ export async function prepareTools(input: {
   mcp?: Pick<McpService, 'tools'>;
   search?: Pick<SearchService, 'tools'>;
   webFetch?: WebFetchOptions;
+  library?: Pick<Library, 'tools'>;
+  runId?: string;
   signal: AbortSignal;
 }): Promise<PreparedTools> {
   input.signal.throwIfAborted();
   const external = await input.mcp?.tools(input.signal) ?? [];
   input.signal.throwIfAborted();
-  const skillReads = input.hasSkills ? readTools(input.cwd())
+  const reads = input.hasSkills || input.library ? readTools(input.cwd())
     .filter((tool) => !input.scenarioTools.some((existing) => existing.name === tool.name)) : [];
   const search = await input.search?.tools(input.signal) ?? [];
   input.signal.throwIfAborted();
   const groups = [
     { source: 'scenario', tools: input.scenarioTools },
-    { source: 'skills-read', tools: skillReads },
+    { source: input.library ? 'library' : 'skills-read', tools: reads },
+    { source: 'library', tools: input.library?.tools(input.runId) ?? [] },
     { source: 'mcp', tools: external },
     { source: 'search', tools: search },
     { source: 'web-fetch', tools: [createWebFetchTool(input.webFetch)] },
