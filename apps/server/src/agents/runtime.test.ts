@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { applyAgentEvent, type AgentDisplayPart, type AgentEventData } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
+import { Library } from '../modules/library.js';
 import { openDatabase } from '../storage/database.js';
 import { openDataDirectory } from '../storage/data-directory.js';
 import { createApp } from '../http/app.js';
@@ -596,4 +597,52 @@ test('stopping during search tool selection rejects late tools without a model r
     assert.deepEqual({ requests, commits }, { requests: 0, commits: 0 });
     assert.equal(db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM context_manifests').get()!.n, 0);
   } finally { release(); await runtime.close(); search.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a bare teaching Agent discovers global references and reads Pi Bash continuation without persisting bodies', async () => {
+  const { db, learning, a, sa, b, sb } = setup(), root = mkdtempSync(join(tmpdir(), 'tmc-library-agent-'));
+  const library = new Library(root);
+  const file = await library.upload(randomUUID(), 'shared.md', new Response('PRIVATE-REFERENCE-BODY').body, new AbortController().signal);
+  const paths: string[] = [], seen = new Set<string>();
+  const runtime = new TeachingRuntime(learning, syntheticSource, { library, stream: (_model, context) => {
+    const results = context.messages.filter((m) => m.role === 'toolResult');
+    const call = (name: string, args: Record<string, string | number>) => response(reply([{ type: 'toolCall', id: `call-${results.length}`, name, arguments: args }], 'toolUse'));
+    if (!results.length) {
+      assert.doesNotMatch(JSON.stringify(context.messages), /PRIVATE-REFERENCE-BODY/);
+      return call('list_library_files', {});
+    }
+    const last = results.at(-1)!;
+    const output = last.content.map((p) => p.type === 'text' ? p.text : '').join('');
+    assert.equal(last.isError, false, output);
+    if (results.length === 1) {
+      const listing = JSON.parse(output);
+      assert.equal(listing.files[0].id, file.id); assert.equal(listing.files[0].name, file.name);
+      assert.equal(listing.untrusted, true);
+      return call('read', { path: listing.files[0].path });
+    }
+    if (results.length === 2) {
+      assert.equal(JSON.parse(output).text, 'PRIVATE-REFERENCE-BODY');
+      return call('bash', { command: 'awk \'BEGIN { for (i=1;i<=2200;i++) print "continuation-" i }\'' });
+    }
+    if (results.length === 3) {
+      assert.match(output, /continuation-2200/);
+      assert.doesNotMatch(output, /continuation-1\n/);
+      const path = output.match(/Full output: (.+)\]/)![1]!; paths.push(path);
+      return call('read', { path, limit: 100 });
+    }
+    assert.match(JSON.parse(output).text, /^continuation-1\ncontinuation-2\n/);
+    seen.add(file.id);
+    return response(reply([{ type: 'text', text: '引用已按需读取。' }]));
+  } });
+  try {
+    for (const [space, session] of [[a.id, sa], [b.id, sb]]) {
+      const { run } = runtime.submit(space!, session!, randomUUID(), message('参考 shared.md'));
+      await runtime.idle(run.id); assert.equal(runtime.get(space!, run.id).state, 'succeeded');
+      assert.equal(existsSync(paths.at(-1)!), false, 'Run settlement must clean its output files.');
+    }
+    assert.equal(seen.size, 1); assert.equal(paths.length, 2);
+    assert.deepEqual(readdirSync(join(root, 'bash-output')), []);
+    const retained = JSON.stringify(db.prepare('SELECT value FROM agent_messages').all());
+    assert.doesNotMatch(retained, /PRIVATE-REFERENCE-BODY|continuation-2200/);
+  } finally { await runtime.close(); await library.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });

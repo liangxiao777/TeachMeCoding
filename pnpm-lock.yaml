@@ -6,6 +6,7 @@ settings:
 
 patchedDependencies:
   '@base-ui/utils@0.2.9': 164e8779e66dacf129aea7512a52346ce84be00ae587699085328d3a677e799d
+  '@earendil-works/pi-coding-agent@1.0.0': 2e6093e9876ef91e7082c83c423cc3937a80dda5739a74fef7b19e4794d2bf7a
   node-pty@1.1.0: c83919050a38e776c92e3d5820e76e73e62822d877ce08f64a631a6dd3ad3e0a
 
 importers:
@@ -38,7 +39,7 @@ importers:
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.3.6)
       '@earendil-works/pi-coding-agent':
         specifier: 1.0.0
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.3.6)
+        version: 1.0.0(patch_hash=2e6093e9876ef91e7082c83c423cc3937a80dda5739a74fef7b19e4794d2bf7a)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.3.6)
       '@earendil-works/pi-mcp':
         specifier: 1.0.0
         version: 1.0.0
@@ -4669,7 +4670,7 @@ snapshots:
     dependencies:
       quickjs-wasi: 3.6.2
 
-  '@earendil-works/pi-coding-agent@1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.3.6)':
+  '@earendil-works/pi-coding-agent@1.0.0(patch_hash=2e6093e9876ef91e7082c83c423cc3937a80dda5739a74fef7b19e4794d2bf7a)(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.3.6)':
     dependencies:
       '@earendil-works/chord': 1.0.1
       '@earendil-works/pi-agent-core': 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.31.0(zod@4.3.6))(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@4.3.6)

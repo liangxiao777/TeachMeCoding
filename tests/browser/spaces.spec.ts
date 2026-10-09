@@ -7,7 +7,8 @@ test('startup header actions share ghost styling, keyboard focus and mobile touc
   for (const scheme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: scheme, reducedMotion: 'no-preference' });
     await page.goto('/');
-    await expect(actions).toHaveCount(3);
+    await expect(actions).toHaveCount(4);
+    await expect(page.getByRole('button', { name: '资料库', exact: true })).toBeVisible();
     await page.mouse.move(0, 0);
     for (const action of await actions.all()) {
       await expect(action).toHaveCSS('height', '32px');
@@ -26,7 +27,9 @@ test('startup header actions share ghost styling, keyboard focus and mobile touc
     }
     await page.screenshot({ path: `.amp/in/artifacts/startup-actions-${scheme}-${info.project.name}.png`, animations: 'disabled' });
   }
-  await page.getByRole('button', { name: '应用设置', exact: true }).focus();
+  await page.getByRole('button', { name: '资料库', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: '应用设置', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
   const spaces = page.getByRole('button', { name: '学习空间', exact: true });
   await expect(spaces).toBeFocused();

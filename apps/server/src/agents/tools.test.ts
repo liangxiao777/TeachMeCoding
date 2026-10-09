@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type } from '@earendil-works/pi-ai';
 import { Actions } from '../modules/actions.js';
 import { BusinessError, Learning } from '../modules/learning.js';
 import { Projects } from '../modules/projects.js';
+import { Library } from '../modules/library.js';
 import { openDatabase } from '../storage/database.js';
 import type { FrozenContext } from './context.js';
 import { createScenario } from './scenarios.js';
@@ -129,4 +133,32 @@ test('same-name tools within a scene or across providers fail instead of overrid
     }), (error: unknown) => error instanceof BusinessError && error.status === 422
       && error.message.includes(name) && error.message.includes(`scenario / ${source}`));
   }
+});
+
+test('all six scenes can list and read global documents and execute Bash by default without Skills', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-library-tools-')), db = openDatabase(':memory:');
+  const learning = new Learning(db), library = new Library(root), { space, units } = populated(learning);
+  const actions = new Actions(learning, new Projects(root));
+  try {
+    const file = await library.upload(randomUUID(), 'reference.md', new Response('GLOBAL-REFERENCE').body, new AbortController().signal);
+    for (const scenario of ['intake', 'roadmap', 'tutor', 'lesson', 'assessment', 'evaluation'] as const) {
+      const runId = randomUUID(), input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
+        scenario, requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, references: [] };
+      const base = ['intake', 'roadmap', 'tutor'].includes(scenario)
+        ? createScenario(learning, input, runId, root, actions).tools : createTask(learning, input).tools;
+      const prepared = await prepareTools({ scenarioTools: base, cwd: () => root, hasSkills: false, library, runId, signal: new AbortController().signal });
+      const names = prepared.declarations.map((t) => t.name);
+      for (const name of ['read', 'ls', 'find', 'grep', 'list_library_files', 'bash']) assert.ok(names.includes(name), `${scenario}: ${name}`);
+      assert.equal(names.includes('shell'), false);
+      assert.equal(names.length, new Set(names).size);
+      const listing = await prepared.tools.find((t) => t.name === 'list_library_files')!.execute('list', {});
+      assert.match(JSON.stringify(listing.content), /reference.md/);
+      const read = await prepared.tools.find((t) => t.name === 'read')!.execute('read', { path: file.path });
+      assert.match(JSON.stringify(read.content), /GLOBAL-REFERENCE/);
+      const bash = await prepared.tools.find((t) => t.name === 'bash')!.execute('bash', { command: `printf '${scenario}-default-bash'` });
+      assert.equal(bash.content[0]?.type, 'text');
+      assert.equal(bash.content[0]?.type === 'text' && bash.content[0].text, `${scenario}-default-bash`);
+      library.release(runId);
+    }
+  } finally { await Promise.all([library.close(), actions.close()]); db.close(); rmSync(root, { recursive: true, force: true }); }
 });

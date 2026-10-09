@@ -21,6 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useApp, useSpace } from '@/app/context'
 import { ThemeToggle } from '@/app/theme'
+import { LibraryButton } from '@/components/library-page'
 import type { Requirement } from '@/app/types'
 
 const SUGGESTIONS = [
@@ -293,7 +294,7 @@ export function Onboarding() {
   if (space.view === 'planning') {
     return (
       <div className="flex min-h-dvh items-center justify-center px-6 py-8">
-        <ThemeToggle className="fixed top-3 right-3 z-10" />
+        <div className="fixed top-3 right-3 z-10 flex items-center gap-2"><LibraryButton /><ThemeToggle /></div>
         <Card className="w-full max-w-xl shadow-lg">
           <CardContent>
             {planningStopped || persistence && (!capabilities.agent || persistence.error) ? (
@@ -346,6 +347,7 @@ export function Onboarding() {
             <span className="size-1.5 rounded-full bg-primary" aria-hidden />
             第 1 步 · 确认学习需求
           </Badge>
+          <LibraryButton iconOnly />
           <ThemeToggle />
         </div>
       </header>

@@ -13,11 +13,13 @@ import type { TeachingRuntime } from '../agents/runtime.js';
 import type { McpService } from '../extensions/mcp.js';
 import type { SkillService } from '../extensions/skills.js';
 import type { SearchService } from '../extensions/search.js';
+import type { Library } from '../modules/library.js';
+import { libraryApi } from './library.js';
 
 // Source and compiled modules have the same depth relative to apps/web.
 export const webRoot = fileURLToPath(new URL('../../../web/dist/', import.meta.url));
 
-export function createApp(access: LocalAccess, learning?: Learning, projects?: Projects, agents?: TeachingRuntime, models?: ModelService, mcp?: McpService, skills?: SkillService, search?: SearchService) {
+export function createApp(access: LocalAccess, learning?: Learning, projects?: Projects, agents?: TeachingRuntime, models?: ModelService, mcp?: McpService, skills?: SkillService, search?: SearchService, library?: Library) {
   const app = new Hono();
   app.use('*', async (c, next) => {
     c.header('X-Content-Type-Options', 'nosniff');
@@ -48,6 +50,7 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
   });
   app.post('/api/access/check', (c) => c.json({ ok: true }));
   if (models || mcp || skills || search) app.route('/api', settingsApi(models, mcp, skills, search));
+  if (learning || library) app.route('/api', libraryApi(library));
   if (learning) app.route('/api', workspaceApi(learning, projects, agents));
   app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
   app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
