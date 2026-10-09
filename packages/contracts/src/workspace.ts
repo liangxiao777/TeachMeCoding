@@ -24,9 +24,12 @@ export const sessionDraftSchema = z.object({ revision: z.number().int().nonnegat
 export const messageInputSchema = z.object({ text, quote: quoteSchema.nullable(), draftRevision: z.number().int().nonnegative() }).strict()
   .refine((v) => v.text.trim() || v.quote, 'A message or reference is required');
 export const assessmentDraftSchema = z.object({ revision: z.number().int().nonnegative(), q1: text, q2: text }).strict();
-export const routeContentSchema = z.object({ note: text, stages: z.array(z.object({
-  id: idSchema, title, units: z.array(z.object({ id: idSchema, title, summary: text, goals: z.array(title).max(30) }).strict()).min(1).max(100),
-}).strict()).min(1).max(30) }).strict();
+const routeUnitSchema = z.object({ id: idSchema, title, summary: text, goals: z.array(title).max(30) }).strict();
+const routeStageSchema = z.object({ id: idSchema, title, units: z.array(routeUnitSchema).min(1).max(100) }).strict();
+export const routeContentSchema = z.object({ note: text, stages: z.array(routeStageSchema).min(1).max(30) }).strict();
+export const routeSubmissionSchema = z.object({ note: text.optional(), stages: z.array(routeStageSchema.omit({ id: true }).extend({
+  units: z.array(routeUnitSchema.omit({ id: true }).partial({ summary: true, goals: true })).min(1).max(100),
+})).min(1).max(30) }).strict();
 export const lessonBlockSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('h2'), id: title, text }).strict(),
   z.object({ type: z.literal('p'), text }).strict(),
@@ -52,6 +55,7 @@ export const assessmentResultSchema = z.object({ result: z.enum(['pass', 'needs_
 export type Quote = z.infer<typeof quoteSchema>;
 export type Requirement = z.infer<typeof requirementSchema>;
 export type RouteContent = z.infer<typeof routeContentSchema>;
+export type RouteSubmission = z.infer<typeof routeSubmissionSchema>;
 export type Lesson = z.infer<typeof lessonSchema> & { revision?: number };
 export type AssessmentSpec = z.infer<typeof assessmentSpecSchema> & { revision?: number };
 export interface SpaceSummary { id: string; name: string; createdAt: number }

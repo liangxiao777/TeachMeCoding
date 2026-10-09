@@ -18,8 +18,32 @@ function caller(draft: ReturnType<typeof createRouteTools>) {
   };
 }
 
-test('small route tools generate IDs, preserve order, reject incomplete drafts and require resubmission after edits', async () => {
+test('one initial submission preserves nested order and repeated titles, supplies optional defaults and creates unique IDs', async () => {
   const draft = createRouteTools(null), call = caller(draft);
+  assert.deepEqual(draft.tools.map((tool) => tool.name), ['submit_route']);
+  assert.equal(draft.proposal(), undefined);
+  await assert.rejects(call('submit_route', { stages: [] }));
+  await assert.rejects(call('submit_route', { stages: [{ title: 'Empty', units: [] }] }));
+  const result = await call('submit_route', { stages: [
+    { title: 'Foundation', units: [{ title: 'Repeated', summary: '  Explain input\n', goals: ['Predict output'] }, { title: 'B' }] },
+    { title: 'Foundation', units: [{ title: 'Repeated', goals: ['Handle errors', 'Report results'] }] },
+  ] });
+  assert.equal(result.status, 'staged'); assert.equal(result.stages, 2); assert.equal(result.units, 3);
+  const submitted = draft.proposal()!;
+  assert.equal(submitted.note, '');
+  assert.deepEqual(submitted.stages.map((stage) => ({ title: stage.title, units: stage.units.map(({ title, summary, goals }) => ({ title, summary, goals })) })), [
+    { title: 'Foundation', units: [{ title: 'Repeated', summary: '  Explain input\n', goals: ['Predict output'] }, { title: 'B', summary: '', goals: [] }] },
+    { title: 'Foundation', units: [{ title: 'Repeated', summary: '', goals: ['Handle errors', 'Report results'] }] },
+  ]);
+  const ids = submitted.stages.flatMap((stage) => [stage.id, ...stage.units.map((unit) => unit.id)]);
+  assert.equal(new Set(ids).size, 5); assert.ok(ids.every((id) => idSchema.safeParse(id).success));
+});
+
+test('route adjustment tools generate IDs, preserve order, reject incomplete drafts and require resubmission after edits', async () => {
+  const current = { note: 'original', stages: [{ id: randomUUID(), title: 'Original', units: [
+    { id: randomUUID(), title: 'Keep', summary: 'Keep the existing lesson', goals: ['Keep progress'] },
+  ] }] };
+  const draft = createRouteTools(current), call = caller(draft);
   const first = await call('add_route_stage', { title: 'Foundation' });
   const second = await call('add_route_stage', { title: 'Application' });
   assert.ok(idSchema.safeParse(first.stageId).success); assert.notEqual(first.stageId, second.stageId);
@@ -35,15 +59,15 @@ test('small route tools generate IDs, preserve order, reject incomplete drafts a
   await call('submit_route_proposal', { note: 'A before B; C applies both.' });
   const submitted = draft.proposal()!;
   assert.deepEqual(submitted.stages.map((s) => [s.title, s.units.map((u) => u.title)]), [
-    ['Application renamed', ['C']], ['Foundation', ['A', 'B']],
+    ['Application renamed', ['C']], ['Original', ['Keep']], ['Foundation', ['A', 'B']],
   ]);
   assert.equal(submitted.stages[0]!.units[0]!.summary, 'Uses A and B');
-  assert.equal(submitted.stages[1]!.units[1]!.id, b.unitId);
+  assert.equal(submitted.stages[2]!.units[1]!.id, b.unitId);
   await call('update_route_unit', { unitId: a.unitId, title: 'A revised', position: 2 });
   assert.throws(() => draft.proposal(), /尚未完整提交/);
-  assert.equal(submitted.stages[1]!.units[0]!.title, 'A', 'Finalized snapshots cannot mutate through later draft edits');
+  assert.equal(submitted.stages[2]!.units[0]!.title, 'A', 'Finalized snapshots cannot mutate through later draft edits');
   await call('submit_route_proposal', { note: 'Revised' });
-  assert.deepEqual(draft.proposal()!.stages[1]!.units.map((u) => u.title), ['B', 'A revised']);
+  assert.deepEqual(draft.proposal()!.stages[2]!.units.map((u) => u.title), ['B', 'A revised']);
 });
 
 test('adjustments preserve existing IDs, cannot delete published units, and can undo draft additions', async () => {
@@ -53,7 +77,9 @@ test('adjustments preserve existing IDs, cannot delete published units, and can 
   await assert.rejects(call('remove_route_unit', { unitId }), /cannot be removed/);
   await assert.rejects(call('remove_route_stage', { stageId }), /units/);
   const added = await call('add_route_stage', { title: 'New' });
-  const extra = await call('add_route_unit', { stageId: added.stageId, title: 'Mistake', summary: '', goals: [] });
+  const extra = await call('add_route_unit', { stageId: added.stageId, title: 'Mistake' });
+  await call('submit_route_proposal', {});
+  assert.deepEqual(draft.proposal()!.stages[1]!.units[0], { id: extra.unitId, title: 'Mistake', summary: '', goals: [] });
   await call('remove_route_unit', { unitId: extra.unitId });
   await call('update_route_unit', { unitId, stageId: added.stageId, goals: ['Revised goal'] });
   await call('remove_route_stage', { stageId });
@@ -63,7 +89,39 @@ test('adjustments preserve existing IDs, cannot delete published units, and can 
   assert.equal(current.stages[0]!.units[0]!.goals[0], 'Goal');
 });
 
-test('granular planning crosses old request/tool/token ceilings and commits only after explicit submission', async () => {
+test('unchanged updates preserve submissions and omitted fields, while actual goal changes still require resubmission', async () => {
+  const stageId = randomUUID(), unitId = randomUUID(), siblingId = randomUUID();
+  const current = { note: 'original', stages: [{ id: stageId, title: 'Foundation', units: [
+    { id: unitId, title: 'A', summary: 'Original scope', goals: ['Explain A', 'Compare A'] },
+    { id: siblingId, title: 'B', summary: 'Different scope', goals: ['Apply B'] },
+  ] }] };
+  const draft = createRouteTools(current), call = caller(draft);
+  const unchanged: Pick<ToolCall, 'name' | 'arguments'>[] = [
+    { name: 'update_route_stage', arguments: { stageId } },
+    { name: 'update_route_stage', arguments: { stageId, title: ' Foundation ', position: 1 } },
+    { name: 'update_route_unit', arguments: { unitId } },
+    { name: 'update_route_unit', arguments: { unitId, stageId, title: 'A', summary: 'Original scope', goals: ['Explain A', 'Compare A'], position: 1 } },
+    { name: 'update_route_unit', arguments: { unitId: siblingId, position: 2 } },
+  ];
+  for (const step of unchanged) assert.equal((await call(step.name, step.arguments)).changed, false);
+  assert.equal(draft.proposal(), undefined);
+  await call('submit_route_proposal', {});
+  const submitted = draft.proposal()!;
+  assert.deepEqual(submitted, { ...current, note: '' });
+  for (const step of unchanged) {
+    assert.equal((await call(step.name, step.arguments)).changed, false);
+    assert.deepEqual(draft.proposal(), submitted);
+  }
+  assert.equal((await call('update_route_unit', { unitId, goals: ['Explain A', 'Apply A'] })).changed, true);
+  assert.throws(() => draft.proposal(), /尚未完整提交/);
+  await call('update_route_unit', { unitId });
+  assert.throws(() => draft.proposal(), /尚未完整提交/);
+  await call('submit_route_proposal', {});
+  assert.deepEqual(draft.proposal()!.stages[0]!.units[0], { id: unitId, title: 'A', summary: 'Original scope', goals: ['Explain A', 'Apply A'] });
+  assert.deepEqual(current.stages[0]!.units[0]!.goals, ['Explain A', 'Compare A']);
+});
+
+test('a complete multi-stage initial route needs one submission and commits only after normal completion', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db), space = learning.create({ name: 'Long plan', goal: 'synthetic' });
   const content = { note: 'Separate foundations and applications.', stages: [
     { title: 'Foundation', units: Array.from({ length: 5 }, (_, i) => ({ title: `F${i}`, summary: `Foundation ${i}`, goals: [`Explain ${i}`] })) },
@@ -73,7 +131,7 @@ test('granular planning crosses old request/tool/token ceilings and commits only
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context, options) => {
     requests++;
     assert.equal(options?.maxTokens, undefined);
-    assert.equal(learning.space(space.id).route.content, null, 'Incremental calls must not publish a partial route');
+    assert.equal(learning.space(space.id).route.content, null, 'Submission must not publish before normal completion');
     const next = routeReply(context.messages, content) ?? reply([{ type: 'text', text: 'Complete' }]);
     next.usage.output = 5000; next.usage.totalTokens = 5011;
     return response(next);
@@ -82,30 +140,28 @@ test('granular planning crosses old request/tool/token ceilings and commits only
     const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { rows: [{ question: 'Plan what?', answer: 'Plan thirteen units' }] }, intake: conceptIntake, confirmed: true });
     await runtime.idle(run.id);
     assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
-    assert.equal(requests, 17);
+    assert.equal(requests, 2);
+    const calls = learning.session(space.id, run.sessionId!).messages.at(-1)!.parts!.filter((part) => part.type === 'tool');
+    assert.deepEqual(calls.map((call) => call.name), ['submit_route']);
     const saved = learning.space(space.id).route.content!;
     assert.equal(saved.note, content.note);
     assert.deepEqual(saved.stages.map((s) => s.units.map((u) => u.title)), [['F0', 'F1', 'F2', 'F3', 'F4'], ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7']]);
     const ids = saved.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
     assert.equal(new Set(ids).size, 15); assert.ok(ids.every((id) => idSchema.safeParse(id).success));
     const manifests = db.prepare('SELECT value FROM context_manifests').all() as { value: string }[];
-    assert.equal(manifests.reduce((n, row) => n + JSON.parse(row.value).actualUsage.output, 0), 85_000);
+    assert.equal(manifests.reduce((n, row) => n + JSON.parse(row.value).actualUsage.output, 0), 10_000);
   } finally { await runtime.close(); db.close(); }
 });
 
-test('a rejected route tool can be corrected, but edits after submission cannot silently publish', async () => {
-  for (const finalEdit of [false, true]) {
+test('a rejected initial submission can be corrected, but an invalid replacement cannot publish the older route', async () => {
+  for (const invalidReplacement of [false, true]) {
     const db = openDatabase(':memory:'), learning = new Learning(db), space = learning.create({ name: 'Repair', goal: 'synthetic' });
-    let requests = 0, stageId = '';
-    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
-      const last = context.messages.at(-1);
-      if (last?.role === 'toolResult' && last.toolName === 'add_route_stage') stageId = JSON.parse(last.content[0]!.type === 'text' ? last.content[0]!.text : '{}').stageId;
+    let requests = 0;
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
       const steps: Pick<ToolCall, 'name' | 'arguments'>[] = [
-        { name: 'add_route_stage', arguments: { title: 'Basics' } },
-        { name: 'add_route_unit', arguments: { stageId, title: 'Incomplete' } },
-        { name: 'add_route_unit', arguments: { stageId, title: 'Repaired', summary: 'Useful content', goals: ['Can do it'] } },
-        { name: 'submit_route_proposal', arguments: { note: 'Complete now' } },
-        ...(finalEdit ? [{ name: 'update_route_stage', arguments: { stageId, title: 'Late edit' } }] : []),
+        { name: 'submit_route', arguments: { stages: [{ title: 'Basics', units: [] }] } },
+        { name: 'submit_route', arguments: { stages: [{ title: 'Basics', units: [{ title: 'Repaired' }] }] } },
+        ...(invalidReplacement ? [{ name: 'submit_route', arguments: { stages: [] } }] : []),
       ];
       const step = steps[requests++];
       return response(step ? reply([{ type: 'toolCall', id: `repair-${requests}`, ...step }], 'toolUse') : reply([]));
@@ -113,13 +169,13 @@ test('a rejected route tool can be corrected, but edits after submission cannot 
     try {
       const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { rows: [{ question: 'Plan what?', answer: 'Repair a tool call' }] }, intake: conceptIntake, confirmed: true });
       await runtime.idle(run.id);
-      assert.equal(runtime.get(space.id, run.id).state, finalEdit ? 'failed' : 'succeeded');
-      if (finalEdit) assert.equal(learning.space(space.id).route.content, null);
+      assert.equal(runtime.get(space.id, run.id).state, invalidReplacement ? 'failed' : 'succeeded');
+      if (invalidReplacement) assert.equal(learning.space(space.id).route.content, null);
       else assert.equal(learning.space(space.id).route.content!.stages[0]!.units[0]!.title, 'Repaired');
       const tools = learning.session(space.id, run.sessionId!).messages.at(-1)!.parts!.filter((p) => p.type === 'tool');
-      assert.equal(tools[1]!.status, 'error');
-      assert.deepEqual(tools[1]!.input, { stageId, title: 'Incomplete' });
-      assert.equal(tools[2]!.status, 'done');
+      assert.equal(tools[0]!.status, 'error');
+      assert.deepEqual(tools[0]!.input, { stages: [{ title: 'Basics', units: [] }] });
+      assert.equal(tools[1]!.status, 'done');
     } finally { await runtime.close(); db.close(); }
   }
 });

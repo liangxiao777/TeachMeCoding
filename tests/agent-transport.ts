@@ -12,6 +12,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
   const text = JSON.stringify(user?.content);
   const all = JSON.stringify(context);
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
+  const roadmap = has('submit_route') || has('submit_route_proposal');
   if (has('ask_user_question') && all.includes('自适应问答验收')) {
     const current = context.messages.slice(context.messages.findLastIndex((m) => m.role === 'user') + 1);
     const results = current.filter((m) => m.role === 'toolResult');
@@ -135,7 +136,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     if (has('submit_learning_conclusion')) return response(reply([{ type: 'toolCall', id: 'conclusion-call', name: 'submit_learning_conclusion', arguments: {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
     } }], 'toolUse'));
-    if (!has('submit_route_proposal') && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
+    if (!roadmap && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
       rows: [
         { question: '想学习什么？', answer: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具' },
         { question: '已有经验？', answer: 'Python 自动化经验' },
@@ -144,19 +145,20 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       ],
     } }], 'toolUse'));
   }
-  if (has('submit_route_proposal')) {
-    if (last?.role === 'toolResult' && last.toolName === 'add_route_stage' && all.includes('PLAN-SLOW')) {
+  if (roadmap) {
+    if (last?.role === 'toolResult' && last.toolName === 'submit_route' && all.includes('PLAN-SLOW')) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    const previous = context.messages.slice(0, context.messages.findLastIndex((m) => m.role === 'user')).some((m) =>
-      m.role === 'assistant' && m.content.some((part) => part.type === 'toolCall' && part.name === 'submit_route_proposal'));
+    const adjustment = has('submit_route_proposal');
     if (last?.role !== 'toolResult') {
       await new Promise((resolve) => setTimeout(resolve, all.includes('PLAN-SLOW') ? 4000 : 600));
       if (all.includes('PLAN-FAIL-ONCE') && !planningFailed) { planningFailed = true; return response(reply([], 'error')); }
       if (all.includes('PLAN-STREAM-ERROR')) {
         const stream = createAssistantMessageEventStream();
         void (async () => {
-          const tool = { type: 'toolCall' as const, id: 'streamed-route', name: 'add_route_stage', arguments: { title: '工具基础：参数、错误与输出' } };
+          const tool = { type: 'toolCall' as const, id: 'streamed-route', name: 'submit_route', arguments: { stages: [
+            { title: '工具基础：参数、错误与输出', units: [{ title: '参数与输入' }] },
+          ] } };
           const partial = reply([{ type: 'thinking', thinking: '核对需求。'.repeat(121) }, tool], 'pending');
           stream.push({ type: 'start', partial: reply([], 'pending') });
           stream.push({ type: 'thinking_start', contentIndex: 0, partial });
@@ -179,22 +181,22 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         return stream;
       }
     }
-    const next = routeReply(context.messages, { note: previous ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages: [{ title: '工具基础', units: [
+    const next = routeReply(context.messages, { note: adjustment ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages: [{ title: '工具基础', units: [
       { title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
       { title: '错误与输出', summary: '处理缺失参数', goals: ['区分正常和错误输出'] },
-    ] }] }, previous);
+    ] }] }, adjustment);
     if (next) return response(next);
   }
   const stream = createAssistantMessageEventStream();
   const slow = text.includes('慢速') || has('submit_evaluation');
-  const chunks = slow ? ['正在逐步整理。', '先明确目标。', '再核对基础。', '最后确认时间。'] : has('submit_route_proposal') ? ['路线内容已整理，', '正在完成规划。']
+  const chunks = slow ? ['正在逐步整理。', '先明确目标。', '再核对基础。', '最后确认时间。'] : roadmap ? ['路线内容已整理，', '正在完成规划。']
     : has('submit_lesson') ? ['课件已整理。'] : has('submit_learning_conclusion') ? ['参数来自调用者。', '可采纳下方结论，或继续讨论边界情况。'] : ['我已整理你的基础。', '需求草稿已更新，请检查右侧摘要。'];
   void (async () => {
     let accumulated = '';
     stream.push({ type: 'start', partial: reply([], 'pending') });
     stream.push({ type: 'text_start', contentIndex: 0, partial: reply([{ type: 'text', text: '' }], 'pending') });
     for (const chunk of chunks) {
-      await new Promise((resolve) => setTimeout(resolve, has('submit_route_proposal') ? all.includes('PLAN-SLOW') ? 2500 : 600 : text.includes('延迟摘要') ? 2000 : slow ? 1400 : 200));
+      await new Promise((resolve) => setTimeout(resolve, roadmap ? all.includes('PLAN-SLOW') ? 2500 : 600 : text.includes('延迟摘要') ? 2000 : slow ? 1400 : 200));
       if (options?.signal?.aborted) { stream.push({ type: 'error', reason: 'aborted', error: reply([{ type: 'text', text: accumulated }], 'aborted') }); return; }
       accumulated += chunk;
       stream.push({ type: 'text_delta', contentIndex: 0, delta: chunk, partial: reply([{ type: 'text', text: accumulated }], 'pending') });

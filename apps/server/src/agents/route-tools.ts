@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { idSchema, routeContentSchema, type RouteContent } from '@teach-me-coding/contracts';
+import { idSchema, routeContentSchema, routeSubmissionSchema, type RouteContent } from '@teach-me-coding/contracts';
 import { BusinessError } from '../modules/learning.js';
 
 const stageSchema = routeContentSchema.shape.stages.element;
@@ -12,9 +12,29 @@ const position = z.number().int().positive().optional().describe('1-based positi
 
 // This draft belongs to one run. Nothing reaches the business tables until the
 // model submits it and the runtime commits a normally completed run.
-export function createRouteTools(current: RouteContent | null) {
-  const draft: RouteContent = structuredClone(current ?? { note: '', stages: [] });
-  const existingUnits = new Set(current?.stages.flatMap((stage) => stage.units.map((unit) => unit.id)));
+export function createRouteTools(current: RouteContent | null): { tools: AgentTool[]; proposal: () => RouteContent | undefined } {
+  if (current === null) {
+    let submitted: RouteContent | undefined;
+    return { tools: [{
+      name: 'submit_route', label: '提交完整学习路线',
+      description: 'Submit the complete initial learning route in one call. Nest units inside stages; array order is learning order. Include a concise summary of what each unit covers and goals describing what the learner will be able to do when useful. Summary, goals and the planning rationale note are optional. Do not provide IDs or position numbers; the host creates identities and associations. This only stages the route; successful completion saves and displays it.',
+      parameters: Type.Unsafe(JSON.parse(JSON.stringify(routeSubmissionSchema.toJSONSchema()))),
+      async execute(_id, args) {
+        submitted = undefined;
+        const content = routeSubmissionSchema.parse(args);
+        submitted = { note: content.note ?? '', stages: content.stages.map((stage) => ({
+          id: randomUUID(), title: stage.title, units: stage.units.map((unit) => ({
+            id: randomUUID(), title: unit.title, summary: unit.summary ?? '', goals: unit.goals ?? [],
+          })),
+        })) };
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'staged', stages: submitted.stages.length,
+          units: submitted.stages.reduce((n, stage) => n + stage.units.length, 0),
+          next: 'Successful completion saves and displays the complete initial route.' }) }], details: {} };
+      },
+    }], proposal: () => submitted };
+  }
+  const draft = structuredClone(current);
+  const existingUnits = new Set(current.stages.flatMap((stage) => stage.units.map((unit) => unit.id)));
   let submitted: RouteContent | undefined, changed = false;
   const stage = (id: string) => {
     const found = draft.stages.find((stage) => stage.id === id);
@@ -31,12 +51,14 @@ export function createRouteTools(current: RouteContent | null) {
     if (value < 0 || value > length) throw new Error(`Position must be between 1 and ${length + 1}.`);
     return value;
   };
-  function tool<S extends z.ZodType>(name: string, label: string, description: string, schema: S, edit: (args: z.output<S>) => unknown): AgentTool {
+  function tool<S extends z.ZodType>(name: string, label: string, description: string, schema: S, edit: (args: z.output<S>) => Record<string, unknown>): AgentTool {
     return { name, label, description, parameters: Type.Unsafe(JSON.parse(JSON.stringify(schema.toJSONSchema()))),
       async execute(_id, args) {
+        const before = JSON.stringify(draft);
         const result = edit(schema.parse(args));
-        if (name !== 'submit_route_proposal') { submitted = undefined; changed = true; }
-        return { content: [{ type: 'text', text: JSON.stringify(result) }], details: {} };
+        const edited = name !== 'submit_route_proposal' && JSON.stringify(draft) !== before;
+        if (edited) { submitted = undefined; changed = true; }
+        return { content: [{ type: 'text', text: JSON.stringify(name === 'submit_route_proposal' ? result : { ...result, changed: edited }) }], details: {} };
       },
     };
   }
@@ -48,10 +70,10 @@ export function createRouteTools(current: RouteContent | null) {
         draft.stages.splice(at, 0, value);
         return { stageId: value.id, title: value.title };
       }),
-    tool('add_route_unit', '添加学习单元', 'Add one unit to a stage. Copy stageId from the route or tool result. The host returns unitId.',
-      unitContent.extend({ stageId: idSchema, position }).strict(), (args) => {
+    tool('add_route_unit', '添加学习单元', 'Add one unit to a stage. Copy stageId from the route or tool result. Summary and goals are optional; prefer useful teaching scope and learning outcomes rather than filler. The host returns unitId.',
+      unitContent.partial({ summary: true, goals: true }).extend({ stageId: idSchema, position }).strict(), (args) => {
         const parent = stage(args.stageId), at = index(args.position, parent.units.length, parent.units.length);
-        const value = { id: randomUUID(), title: args.title, summary: args.summary, goals: args.goals };
+        const value = { id: randomUUID(), title: args.title, summary: args.summary ?? '', goals: args.goals ?? [] };
         parent.units.splice(at, 0, value);
         return { stageId: parent.id, unitId: value.id, title: value.title };
       }),
@@ -88,12 +110,12 @@ export function createRouteTools(current: RouteContent | null) {
         draft.stages.splice(draft.stages.indexOf(value), 1);
         return { removed: value.id };
       }),
-    tool('submit_route_proposal', '提交学习路线', 'Finish the assembled route. Supply only the planning rationale. Every stage must contain a unit. Further edits require resubmission.',
-      z.object({ note: routeContentSchema.shape.note }).strict(), (args) => {
+    tool('submit_route_proposal', '提交路线调整', 'Submit the assembled adjustment for user confirmation, without repeating the whole route. The planning rationale note is optional. Every stage must contain a unit. Actual content or order changes after submission require resubmission; unchanged updates do not.',
+      z.object({ note: routeContentSchema.shape.note.optional() }).strict(), (args) => {
         submitted = undefined;
-        submitted = routeContentSchema.parse({ ...draft, note: args.note });
+        submitted = routeContentSchema.parse({ ...draft, note: args.note ?? '' });
         return { status: 'staged', stages: submitted.stages.length, units: submitted.stages.reduce((n, stage) => n + stage.units.length, 0),
-          next: current ? 'Successful completion stages an adjustment for user confirmation.' : 'Successful completion applies the initial route.' };
+          next: 'Successful completion stages an adjustment for user confirmation.' };
       }),
   ];
   return { tools, proposal() {

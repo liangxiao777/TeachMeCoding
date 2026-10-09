@@ -198,12 +198,12 @@ test('confirmation and planning commit atomically, retry once, and persist the i
       [{ title: 'first', units: [{ title: 'A', summary: 'intro', goals: ['A'] }] }]);
     assert.equal(learning.space(space.id).route.revision, 1);
     assert.equal(learning.session(space.id, run.sessionId!).messages.filter((m) => m.role === 'user').length, 1);
-    assert.equal(calls, 4);
+    assert.equal(calls, 2);
   } finally { await runtime.close(); db.close(); }
 });
 
 test('missing, invalid, truncated and cancelled initial routes cannot be published; explicit retry can recover', async () => {
-  for (const variant of ['missing', 'invalid', 'truncated', 'cancelled'] as const) {
+  for (const variant of ['missing', 'invalid', 'truncated', 'cancelled', 'cancelled-after-submit', 'commit-failed'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const space = learning.create({ name: variant, goal: 'learn' });
     const content = { note: 'retry', stages: [{ id: randomUUID(), title: 'stage', units: [{ id: randomUUID(), title: 'unit', summary: '', goals: ['A'] }] }] };
@@ -211,16 +211,21 @@ test('missing, invalid, truncated and cancelled initial routes cannot be publish
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
       if (!retrying && variant === 'missing') return response(reply([{ type: 'text', text: 'I made a plan without submitting it' }]));
       if (!retrying && variant === 'invalid') return response(context.messages.at(-1)?.role === 'toolResult' ? reply([])
-        : reply([{ type: 'toolCall', id: 'invalid', name: 'submit_route_proposal', arguments: { note: 'empty draft' } }], 'toolUse'));
+        : reply([{ type: 'toolCall', id: 'invalid', name: 'submit_route', arguments: { stages: [] } }], 'toolUse'));
+      if (!retrying && variant === 'cancelled-after-submit' && context.messages.at(-1)?.role === 'toolResult') {
+        runtime.stop(space.id, learning.space(space.id).runs.at(-1)!.id);
+      }
       return response(routeReply(context.messages, content) ?? reply([], !retrying && variant === 'truncated' ? 'length' : 'stop'));
     } });
     try {
+      if (variant === 'commit-failed') db.exec("CREATE TRIGGER fail_route BEFORE UPDATE ON routes BEGIN SELECT RAISE(ABORT, 'injected route save failure'); END");
       const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { rows: [{ question: 'Goal?', answer: 'A' }] }, intake: conceptIntake, confirmed: true });
       if (variant === 'cancelled') runtime.stop(space.id, run.id);
       await runtime.idle(run.id);
-      assert.equal(runtime.get(space.id, run.id).state, variant === 'cancelled' ? 'interrupted' : 'failed');
+      assert.equal(runtime.get(space.id, run.id).state, variant.startsWith('cancelled') ? 'interrupted' : 'failed');
       assert.equal(learning.space(space.id).route.content, null);
       assert.equal(learning.space(space.id).proposals.length, 0);
+      if (variant === 'commit-failed') db.exec('DROP TRIGGER fail_route');
       retrying = true;
       const next = runtime.retry(space.id, run.id, randomUUID());
       await runtime.idle(next.run.id);
