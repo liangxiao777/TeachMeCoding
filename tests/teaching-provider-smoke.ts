@@ -35,14 +35,15 @@ try {
   await ask(space.sessions[0]!.id, '我会 Python 的变量、if 和循环，想弄懂函数默认参数，能自己写一个问候函数。什么时候学还没决定，时间先留空。');
   let w = learning.space(space.id);
   assert.ok(w.requirement.revision > 0); assert.equal(w.requirement.confirmed, false);
-  assert.equal(w.requirement.value.schedule, '', 'Do not invent a schedule when the user has not chosen one');
+  assert.doesNotMatch(w.requirement.value.rows.map((row) => row.answer).join('\n'), /\d+\s*(分钟|小时)/, 'Do not invent a schedule when the user has not chosen one');
   console.log(JSON.stringify({ requirement: w.requirement.value }));
   await ask(space.sessions[0]!.id, '今天有 30 分钟，就学前面说的默认参数，先安排一个短单元就好。');
   w = learning.space(space.id);
   assert.equal(w.requirement.confirmed, false);
-  assert.match(w.requirement.value.schedule, /30|三十/);
-  assert.match(w.requirement.value.background, /变量/);
-  assert.match(w.requirement.value.outcome, /问候/);
+  const answers = w.requirement.value.rows.map((row) => row.answer).join('\n');
+  assert.match(answers, /30|三十/);
+  assert.match(answers, /变量/);
+  assert.match(answers, /问候/);
   console.log(JSON.stringify({ requirement: w.requirement.value }));
   const planned = runtime.plan(space.id, randomUUID(), { ...w.requirement, confirmed: true });
   await runtime.idle(planned.run.id);
@@ -63,7 +64,7 @@ try {
   const unit = learning.space(space.id).route.content!.stages[0]!.units[0]!.id;
   const lesson = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 }); await runtime.idle(lesson.id);
   const final = runtime.get(space.id, lesson.id); console.log(JSON.stringify({ scenario: 'lesson', state: final.state, error: final.error }));
-  assert.equal(final.state, 'succeeded'); assert.ok(learning.unit(space.id, unit).lesson?.blocks?.length);
+  assert.equal(final.state, 'succeeded'); assert.ok(learning.unit(space.id, unit).lesson?.content.trim());
   writeFileSync(join(root, 'sample.py'), 'def greet(name="Ada"):\n    return "Hi " + name\n');
   const session = learning.createSession(space.id, { scope: 'unit', unitId: unit, title: '合成辅导' });
   await ask(session.id, '只读取当前目录合成的 sample.py，说明无参数和传入 Lin 时返回值的区别，勿读取其他文件。不运行代码。提交一条关于默认参数的待采纳学习结论。');
@@ -91,5 +92,5 @@ try {
   console.log(JSON.stringify({ q2Kind: spec.q2Kind, result: record.result, verification: record.verification, attempt: record.attempt }));
   console.log(JSON.stringify({ requests: (db.prepare('SELECT COUNT(*) AS n FROM context_manifests').get() as { n: number }).n,
     taskRequests: (db.prepare('SELECT COUNT(*) AS n FROM task_manifests').get() as { n: number }).n,
-    lessonBlocks: learning.unit(space.id, unit).lesson!.blocks!.length, conclusions: learning.conclusions(space.id).length, reads }));
+    lessonCharacters: learning.unit(space.id, unit).lesson!.content.length, conclusions: learning.conclusions(space.id).length, reads }));
 } finally { await runtime.close(); db.close(); rmSync(root, { recursive: true, force: true }); }

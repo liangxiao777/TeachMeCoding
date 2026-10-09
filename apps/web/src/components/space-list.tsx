@@ -97,7 +97,7 @@ function SpaceCard({ space }: { space: Space }) {
       <CardHeader>
         <CardTitle className="text-lg tracking-tight">{space.name}</CardTitle>
         <CardDescription className="line-clamp-2 leading-relaxed">
-          {space.requirement?.goal ?? space.onboarding.messages[0]?.text ?? '尚未确定学习目标'}
+          {space.requirement?.rows.find((row) => row.answer.trim())?.answer ?? space.onboarding.messages[0]?.text ?? '尚未确定学习目标'}
         </CardDescription>
         <CardAction>
           <Badge variant="secondary" className="font-mono">

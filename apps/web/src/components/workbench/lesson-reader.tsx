@@ -12,7 +12,10 @@ import {
   SquareTerminal,
   Target,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { bundledLanguages, createHighlighter, type BundledLanguage, type ThemedToken } from 'shiki'
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+import type { ExtraProps } from 'streamdown'
 import { Generating, InlineText, RichText, StatusPill } from '@/components/shared'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -21,12 +24,29 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia } from '@/comp
 import { findUnit } from '@/app/selectors'
 import type { LessonBlock } from '@/app/types'
 import { useApp, useSpace } from '@/app/context'
+import { lessonAllowedTags, lessonHeadingId, lessonRemarkPlugins } from '@/lib/lesson-markdown'
 
 const scrollMemory = new Map<string, number>()
+let lessonHighlighter: ReturnType<typeof createHighlighter> | undefined
 
 function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> }) {
   const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
+  const [highlighted, setHighlighted] = useState<{ code: string; language: string; tokens: ThemedToken[][] } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const lang = Object.hasOwn(bundledLanguages, block.language) ? block.language as BundledLanguage : 'text'
+    // Native regex highlighting also works under the production CSP, without
+    // permitting WebAssembly compilation or unsafe script evaluation.
+    lessonHighlighter ??= createHighlighter({ langs: [], themes: ['github-dark'], engine: createJavaScriptRegexEngine() })
+    void lessonHighlighter.then(async (highlighter) => {
+      if (lang !== 'text') await highlighter.loadLanguage(lang)
+      const { tokens } = highlighter.codeToTokens(block.code, { lang, theme: 'github-dark' })
+      if (!cancelled) setHighlighted({ code: block.code, language: block.language, tokens })
+    }).catch(() => { /* A failed highlighter does not hide the original code. */ })
+    return () => { cancelled = true }
+  }, [block.code, block.language])
+  const tokens = highlighted?.code === block.code && highlighted.language === block.language ? highlighted.tokens : null
   return (
     <figure className="flex flex-col overflow-hidden rounded-xl bg-ide text-ide-foreground shadow-sm ring-1 ring-foreground/10">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
@@ -58,7 +78,11 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
           </Button>
         </div>
       </div>
-      <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{block.code}</pre>
+      <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{tokens ? tokens.map((line, index) => (
+        <Fragment key={index}>{line.map((token, i) => <span key={i} style={{ color: token.color }}>{token.content}</span>)}
+          {index < tokens.length - 1 ? '\n' : null}
+        </Fragment>
+      )) : block.code}</pre>
       {block.caption && (
         <figcaption className="border-t border-white/10 px-4 py-2 text-xs leading-relaxed opacity-70">{block.caption}</figcaption>
       )}
@@ -66,11 +90,56 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
   )
 }
 
-function LessonText({ text }: { text: string }) {
-  return <RichText text={text} renderCode={(code, language) => {
-    const extensions: Record<string, string> = { rust: 'rs', python: 'py', typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js', json: 'json', bash: 'sh', sh: 'sh' }
-    return <CodeBlock block={{ type: 'code', code, language, file: `example.${extensions[language] ?? 'txt'}` }} />
-  }} />
+function Practice({ question, children, onAsk }: { question: string; children?: ReactNode; onAsk?: () => void }) {
+  const space = useSpace()
+  const { setQuote, persistence } = useApp()
+  const unit = findUnit(space, space.currentUnitId)
+  return (
+    <section aria-label="动手试试" className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
+      <header className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-sm font-medium"><Target className="size-4 text-primary" aria-hidden />动手试试</p>
+        <Button variant="outline" size="xs" disabled={!question.trim() || (persistence && (!persistence.ready || persistence.busy))}
+          onClick={() => { setQuote({ source: 'lesson', label: `${unit?.title ?? '课件'} · 练习`, text: question }); onAsk?.() }}>
+          <MessageSquareQuote data-icon="inline-start" />就此提问
+        </Button>
+      </header>
+      <div className="min-w-0 space-y-3">{children}</div>
+    </section>
+  )
+}
+
+type TeachingProps = ExtraProps & { children?: ReactNode }
+function LessonText({ text, enhanced = false, inDrawer = false, onAsk }: { text: string; enhanced?: boolean; inDrawer?: boolean; onAsk?: () => void }) {
+  return <RichText text={text}
+    remarkPlugins={enhanced ? lessonRemarkPlugins : undefined}
+    allowedTags={enhanced ? lessonAllowedTags : undefined}
+    normalizeHtmlIndentation={enhanced ? false : undefined}
+    components={enhanced ? {
+      h2: ({ node, children }) => <h2 id={node?.position?.start.offset !== undefined ? lessonHeadingId(node.position.start.offset, inDrawer) : undefined}
+        className="scroll-mt-6 pt-4 text-xl font-semibold tracking-tight">{children}</h2>,
+      'lesson-callout': ({ node, children }: TeachingProps) => {
+        const warning = node?.properties.kind === 'warning'
+        return <Alert className={warning ? 'border-accent-foreground/25 bg-accent/50' : 'border-primary/25 bg-primary/5'}>
+          {warning ? <AlertTriangle className="text-accent-foreground" /> : <Lightbulb className="text-primary" />}
+          <AlertTitle>{warning ? '注意' : '提示'}</AlertTitle>
+          <AlertDescription className="min-w-0 space-y-3 leading-relaxed">{children}</AlertDescription>
+        </Alert>
+      },
+      'lesson-practice': ({ node, children }: TeachingProps) => <Practice question={String(node?.properties.question ?? '')} onAsk={onAsk}>{children}</Practice>,
+      'lesson-hint': ({ children }: TeachingProps) => <details className="rounded-lg border bg-muted/30 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">查看提示</summary>
+        <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
+      </details>,
+      'lesson-solution': ({ children }: TeachingProps) => <details className="rounded-lg border bg-muted/30 px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium">参考讲解</summary>
+        <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
+      </details>,
+    } : undefined}
+    renderCode={(code, language, meta) => {
+      const extensions: Record<string, string> = { rust: 'rs', python: 'py', typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js', json: 'json', bash: 'sh', sh: 'sh' }
+      const file = /(?:^|\s)file=(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(meta)
+      return <CodeBlock block={{ type: 'code', code, language, file: file?.[1] ?? file?.[2] ?? file?.[3] ?? `example.${extensions[language] ?? 'txt'}` }} />
+    }} />
 }
 
 function MoveDiagram() {
@@ -279,7 +348,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           <Generating
             className="py-6"
             title="正在为你生成课件"
-            steps={persistence ? ['分析单元目标', '生成课件内容', '校验课件结构', '保存课件'] : ['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
+            steps={persistence ? ['分析单元目标', '生成课件内容', '整理课件内容', '保存课件'] : ['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
             parts={persistence ? persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? [] : undefined}
             note="课件会结合你此刻的学习情况生成，所以和别人看到的可能不一样。"
           />
@@ -326,7 +395,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
         {lesson && (
           <>
             {lesson.intro && <p className="border-l-2 border-primary pl-4 text-lg leading-relaxed text-muted-foreground">{lesson.intro}</p>}
-            {lesson.blocks.map((b, i) => (
+            {lesson.content !== undefined ? <LessonText text={lesson.content} enhanced inDrawer={inDrawer} onAsk={onAsk} /> : lesson.blocks.map((b, i) => (
               <Block key={i} block={b} />
             ))}
             <footer className="mt-6 flex flex-col gap-2 border-t pt-6 text-sm text-muted-foreground">

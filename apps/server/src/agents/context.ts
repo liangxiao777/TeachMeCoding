@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, ModelSelection, Quote, RequirementState, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
+import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, ModelSelection, QuestionRound, Quote, RequirementState, ResearchDossier, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
 import type { FixedAssessment } from '../modules/assessments.js';
 
 export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' | 'evaluation';
@@ -23,10 +23,12 @@ export interface FrozenContext {
   evaluation?: FixedAssessment;
   evidence?: AssessmentRecord[];
   actions?: ActionProposal[];
+  research?: ResearchDossier | null;
+  questions?: QuestionRound[];
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '5';
+export const compilerVersion = '9';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const budget = { milliseconds: 300_000 };
 
@@ -46,6 +48,8 @@ export function systemPrompt(scenario: Scenario) {
 export function compileContext(input: FrozenContext) {
   const sources = input.evaluation ? [{ kind: 'fixed-evaluation', id: input.evaluation.submission.id, revision: input.evaluation.revision, value: input.evaluation }] : [
     { kind: 'requirement', id: input.spaceId, revision: input.requirement.revision, value: input.requirement },
+    ...(input.research ? [{ kind: 'research-dossier', id: input.research.id, revision: input.research.revision, value: input.research }] : []),
+    ...(input.questions ?? []).map((value) => ({ kind: 'intake-question', id: value.id, revision: hash(value), value })),
     ...(input.route ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
     ...(input.unit ? [{ kind: 'unit', id: input.unit.id, revision: input.route?.revision ?? 0, value: input.unit }] : []),
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
@@ -56,7 +60,7 @@ export function compileContext(input: FrozenContext) {
     ...input.references.map((value, index) => ({ kind: 'reference', id: `${input.sessionId}:${index}`, revision: hash(value), value })),
   ];
   const xml = `<context schemaVersion="${contextVersion}" scenario="${input.scenario}"><scope spaceId="${xmlText(input.spaceId)}" sessionId="${xmlText(input.sessionId ?? '')}" unitId="${xmlText(input.unitId ?? '')}" />${sources.map((s) =>
-    `<source kind="${s.kind}" id="${xmlText(s.id)}" revision="${xmlText(String(s.revision))}" hash="${hash(s.value)}">${xmlText(JSON.stringify(s.value))}</source>`).join('')}</context>`;
+    `<source kind="${s.kind}" id="${xmlText(s.id)}" revision="${xmlText(String(s.revision))}" hash="${hash(s.value)}">${xmlText(s.kind === 'research-dossier' ? (s.value as ResearchDossier).content : JSON.stringify(s.value))}</source>`).join('')}</context>`;
   return { xml, sources: sources.map(({ value, ...s }) => ({ ...s, hash: hash(value) })) };
 }
 

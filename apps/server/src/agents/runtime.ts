@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { normalizeContext, type Message } from '@earendil-works/pi-ai';
-import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
 import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
@@ -21,7 +21,9 @@ import type { WebFetchOptions } from '../extensions/web-fetch.js';
 import { prepareTools } from './tools.js';
 import type { Library } from '../modules/library.js';
 
-export interface ScenarioRun { tools: AgentTool[]; commit: () => void }
+export interface ScenarioRun {
+  tools: AgentTool[]; commit: () => void;
+}
 interface RuntimeOptions {
   stream?: StreamFn;
   scenario?: (input: FrozenContext) => ScenarioRun;
@@ -77,6 +79,8 @@ export class TeachingRuntime {
   private freeze(space: string, session: string, references: FrozenContext['references']): FrozenContext {
     const s = this.learning.session(space, session), w = this.learning.space(space);
     if (s.scope !== 'intake' && !w.requirement.confirmed) throw new BusinessError(422, '请先确认学习需求。');
+    if (s.scope === 'route') this.learning.intake.assertReady(space, w.requirement);
+    const ref = (s.scope === 'unit' ? w.route.intake : w.requirement.intake)?.researchRef;
     return structuredClone({ spaceId: space, sessionId: session, unitId: s.unitId,
       model: this.models?.current()?.selection,
       scenario: s.scope === 'route' ? 'roadmap' : s.scope === 'unit' ? 'tutor' : 'intake',
@@ -87,6 +91,8 @@ export class TeachingRuntime {
       evidence: s.scope === 'intake' ? [] : this.evidence(space),
       publicAssessment: s.unitId ? this.learning.unit(space, s.unitId).assessment : null,
       actions: s.scope === 'unit' ? this.actions?.list(space, session) : undefined,
+      research: ref ? this.learning.intake.research(space, ref) : null,
+      questions: s.scope === 'intake' ? s.questions : undefined,
     });
   }
   private evidence(space: string) {
@@ -99,12 +105,16 @@ export class TeachingRuntime {
       const w = this.learning.space(space), u = this.learning.unit(space, unit);
       const revision = input.kind === 'lesson' ? u.lesson?.revision ?? 0 : input.kind === 'assessment' ? u.assessment?.revision ?? 0 : u.draft.revision;
       if (!w.requirement.confirmed || revision !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
+      if (input.kind === 'lesson') {
+        this.learning.intake.assertReady(space, { ...w.requirement, intake: w.route.intake }, false);
+      }
       if (input.kind !== 'lesson' && !u.lesson) throw new BusinessError(422, '请先生成课件。');
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, unit, input.kind)) throw new BusinessError(409, '当前单元已有相同生成任务。');
       const frozen: FrozenContext = { spaceId: space, sessionId: null, unitId: unit, scenario: input.kind,
         model: this.models?.current()?.selection,
         requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
         lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
+        research: w.route.intake?.researchRef ? this.learning.intake.research(space, w.route.intake.researchRef) : null,
         assessmentRevision: u.assessment?.revision ?? 0,
         ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
       if (input.kind === 'evaluation' && input.execute) {
@@ -167,6 +177,20 @@ export class TeachingRuntime {
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);
   }
+  answer(space: string, session: string, round: string, key: string, raw: unknown): RunSubmission {
+    idSchema.parse(round);
+    const input = questionAnswerSchema.parse(raw);
+    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    const id = this.learning.once(key, `answer:${space}:${session}:${round}`, input, () => {
+      const saved = this.learning.session(space, session);
+      if (saved.scope !== 'intake') throw new BusinessError(422, '此会话不是需求确认会话。');
+      const text = this.learning.intake.acceptAnswer(space, session, round, this.learning.space(space).requirement.revision, input);
+      return this.recordRun(space, session, { text, quote: null, draftRevision: saved.draft.revision }, undefined, true);
+    });
+    const stored = this.learning.db.prepare('SELECT input FROM agent_runs WHERE space_id=? AND id=?').get(space, id) as { input: string };
+    this.launch(space, id, JSON.parse(stored.input).submitted.text);
+    return { run: this.get(space, id), session: this.learning.session(space, session) };
+  }
   retry(space: string, id: string, key: string): RunSubmission {
     const previous = this.get(space, id);
     if (!previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的会话运行。');
@@ -182,12 +206,12 @@ export class TeachingRuntime {
     this.launch(space, id, input.text);
     return { run: this.get(space, id), session: this.learning.session(space, session) };
   }
-  private recordRun(space: string, session: string, input: ReturnType<typeof messageInputSchema.parse>, retryOf?: string) {
-    const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
+  private recordRun(space: string, session: string, input: ReturnType<typeof messageInputSchema.parse>, retryOf?: string, preserveDraft = false) {
     if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
       throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
     }
-    if (!retryOf) this.learning.addMessage(space, session, input);
+    if (!retryOf) this.learning.addMessage(space, session, input, !preserveDraft);
+    const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
     const id = randomUUID();
     this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
     this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input }), Date.now());
@@ -276,7 +300,7 @@ export class TeachingRuntime {
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
     let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
-    let failure = '', toolFailed = false, request = 0, nativeSeq = 0;
+    let failure = '', request = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const fixed = frozen.evaluation;
@@ -355,9 +379,6 @@ export class TeachingRuntime {
         }
         if (!active(this.get(space, id))) return;
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
-        // Pi returns tool errors to the model so it can correct them. A later
-        // successful call can recover; the scenario still validates its artifact.
-        if (event.type === 'tool_execution_end') toolFailed = event.isError;
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
           if (displayModelText && update.type === 'text_delta') {
@@ -398,10 +419,10 @@ export class TeachingRuntime {
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
-      if (toolFailed) throw new BusinessError(422, '工具调用或结构化产物无效，未保存生成产物。');
       if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
         last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
           : '模型响应未正常完成，未保存生成产物。');
+      // Pi feeds tool errors back to the model; the scenario validates publishable artifacts.
       this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();

@@ -31,7 +31,7 @@ function routeReply({ space, text }: ReplyInput): Reply {
     }
   }
   return {
-    text: `我们围绕「${space.requirement?.goal ?? space.name}」来安排这条路线。${space.requirement?.schedule ? `目前的时间安排是：${space.requirement.schedule}。` : ''}\n\n你可以告诉我哪些内容已经掌握、想提前做什么项目，或者希望怎样调整节奏。我会先给出建议，确认后再更新路线。`,
+    text: `我们围绕「${space.requirement?.rows.find((row) => row.answer.trim())?.answer ?? space.name}」来安排这条路线。\n\n你可以告诉我哪些内容已经掌握、想提前做什么项目，或者希望怎样调整节奏。我会先给出建议，确认后再更新路线。`,
   }
 }
 

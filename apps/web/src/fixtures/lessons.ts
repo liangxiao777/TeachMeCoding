@@ -12,6 +12,7 @@ export type LessonBlock =
 export interface Lesson {
   intro: string
   blocks: LessonBlock[]
+  content?: string
 }
 
 const ownership: Lesson = {
@@ -181,29 +182,23 @@ export function getLesson(unit: Unit, language: 'rust' | 'python'): Lesson {
   const lesson = LESSONS[unit.lessonKey]
   if (lesson) return lesson
   const file = language === 'rust' ? `${unit.id}_practice.rs` : `${unit.id}_practice.py`
+  const code = language === 'rust'
+    ? `fn main() {\n    let topic = String::from("${unit.title}");\n    println!("开始练习：{}", topic);\n}`
+    : `topic = "${unit.title}"\nprint("开始练习：" + topic)`
   return {
-    intro: `这份课件根据你当前的学习情况生成，围绕「${unit.title}」展开。`,
-    blocks: [
-      { type: 'h2', id: 'why', text: '本单元要解决的问题' },
-      { type: 'p', text: unit.summary },
-      { type: 'h2', id: 'goals', text: '学完之后你能做到' },
-      { type: 'list', items: unit.goals },
-      {
-        type: 'code',
-        file,
-        language,
-        code:
-          language === 'rust'
-            ? `fn main() {\n    let topic = String::from("${unit.title}");\n    println!("开始练习：{}", topic);\n}`
-            : `topic = "${unit.title}"\nprint("开始练习：" + topic)`,
-      },
-      { type: 'h2', id: 'practice', text: '动手试试' },
-      { type: 'practice', items: ['修改示例并运行，遇到任何疑问都可以直接问我。'] },
-    ],
+    intro: '', blocks: [], content: [
+      `这份课件根据你当前的学习情况生成，围绕「${unit.title}」展开。`,
+      `## 本单元要解决的问题\n\n${unit.summary}`,
+      `## 学完之后你能做到\n\n${unit.goals.map((goal) => `- ${goal}`).join('\n')}`,
+      `\`\`\`${language} file=${file}\n${code}\n\`\`\``,
+      '> [!TIP]\n> 先预测输出，再带入 IDE 修改和尝试。',
+      '::::practice\n修改示例并运行，遇到任何疑问都可以直接问我。\n\n:::hint\n先修改输出文字，观察变化。\n:::\n::::',
+    ].join('\n\n'),
   }
 }
 
 export function lessonToText(lesson: Lesson): string {
+  if (lesson.content !== undefined) return lesson.content
   return lesson.blocks
     .map((b) => {
       if (b.type === 'p' || b.type === 'h2') return b.text

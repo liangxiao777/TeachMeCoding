@@ -1,5 +1,19 @@
 import Database from 'better-sqlite3';
 
+// Convert old content once, including technical details previously kept outside the table.
+const legacyRequirement = (value: string, intake: string) => `json_object('rows', json((
+  SELECT json_group_array(json_object('question', field.key, 'answer', field.value))
+  FROM json_each(json_object(
+    '学习目标', json_extract(${value}, '$.goal'),
+    '已有基础', json_extract(${value}, '$.background'),
+    '期望达成', json_extract(${value}, '$.outcome'),
+    '时间安排', json_extract(${value}, '$.schedule'),
+    '学习对象', json_extract(${intake}, '$.target.name'),
+    '适用版本', json_extract(${intake}, '$.target.version'),
+    '学习范围', json_extract(${intake}, '$.target.scope')
+  )) AS field WHERE field.value IS NOT NULL AND trim(field.value) != ''
+)))`;
+
 // Migrations are append-only. Each version, including user_version, commits atomically.
 export const migrations = [
   `CREATE TABLE spaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -77,6 +91,32 @@ export const migrations = [
   `CREATE TABLE code_executions (space_id TEXT NOT NULL, id TEXT NOT NULL, unit_id TEXT NOT NULL,
      value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,unit_id) REFERENCES units(space_id,id));`,
   `CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL CHECK(json_valid(value)));`,
+  `ALTER TABLE requirements ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   ALTER TABLE routes ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   ALTER TABLE proposals ADD COLUMN intake TEXT CHECK(json_valid(intake));
+   CREATE TABLE research_dossiers (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL, revision INTEGER NOT NULL,
+     run_id TEXT NOT NULL, value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id,revision),
+     FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   CREATE TABLE intake_questions (space_id TEXT NOT NULL, id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT NOT NULL,
+     value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id),
+     FOREIGN KEY(space_id,session_id) REFERENCES sessions(space_id,id), FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   CREATE UNIQUE INDEX one_pending_question ON intake_questions(space_id,session_id) WHERE json_extract(value,'$.state')='pending';`,
+  `CREATE TABLE research_dossiers_next (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL, revision INTEGER NOT NULL,
+     run_id TEXT, value TEXT NOT NULL CHECK(json_valid(value)), PRIMARY KEY(space_id,id,revision),
+     FOREIGN KEY(space_id,run_id) REFERENCES agent_runs(space_id,id));
+   INSERT INTO research_dossiers_next SELECT * FROM research_dossiers;
+   DROP TABLE research_dossiers;
+   ALTER TABLE research_dossiers_next RENAME TO research_dossiers;`,
+  `UPDATE requirements SET value = ${legacyRequirement('requirements.value', 'requirements.intake')}
+     WHERE json_type(value, '$.rows') IS NULL;
+   ${['agent_runs', 'task_runs'].map((table) => `UPDATE ${table} SET input = json_set(input, '$.requirement.value',
+     ${legacyRequirement("json_extract(input, '$.requirement.value')", "json_extract(input, '$.requirement.intake')")})
+     WHERE json_type(input, '$.requirement.value') = 'object' AND json_type(input, '$.requirement.value.rows') IS NULL;
+   UPDATE ${table} SET input = json_remove(input, '$.requirement.intake.target', '$.route.intake.target', '$.research.target');`).join('\n')}
+   UPDATE requirements SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE routes SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE proposals SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE research_dossiers SET value = json_remove(value, '$.target');`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
-import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, RequirementState, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
-import { api, streamRun, ApiError } from '@/lib/api'
-import type { AppModel } from './context'
+import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import { access, api, streamRun, ApiError } from '@/lib/api'
+import type { AppModel, RequirementDraft } from './context'
 import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
 import { useUnsavedWarning } from './request-state'
-import type { AssessmentDraft, LessonBlock, Requirement, Session, Space, SpaceView } from './types'
+import type { AssessmentDraft, LessonBlock, Session, Space, SpaceView } from './types'
 import { LocalTerminal } from '@/lib/terminal'
 
 interface StoredSpace {
@@ -17,7 +17,7 @@ interface StoredSpace {
   tree: ProjectEntry[]
   files: Record<string, ProjectFile>
   disk: ProjectFile | null
-  requirementDraft: Requirement | null
+  requirementDraft: RequirementDraft | null
   planningError: string | null
   taskParts: Record<string, AgentDisplayPart[]>
   actions: ActionProposal[]
@@ -31,8 +31,31 @@ type SessionEdit = Partial<Pick<Session, 'composerText' | 'composerQuote' | 'rou
 const sessionKey = (space: Space) => sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
 const uiSession = (s: SessionDetail): Session => ({ ...s, updatedAt: s.messages.at(-1)?.createdAt ?? 0,
   messages: s.messages.map((m) => ({ ...m, quote: m.quote ?? undefined })),
-  // Unsent input belongs to this page, not to persisted session history.
+  // The saved revision still fences sends, but legacy unsent bodies do not hydrate the composer.
   composerText: '', composerQuote: null, routeSuggestion: '' })
+
+// Question state is independent of the composer draft revision. Terminal rounds
+// and their original answers must survive an older refresh or idempotent response.
+function mergeQuestions(known: QuestionRound[] = [], fresh: QuestionRound[] = []) {
+  const rounds = new Map(known.map((round) => [round.id, round]))
+  for (const round of fresh) {
+    const old = rounds.get(round.id)
+    if (!old || old.state === 'pending' || old.state === 'superseded' && round.state === 'answered') rounds.set(round.id, round)
+  }
+  return [...rounds.values()]
+}
+function mergeSession(known: SessionDetail | undefined, fresh: SessionDetail, acceptQuestions = true): SessionDetail {
+  if (!known) return { ...fresh, questions: acceptQuestions ? fresh.questions : [] }
+  const messages = new Map(known.messages.map((message) => [message.id, message]))
+  for (const message of fresh.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
+  return { ...fresh, draft: known.draft.revision > fresh.draft.revision ? known.draft : fresh.draft,
+    messages: [...messages.values()], questions: acceptQuestions ? mergeQuestions(known.questions, fresh.questions) : known.questions }
+}
+const supersedeQuestions = (sessions: StoredSpace['sessions']) => Object.fromEntries(Object.entries(sessions).map(([id, session]) =>
+  [id, { ...session, questions: session.questions?.map((round) => round.state === 'pending' ? { ...round, state: 'superseded' as const } : round) }]))
+const requirementDirty = (s: StoredSpace) => !!s.requirementDraft && (!same(
+  { ...s.requirementDraft, intake: undefined }, s.saved.requirement.value)
+  || s.requirementDraft.intake !== undefined && !same(s.requirementDraft.intake, s.saved.requirement.intake ?? null))
 
 function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
   const entries = tree.map((e) => ({ id: e.path, name: e.path.split('/').at(-1)!, parentId: e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : null, kind: e.kind }))
@@ -116,6 +139,12 @@ export function usePersistentModel(): AppModel {
   const retry = useRef<() => void>(() => {})
   const inFlight = useRef(new Map<string, Promise<unknown>>())
   const pendingEdits = useRef(new Map<string, SessionEdit>())
+  const businessRefresh = useRef(new Map<string, number>())
+  const invalidateBusiness = (space: string) => {
+    const next = (businessRefresh.current.get(space) ?? 0) + 1
+    businessRefresh.current.set(space, next)
+    return next
+  }
   const booted = useRef(false)
   const publish = () => setSpaces(Object.values(cache.current).map((entry) => entry.ui))
   const change = (id: string, update: (s: StoredSpace) => StoredSpace) => {
@@ -198,7 +227,7 @@ export function usePersistentModel(): AppModel {
     return () => window.removeEventListener('popstate', updateLocation)
   }, [ready, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
 
-  const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || !!s.requirementDraft && !same(s.requirementDraft, s.saved.requirement.value)
+  const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || requirementDirty(s)
     || Object.values(s.drafts).some((draft) => !same(answers(draft), answers(s.units[draft.unitId]!.draft)))
     || s.ui.files.some((file) => !!s.files[file.id] && file.content !== s.files[file.id]!.content))
   useUnsavedWarning(dirty)
@@ -227,9 +256,12 @@ export function usePersistentModel(): AppModel {
     if (ready && capabilities.agent && current && sessionScope(current) === 'unit' && !session) editSession({})
   }, [ready, capabilities.agent, current?.id, current?.view, current?.currentUnitId, session?.id])
   const refreshBusiness = async (space: string) => {
+    const ticket = invalidateBusiness(space)
     const loaded = await loadSpace(await api<Workspace>(`/spaces/${space}`))
     change(space, (s) => {
-      const requirement = loaded.saved.requirement.revision >= s.saved.requirement.revision ? loaded.saved.requirement : s.saved.requirement
+      const freshIntake = ticket === businessRefresh.current.get(space) && loaded.saved.requirement.revision >= s.saved.requirement.revision
+      const requirement = freshIntake ? loaded.saved.requirement : s.saved.requirement
+      const readiness = freshIntake ? loaded.saved.readiness : s.saved.readiness
       // A terminal refresh may return after the user has already retried the run.
       const runs = [...loaded.saved.runs]
       for (const known of s.saved.runs) {
@@ -238,7 +270,7 @@ export function usePersistentModel(): AppModel {
         else if (!['pending', 'running'].includes(known.state) || known.state === 'running' && runs[index]!.state === 'pending') runs[index] = known
       }
       const sessions = { ...s.sessions }
-      for (const [id, fresh] of Object.entries(loaded.sessions)) if (fresh.draft.revision >= (sessions[id]?.draft.revision ?? 0)) sessions[id] = fresh
+      for (const [id, fresh] of Object.entries(loaded.sessions)) sessions[id] = mergeSession(sessions[id], fresh, freshIntake)
       const units = { ...loaded.units }
       for (const [id, fresh] of Object.entries(units)) {
         const known = s.units[id]?.draft
@@ -257,7 +289,7 @@ export function usePersistentModel(): AppModel {
       // A refresh started before a new execution must not erase its stop control.
       executions.push(...s.executions.filter((known) => !executions.some((e) => e.id === known.id)))
       executions.sort((a, b) => a.createdAt - b.createdAt)
-      return { ...s, actions, executions, saved: { ...loaded.saved, requirement, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
+      return { ...s, actions, executions, saved: { ...loaded.saved, requirement, readiness, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
           ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
           currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
@@ -288,6 +320,7 @@ export function usePersistentModel(): AppModel {
       if (event.data.type === 'text') text += event.data.delta
       if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
       const state = event.data.type === 'state' ? event.data.state : 'running'
+      if (terminal && ['intake', 'roadmap'].includes(work.kind)) invalidateBusiness(space)
       if (work.sessionId) change(space, (s) => ({ ...s, saved: { ...s.saved, runs: s.saved.runs.map((r) => r.id === work.id ? { ...r, state } : r) },
         ...(work.id === latestPlan(s.saved)?.id ? {
           planningError: event.data.type === 'state' ? event.data.error : s.planningError,
@@ -341,39 +374,104 @@ export function usePersistentModel(): AppModel {
       } finally { subscriptions.current.delete(work.id) }
     })()
   }
+  const acceptSession = (space: string, fresh: SessionDetail, work?: AgentRun, consumed?: { text: string; quote: Session['composerQuote'] }) => {
+    const changesIntake = fresh.scope === 'intake' || work?.kind === 'roadmap'
+    if (changesIntake) invalidateBusiness(space)
+    change(space, (s) => {
+      const saved = mergeSession(s.sessions[fresh.id], fresh)
+      const knownRun = work && s.saved.runs.find((run) => run.id === work.id)
+      const nextRun = knownRun && !['pending', 'running'].includes(knownRun.state) ? knownRun : work
+      const update = (old: Session) => {
+        const next = uiSession(saved), messages = new Map(old.messages.map((message) => [message.id, message]))
+        for (const message of next.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
+        return { ...old, messages: [...messages.values()], updatedAt: Math.max(old.updatedAt, next.updatedAt),
+          composerText: consumed && old.composerText === consumed.text ? fresh.draft.text : old.composerText,
+          composerQuote: consumed && same(old.composerQuote, consumed.quote) ? fresh.draft.quote : old.composerQuote }
+      }
+      return { ...s, sessions: { ...s.sessions, [saved.id]: saved },
+        saved: { ...s.saved, ...(changesIntake ? { readiness: undefined } : {}),
+          runs: nextRun ? [...s.saved.runs.filter((run) => run.id !== nextRun.id), nextRun] : s.saved.runs },
+        ui: { ...s.ui, sessions: s.ui.sessions.some((old) => old.id === saved.id)
+          ? s.ui.sessions.map((old) => old.id === saved.id ? update(old) : old) : [...s.ui.sessions, uiSession(saved)] } }
+    })
+  }
   const sendMessage = (text?: string): Promise<boolean> => {
     if (!current || !session) return Promise.resolve(false)
     const space = current.id, id = session.id, snapshot = { text: session.composerText, quote: session.composerQuote }
     const stored = cache.current[space]!.sessions[id]!
     const input = { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision }
     if (!input.text.trim() && !input.quote) return Promise.resolve(false)
+    let submission: RunSubmission | undefined, saved: SessionDetail | undefined, applied = false
     return run(`session:${id}`, async () => {
-      const submission = capabilities.agent ? await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input) : undefined
-      const saved = submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
-      change(space, (s) => ({ ...s, sessions: { ...s.sessions, [id]: saved }, ui: { ...s.ui,
-        sessions: s.ui.sessions.map((x) => {
-          if (x.id !== id) return x
-          // A late response must not erase an edit made while the request/retry was in flight.
-          const next = uiSession(saved)
-          return { ...next,
-            composerText: text !== undefined || x.composerText !== snapshot.text ? x.composerText : next.composerText,
-            composerQuote: text !== undefined || !same(x.composerQuote, snapshot.quote) ? x.composerQuote : next.composerQuote,
-            routeSuggestion: x.routeSuggestion,
-          }
-        }),
-      } }))
+      if (capabilities.agent) submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input)
+      saved ??= submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
+      // Explicit messages and structured answers never consume the composer. A
+      // normal send only clears the exact edit that was submitted, not new input.
+      if (!applied) { acceptSession(space, saved, submission?.run, text === undefined ? snapshot : undefined); applied = true }
       if (submission) watchRun(space, submission.run)
+      if (saved.scope === 'intake') await refreshBusiness(space)
       return true
     }).then(Boolean)
   }
-  const saveRequirement = (value: Requirement, confirmed: boolean) => {
-    if (!current || !selected) return Promise.resolve(false)
-    const id = current.id, revision = selected.saved.requirement.revision
-    return run(`requirement:${id}`, async () => {
-      const saved = await api<RequirementState>(`/spaces/${id}/requirement`, { revision, value, confirmed })
-      change(id, (s) => ({ ...s, requirementDraft: same(s.requirementDraft, value) ? null : s.requirementDraft, saved: { ...s.saved, requirement: saved }, ui: { ...s.ui, requirement: saved.value } }))
+  const answerQuestions = (round: string, input: QuestionAnswer): Promise<boolean> => {
+    if (!current || !session || !capabilities.agent) return Promise.resolve(false)
+    const space = current.id, id = session.id
+    const snapshot = structuredClone(input)
+    let submission: RunSubmission | undefined, applied = false
+    return run(`session:${id}`, async () => {
+      submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/questions/${round}/answer`, snapshot)
+      if (!applied) { acceptSession(space, submission.session, submission.run); applied = true }
+      watchRun(space, submission.run)
+      await refreshBusiness(space)
       return true
     }).then(Boolean)
+  }
+  const saveRequirement = (draft: RequirementDraft, confirmed: boolean) => {
+    if (!current || !selected) return Promise.resolve(false)
+    const id = current.id, revision = selected.saved.requirement.revision
+    const { intake, ...value } = draft
+    let saved: RequirementState | undefined, applied = false
+    return run(`requirement:${id}`, async () => {
+      saved ??= await api<RequirementState>(`/spaces/${id}/requirement`, { revision, value, confirmed, ...(intake !== undefined ? { intake } : {}) })
+      const requirement = saved
+      if (!applied) {
+        invalidateBusiness(id)
+        change(id, (s) => ({ ...s, sessions: supersedeQuestions(s.sessions),
+          requirementDraft: same(s.requirementDraft, draft) ? null : s.requirementDraft,
+          saved: { ...s.saved, requirement: requirement.revision >= s.saved.requirement.revision ? requirement : s.saved.requirement, readiness: undefined },
+          ui: { ...s.ui, requirement: requirement.revision >= s.saved.requirement.revision ? requirement.value : s.ui.requirement } }))
+        applied = true
+      }
+      await refreshBusiness(id)
+      return true
+    }).then(Boolean)
+  }
+  const saveResearch = async (ref: ResearchRef, content: string): Promise<ResearchDossier> => {
+    if (!current) throw new Error('没有打开的学习空间')
+    const id = current.id
+    const result = await api<ResearchSaveResult>(`/spaces/${id}/research/${ref.id}/${ref.revision}`, { content })
+    invalidateBusiness(id)
+    change(id, (s) => result.workspace.requirement.revision <= s.saved.requirement.revision ? s : {
+      ...s, sessions: supersedeQuestions(s.sessions),
+      saved: { ...s.saved, requirement: result.workspace.requirement, readiness: result.workspace.readiness },
+      ui: { ...s.ui, requirement: result.workspace.requirement.value },
+    })
+    return result.document
+  }
+  const exportResearch = async (space: string, ref: ResearchRef) => {
+    const path = `/api/spaces/${space}/research/${ref.id}/${ref.revision}?format=markdown`
+    const fetchMarkdown = async (refresh = false) => fetch(path, { headers: { 'X-TMC-Token': await access(refresh) } })
+    let response = await fetchMarkdown()
+    if (response.status === 401) response = await fetchMarkdown(true)
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as { error?: string }
+      throw new ApiError(response.status, result.error ?? '资料导出失败，请重试。')
+    }
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = url; link.download = `research-${ref.id}-v${ref.revision}.md`
+    document.body.append(link); link.click(); link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
   const refreshFiles = async (id: string) => {
     const tree = await api<ProjectEntry[]>(`/spaces/${id}/project/tree`)
@@ -478,10 +576,10 @@ export function usePersistentModel(): AppModel {
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null
-      const blocks: LessonBlock[] = lesson.blocks ?? [{ type: 'markdown', text: lesson.content }]
+      if (!lesson.blocks) return { intro: lesson.intro ?? '', blocks: [], content: lesson.content }
       // Earlier model output stored entire Markdown sections as h2.text. Split
       // only the display model, preserving saved content and stable TOC anchors.
-      return { intro: lesson.intro ?? '', blocks: blocks.flatMap((block): LessonBlock[] => {
+      return { intro: lesson.intro ?? '', blocks: lesson.blocks.flatMap((block): LessonBlock[] => {
         if (block.type !== 'h2') return [block]
         const [heading = '', ...lines] = block.text.split(/\r\n?|\n/)
         const body = lines.join('\n')
@@ -509,14 +607,23 @@ export function usePersistentModel(): AppModel {
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
     confirmRequirement: () => { if (!current?.requirement || !selected) return
+      if (!selected.saved.readiness?.ready) {
+        setError(selected.saved.readiness?.reasons.join(' ') || '请先核对学习对象、版本和资料，再确认需求。')
+        return
+      }
       if (!capabilities.agent) { void saveRequirement(current.requirement, true); return }
       const space = current.id, input = { revision: selected.saved.requirement.revision, value: current.requirement, confirmed: true }
-      change(space, (s) => ({ ...s, planningError: null, ui: { ...s.ui, view: s.saved.route.content ? 'route' : 'planning', agentOpen: !!s.saved.route.content } }))
-      let submission: RunSubmission | undefined
+      let submission: RunSubmission | undefined, applied = false
       void run(`plan:${space}`, async () => {
         submission ??= await api<RunSubmission>(`/spaces/${space}/plan`, input)
-        await refreshBusiness(space)
+        // Only leave intake after the server accepts the confirmation and run.
+        if (!applied) {
+          acceptSession(space, submission.session, submission.run)
+          change(space, (s) => ({ ...s, planningError: null, ui: { ...s.ui, view: s.saved.route.content ? 'route' : 'planning', agentOpen: !!s.saved.route.content } }))
+          applied = true
+        }
         watchRun(space, submission.run)
+        await refreshBusiness(space)
       })
     },
     setView: navigate,
@@ -551,10 +658,8 @@ export function usePersistentModel(): AppModel {
     retryReply: (id) => { if (!current) return; const space = current.id
       void run(`retry:${id}`, async () => {
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
-        change(space, (s) => ({ ...s, planningError: null,
-          saved: { ...s.saved, runs: [...s.saved.runs.filter((r) => r.id !== submission.run.id), submission.run] },
-          sessions: { ...s.sessions, [submission.session.id]: submission.session }, ui: { ...s.ui,
-          sessions: s.ui.sessions.map((x) => x.id === submission.session.id ? { ...x, messages: uiSession(submission.session).messages } : x) } }))
+        acceptSession(space, submission.session, submission.run)
+        change(space, (s) => ({ ...s, planningError: null }))
         watchRun(space, submission.run)
       })
     },
@@ -630,6 +735,12 @@ export function usePersistentModel(): AppModel {
     persistence: {
       ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
       planning: { run: selected ? latestPlan(selected.saved) : undefined, error: selected?.planningError ?? null },
+      intake: selected?.saved.requirement.intake ?? null, readiness: selected?.saved.readiness,
+      questions: session ? selected?.sessions[session.id]?.questions ?? [] : [],
+      answerQuestions,
+      loadResearch: (ref) => current ? api<ResearchDossier>(`/spaces/${current.id}/research/${ref.id}/${ref.revision}`) : Promise.reject(new Error('没有打开的学习空间')),
+      saveResearch,
+      exportResearch: (ref) => current ? exportResearch(current.id, ref) : Promise.reject(new Error('没有打开的学习空间')),
       conclusions: selected?.saved.conclusions ?? [],
       execution: selected?.executions.filter((e) => e.unitId === recordUnit).at(-1),
       stopExecution: (id) => { if (current) void run(`stop-code:${id}`, async () => { await api(`/spaces/${current.id}/executions/${id}/stop`, {}); await refreshBusiness(current.id) }) },

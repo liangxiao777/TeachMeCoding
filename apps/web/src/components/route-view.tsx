@@ -129,7 +129,7 @@ export function RouteView() {
               学习路线
             </Badge>
             <h1 className="text-balance text-4xl font-semibold tracking-tight">{space.name}</h1>
-            {req && <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">{req.goal}</p>}
+            {req?.rows.some((row) => row.answer.trim()) && <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">{req.rows.find((row) => row.answer.trim())?.answer}</p>}
           </div>
 
           {persistence && units.length === 0 ? (
@@ -179,15 +179,11 @@ export function RouteView() {
           )}
 
           {req && (
-            <dl className="grid grid-cols-3 overflow-hidden rounded-xl border bg-card text-sm">
-              {[
-                ['已有基础', req.background],
-                ['期望达成', req.outcome],
-                ['时间安排', req.schedule],
-              ].map(([k, v], i) => (
-                <div key={k} className={cn('flex flex-col gap-1.5 p-4', i > 0 && 'border-l')}>
-                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{k}</dt>
-                  <dd className="leading-relaxed">{v}</dd>
+            <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 xl:grid-cols-3">
+              {req.rows.map((row, index) => (
+                <div key={index} className="flex flex-col gap-1.5 rounded-xl border bg-card p-4">
+                  <dt className="text-xs font-medium text-muted-foreground">{row.question}</dt>
+                  <dd className="whitespace-pre-wrap break-words leading-relaxed">{row.answer || '待补充'}</dd>
                 </div>
               ))}
             </dl>

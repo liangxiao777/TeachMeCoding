@@ -1,13 +1,16 @@
-import { createAssistantMessageEventStream, type AssistantMessage, type Message } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, type AssistantMessage, type JsonObject, type Message } from '@earendil-works/pi-ai';
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
-import type { RouteContent } from '@teach-me-coding/contracts';
+import type { IntakeMetadata, RouteSubmission } from '@teach-me-coding/contracts';
 import type { ModelSource } from '../models/service.js';
 import { randomUUID } from 'node:crypto';
 import type { Learning } from '../modules/learning.js';
 
+// Unrelated route/task tests use generic programming concepts, not verified technology claims.
+export const conceptIntake: IntakeMetadata = { researchRef: null };
+
 export function populated(learning: Learning, name = 'Rust') {
   const space = learning.create({ name, goal: `学习 ${name}` });
-  learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: `学习 ${name}` }, confirmed: true });
+  learning.saveRequirement(space.id, { ...space.requirement, value: { rows: [{ question: '想学习什么？', answer: `学习 ${name}` }] }, intake: conceptIntake, confirmed: true });
   const unit = () => ({ id: randomUUID(), title: 'Unit', summary: 'Summary', goals: ['Goal'] });
   const units = [unit(), unit()];
   const routeSession = space.sessions.find((s) => s.scope === 'route')!.id;
@@ -22,17 +25,20 @@ export const syntheticSource: ModelSource = {
   current: () => ({ selection: syntheticSelection, model: teachingModel }),
   resolve: (selection) => selection.provider === syntheticSelection.provider && selection.model === syntheticSelection.model ? teachingModel : undefined,
 };
-// Follow the actual host-generated stage IDs, never manufacture IDs in model arguments.
-export function routeReply(messages: Message[], content: { note: string; stages: { title: string; units: Omit<RouteContent['stages'][number]['units'][number], 'id'>[] }[] }, adjustment = false) {
+// Initial routes express content without storage IDs; adjustments finalize their existing draft.
+export function routeReply(messages: Message[], content: RouteSubmission, adjustment = false) {
   const current = messages.slice(messages.findLastIndex((m) => m.role === 'user') + 1);
   const calls = current.flatMap((m) => m.role === 'assistant' ? m.content.filter((p) => p.type === 'toolCall') : []);
-  const stages = current.flatMap((m) => m.role === 'toolResult' && m.toolName === 'add_route_stage' && !m.isError ? [JSON.parse(m.content[0]!.type === 'text' ? m.content[0]!.text : '{}').stageId as string] : []);
-  const steps = adjustment ? [] : content.stages.flatMap((stage, i) => [
-    { name: 'add_route_stage', arguments: { title: stage.title } },
-    ...stage.units.map(({ title, summary, goals }) => ({ name: 'add_route_unit', arguments: { stageId: stages[i], title, summary, goals } })),
-  ]);
-  const step = [...steps, { name: 'submit_route_proposal', arguments: { note: content.note } }][calls.length];
-  return step ? reply([{ type: 'toolCall', id: `route-${calls.length}`, ...step }], 'toolUse') : null;
+  if (calls.length) return null;
+  const args: JsonObject = {};
+  if (content.note !== undefined) args.note = content.note;
+  if (!adjustment) args.stages = content.stages.map((stage) => ({ title: stage.title, units: stage.units.map((unit) => {
+    const value: JsonObject = { title: unit.title };
+    if (unit.summary !== undefined) value.summary = unit.summary;
+    if (unit.goals !== undefined) value.goals = unit.goals;
+    return value;
+  }) }));
+  return reply([{ type: 'toolCall', id: 'route-0', name: adjustment ? 'submit_route_proposal' : 'submit_route', arguments: args }], 'toolUse');
 }
 export function reply(content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason'] = 'stop'): AssistantMessage {
   return { role: 'assistant', content, stopReason, timestamp: 1, api: teachingModel.api, provider: teachingModel.provider, model: teachingModel.id,

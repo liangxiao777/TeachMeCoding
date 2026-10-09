@@ -26,16 +26,17 @@ test('all six scenes retain their ordered business tools across independent Skil
   const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning);
   const actions = new Actions(learning, new Projects('/synthetic/data'));
   const expected = {
-    intake: ['submit_requirement_draft'],
+    intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'],
     roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'],
     tutor: ['read', 'ls', 'find', 'grep', 'propose_file_change', 'propose_command', 'submit_learning_conclusion'],
     lesson: ['submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'],
   } as const;
   try {
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
+      for (const initial of scenario === 'roadmap' ? [false, true] : [false])
       for (const hasSkills of [false, true]) for (const mcpEnabled of [false, true]) for (const searchEnabled of [false, true]) {
         const input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
-          scenario, requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, references: [] };
+          scenario, requirement: space.requirement, route: initial ? { ...space.route, content: null } : space.route, unit: units[0]!, lesson: null, references: [] };
         const base = ['intake', 'roadmap', 'tutor'].includes(scenario)
           ? createScenario(learning, input, randomUUID(), '/synthetic/cwd', actions).tools : createTask(learning, input).tools;
         const mcp = tool('mcp__reference__lookup'), search = tool('web_search');
@@ -45,13 +46,13 @@ test('all six scenes retain their ordered business tools across independent Skil
           mcp: { async tools(received) { assert.equal(received, signal); return mcpEnabled ? [mcp] : []; } },
           search: { async tools(received) { assert.equal(received, signal); return searchEnabled ? [search] : []; } } });
         const inventory = [
-          ...expected[scenario].map((name) => ({ name, source: 'scenario' })),
+          ...(initial ? ['submit_route'] : expected[scenario]).map((name) => ({ name, source: 'scenario' })),
           ...(hasSkills && scenario !== 'tutor' ? ['read', 'ls', 'find', 'grep'].map((name) => ({ name, source: 'skills-read' })) : []),
           ...(mcpEnabled ? [{ name: 'mcp__reference__lookup', source: 'mcp' }] : []),
           ...(searchEnabled ? [{ name: 'web_search', source: 'search' }] : []),
           { name: 'web_fetch', source: 'web-fetch' },
         ];
-        const label = `${scenario}, skills=${hasSkills}, mcp=${mcpEnabled}, search=${searchEnabled}`;
+        const label = `${scenario}, initial=${initial}, skills=${hasSkills}, mcp=${mcpEnabled}, search=${searchEnabled}`;
         assert.deepEqual(prepared.inventory, inventory, label);
         assert.deepEqual(prepared.tools.map((t) => t.name), inventory.map((t) => t.name), label);
         assert.deepEqual(prepared.declarations.map((t) => t.name), inventory.map((t) => t.name), label);

@@ -225,7 +225,7 @@ function useStoreImpl(initialState: () => AppState) {
             const req = sp.requirement!
             const isTime = /(\d+\s*(小时|h|天|周|个月)|周末|每天|晚上)/.test(text)
             patch = {
-              requirement: isTime ? { ...req, schedule: text } : { ...req, outcome: `${req.outcome}；${text}` },
+              requirement: { rows: [...req.rows, { question: isTime ? '补充时间安排？' : '还有什么偏好？', answer: text }] },
             }
             reply = ONBOARDING_QUESTIONS.updated
           }

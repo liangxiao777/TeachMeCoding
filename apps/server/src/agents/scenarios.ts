@@ -1,5 +1,5 @@
 import { Type } from '@earendil-works/pi-ai';
-import { commandProposalSchema, fileProposalSchema, conclusionSchema, requirementSchema, type ActionProposal, type Requirement } from '@teach-me-coding/contracts';
+import { commandProposalSchema, fileProposalSchema, conclusionSchema, type ActionProposal } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Actions } from '../modules/actions.js';
 import type { FrozenContext } from './context.js';
@@ -7,24 +7,10 @@ import type { ScenarioRun } from './runtime.js';
 import { readTools } from './read-tools.js';
 import { createRouteTools } from './route-tools.js';
 import { baseline } from './tasks.js';
+import { createIntakeTools } from './intake-tools.js';
 
 export function createScenario(learning: Learning, input: FrozenContext, runId: string, cwd?: string, actions?: Actions): ScenarioRun {
-  if (input.scenario === 'intake') {
-    let draft: Requirement | undefined;
-    return {
-      tools: [{ name: 'submit_requirement_draft', label: '整理需求草稿', description: 'Stage a complete requirement draft. Never confirms it.',
-        // Strip Zod's non-JSON metadata before TypeBox sees it: provider schemas are data, not validators.
-        parameters: Type.Unsafe<Requirement>(JSON.parse(JSON.stringify(requirementSchema.toJSONSchema()))),
-        async execute(_id, args) {
-          draft = requirementSchema.parse(args);
-          return { content: [{ type: 'text', text: '草稿已暂存；成功结束后仍需用户确认。' }], details: {} };
-        },
-      }],
-      commit() {
-        if (draft) learning.saveRequirement(input.spaceId, { revision: input.requirement.revision, value: draft, confirmed: false });
-      },
-    };
-  }
+  if (input.scenario === 'intake') return createIntakeTools(learning, input, runId);
   if (input.scenario === 'roadmap') {
     const initial = input.route!.content === null;
     const draft = createRouteTools(input.route!.content);

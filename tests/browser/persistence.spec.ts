@@ -59,20 +59,23 @@ test('spaces and sent messages persist while unsent input is temporary and retri
     visible(page, '学习空间名称').press('Tab'),
   ]);
   await expect(page.getByText(goal, { exact: true })).toHaveCount(1);
-  await expect(page.locator('dd').filter({ hasText: /^待补充$/ })).toHaveCount(4);
+  await expect(page.getByText('还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await visible(page, '学习目标').fill('理解持久化数据的生命周期');
-  await visible(page, '已有基础').fill('Python 基础，尚未学习 Rust');
+  await visible(page, '问题 1').fill('想理解什么？');
+  await visible(page, '回答 1').fill('理解持久化数据的生命周期');
+  await page.getByRole('button', { name: '添加问题', exact: true }).click();
+  await visible(page, '问题 2').fill('已有经验？');
+  await visible(page, '回答 2').fill('Python 基础，尚未学习 Rust');
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   // The requirement editor is unmounted, but its unsaved values belong to the provider.
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
   // Match the original goal too: a duplicate created by retry must not hide behind the rename.
   await expect(spaceCard(page, goal)).toHaveCount(1);
   await spaceCard(page, name).getByRole('button', { name: '继续学习', exact: true }).click();
-  await expect(visible(page, '已有基础')).toHaveValue('Python 基础，尚未学习 Rust');
+  await expect(visible(page, '回答 2')).toHaveValue('Python 基础，尚未学习 Rust');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.locator('dd').filter({ hasText: /^Python 基础，尚未学习 Rust$/ })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Python 基础，尚未学习 Rust', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '确认学习需求', exact: true }).click();
   await expect(page.getByRole('button', { name: '已确认学习需求', exact: true })).toBeDisabled();
   await visible(page, '回复 Agent').fill('独立保存的需求问题');
@@ -82,7 +85,7 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await expect(visible(page, '学习空间名称')).toHaveValue(name);
   await expect(page.getByRole('button', { name: '已确认学习需求', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await expect(visible(page, '已有基础')).toHaveValue('Python 基础，尚未学习 Rust');
+  await expect(visible(page, '回答 2')).toHaveValue('Python 基础，尚未学习 Rust');
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(visible(page, '回复 Agent')).toHaveValue('');
   await visible(page, '回复 Agent').fill('独立保存的需求问题');
@@ -120,10 +123,13 @@ test('a delayed requirement response preserves sessions created while saving', a
   await visible(page, '你想学什么').fill(`延迟需求保存 ${info.project.name}`);
   await page.getByRole('button', { name: '开始', exact: true }).click();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await visible(page, '学习目标').fill('学习保存和会话隔离');
-  await visible(page, '已有基础').fill('保存期间继续创建会话');
+  await visible(page, '问题 1').fill('想学习什么？');
+  await visible(page, '回答 1').fill('学习保存和会话隔离');
+  await page.getByRole('button', { name: '添加问题', exact: true }).click();
+  await visible(page, '问题 2').fill('保存期间做什么？');
+  await visible(page, '回答 2').fill('保存期间继续创建会话');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.locator('dd').filter({ hasText: /^保存期间继续创建会话$/ })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '保存期间继续创建会话', exact: true })).toBeVisible();
   let release!: () => void;
   let received!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -442,13 +448,137 @@ test('stored Markdown sections and assessment prompts render headings, tables an
   expect(errors).toEqual([]);
 });
 
+test('Markdown lessons derive directories and offer code, callouts and optional practice without sending answers', async ({ page }, info) => {
+  const data = seed(info), unit = data.unitIds[1]!;
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const code = 'fn main() {\n    let s1 = String::from("hello");\n    let s2 = s1;\n\n    println!("{s2}");\n    // ## 这里只是代码注释\n}';
+  const question = '如果最后一行改为 `println!("{s1}")`，会发生什么？';
+  const content = [
+    '从一个可修改的例子理解所有权。先预测结果，再动手验证。',
+    '## 理解**所有权**\n\n赋值可能转移所有权，并不一定复制数据。',
+    `\`\`\`rust file="move demo.rs"\n${code}\n\`\`\``,
+    '> [!TIP]\n> 先比较整数与 `String` 的赋值，再解释它们为什么不同。',
+    '> [!WARNING]\n> 示例没有自动执行；带入 IDE 后由你决定修改、保存和运行。',
+    '## 理解**所有权**\n\n用下面的练习检查自己的理解。',
+    `::::practice\n${question}\n\n:::hint\n## 提示内部标题\n\n提示内容：想一想所有权在哪次赋值时发生了转移。\n:::\n\n:::solution\n## 讲解内部标题\n\n参考结论：编译器会拒绝使用已经转移所有权的 \`s1\`。\n:::\n::::`,
+    '::::practice\n把问候语改为自己的名字，再观察输出。\n::::',
+  ].join('\n\n');
+  await page.route(`**/api/spaces/${data.spaceId}/units/${unit}`, async (route) => {
+    const response = await route.fetch(), detail = await response.json() as UnitDetail;
+    await route.fulfill({ json: { ...detail, lesson: { title: '所有权实践', content, revision: detail.lesson?.revision ?? 0 } } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${unit}`);
+  const article = page.locator('.lesson-prose');
+  const toc = page.getByRole('complementary', { name: '单元材料' });
+  await expect(toc.getByRole('link')).toHaveText(['理解所有权', '理解所有权']);
+  const anchors = await toc.getByRole('link').evaluateAll((links) => links.map((link) => link.getAttribute('href')));
+  expect(new Set(anchors).size).toBe(2);
+  await toc.getByRole('link').nth(1).click();
+  await expect(article.locator(anchors[1]!)).toBeInViewport();
+  await toc.getByRole('link').first().click();
+  await expect(article.locator(anchors[0]!)).toBeInViewport();
+  await expect(article.getByText('move demo.rs', { exact: true })).toBeVisible();
+  await expect.poll(() => article.locator('pre').first().textContent()).toBe(code);
+  await expect(article.locator('pre span').first()).toBeVisible();
+  await expect(article.getByRole('alert').filter({ hasText: '提示' })).toContainText('先比较整数');
+  await expect(article.getByRole('alert').filter({ hasText: '注意' })).toContainText('示例没有自动执行');
+  const practice = article.getByRole('region', { name: '动手试试', exact: true }).first();
+  await expect(article.getByRole('region', { name: '动手试试', exact: true })).toHaveCount(2);
+  await expect(practice.locator('details[open]')).toHaveCount(0);
+  await expect(practice.getByText(/提示内容：/)).toBeHidden();
+  await expect(practice.getByText(/参考结论：/)).toBeHidden();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await article.locator('..').evaluate((el) => { el.scrollTop = 0; });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-enhanced-default-${info.project.name}.png`, animations: 'disabled' });
+  await practice.locator('summary').filter({ hasText: '查看提示' }).click();
+  await expect(practice.getByText(/提示内容：/)).toBeVisible();
+  await expect(practice.getByText(/参考结论：/)).toBeHidden();
+  await practice.locator('summary').filter({ hasText: '参考讲解' }).click();
+  await expect(practice.getByText(/参考结论：/)).toBeVisible();
+  await practice.screenshot({ path: `.amp/in/artifacts/lesson-enhanced-expanded-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const input = composer(page).getByRole('textbox');
+  await input.fill('我想先自己尝试，不要直接给答案。');
+  let sends = 0;
+  page.on('request', (request) => { if (request.method() === 'POST' && /\/sessions\/[^/]+\/messages$/.test(request.url())) sends++; });
+  await practice.getByRole('button', { name: '就此提问', exact: true }).click();
+  await expect(input).toHaveValue('我想先自己尝试，不要直接给答案。');
+  await expect(composer(page)).toContainText(question);
+  await expect(composer(page)).not.toContainText('提示内容：');
+  await expect(composer(page)).not.toContainText('参考结论：');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await article.getByRole('button', { name: '复制', exact: true }).first().click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
+  await article.getByRole('button', { name: '带入 IDE', exact: true }).first().click();
+  await expect(visible(page, '编辑 move demo.rs')).toHaveValue(code);
+  expect(readFileSync(join(data.root, 'projects', data.spaceId, 'move demo.rs'), 'utf8')).toBe('');
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await page.getByRole('button', { name: '查看课件', exact: true }).click();
+  const drawer = page.getByRole('dialog'), drawerPractice = drawer.getByRole('region', { name: '动手试试', exact: true }).first();
+  await expect(drawerPractice.locator('details[open]')).toHaveCount(0);
+  await drawerPractice.locator('summary').filter({ hasText: '查看提示' }).click();
+  await drawerPractice.locator('summary').filter({ hasText: '参考讲解' }).click();
+  await drawerPractice.evaluate((el) => el.scrollIntoView({ block: 'end' }));
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-enhanced-drawer-${info.project.name}.png`, animations: 'disabled' });
+  const ids = await page.locator('.lesson-prose h2[id]').evaluateAll((headings) => headings.map((h) => h.id));
+  expect(new Set(ids).size).toBe(ids.length);
+  await drawerPractice.getByRole('button', { name: '就此提问', exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(input).toHaveValue('我想先自己尝试，不要直接给答案。');
+  await expect(composer(page)).toContainText(question);
+  await expect(composer(page)).not.toContainText('参考结论：');
+  expect(sends).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('unknown or incomplete lesson markers retain content and cannot bypass Markdown sanitization', async ({ page }, info) => {
+  const data = seed(info), unit = data.unitIds[1]!;
+  const content = [
+    '## 普通正文\n\n| 项目 | 内容 |\n| --- | --- |\n| 保留格式 | 表格 |',
+    '```unknown-language\n  keep indentation\n\nlast line\n```',
+    ':::unknown\n## 仍可阅读\n\n未知增强里的**正文**必须保留。\n:::',
+    '行内 :unknown[补充内容] 也不消失。',
+    '<script>window.__lessonInjected = true</script>\n<img src="#" onerror="window.__lessonInjected = true">\n\n[危险链接](javascript:alert(1))',
+    '::::practice{#forged-id onclick="window.__lessonInjected=true"}\n没有提示和答案也可以练习。\n::::',
+    '::::practice\n未闭合练习中的问题。\n\n:::hint\n缺少结束标记的提示必须直接可读。',
+  ].join('\n\n');
+  await page.route(`**/api/spaces/${data.spaceId}/units/${unit}`, async (route) => {
+    const response = await route.fetch(), detail = await response.json() as UnitDetail;
+    await route.fulfill({ json: { ...detail, lesson: { title: '宽容解析', content } } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${unit}`);
+  const article = page.locator('.lesson-prose');
+  await expect(article.locator('table')).toContainText('保留格式');
+  await expect.poll(() => article.locator('pre').textContent()).toBe('  keep indentation\n\nlast line');
+  await expect(article.getByText('example.txt', { exact: true })).toBeVisible();
+  await expect(article).toContainText('未知增强里的正文必须保留。');
+  await expect(article).toContainText('补充内容');
+  await expect(article).toContainText('未闭合练习中的问题。');
+  await expect(article).toContainText('缺少结束标记的提示必须直接可读。');
+  await expect(article.locator('details')).toHaveCount(0);
+  await expect(article.getByRole('region', { name: '动手试试', exact: true })).toHaveCount(1);
+  await expect(article.locator('#forged-id, [onclick], [onerror], script')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as Window & { __lessonInjected?: boolean }).__lessonInjected)).toBeUndefined();
+  await expect(article).toContainText('危险链接');
+  await expect(article.locator('a[href^="javascript:" i]')).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: '单元材料' }).getByRole('link')).toHaveText(['普通正文', '仍可阅读']);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-enhanced-fallback-${info.project.name}.png`, animations: 'disabled' });
+});
+
 test('a late requirement save does not close or discard a newer edit', async ({ page }, info) => {
   await page.goto('/');
   await visible(page, '你想学什么').fill(`需求草稿竞争 ${info.project.name}`);
   await page.getByRole('button', { name: '开始', exact: true }).click();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await visible(page, '学习目标').fill('学习需求版本管理');
-  await visible(page, '已有基础').fill('提交的旧内容');
+  await visible(page, '问题 1').fill('想学习什么？');
+  await visible(page, '回答 1').fill('学习需求版本管理');
+  await page.getByRole('button', { name: '添加问题', exact: true }).click();
+  await visible(page, '问题 2').fill('现在的内容？');
+  await visible(page, '回答 2').fill('提交的旧内容');
   let release!: () => void;
   let received!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -459,14 +589,14 @@ test('a late requirement save does not close or discard a newer edit', async ({ 
   try {
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await responseReceived;
-    await visible(page, '已有基础').fill('响应返回前的新内容');
+    await visible(page, '回答 2').fill('响应返回前的新内容');
     release();
     await expect(page.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
-    await expect(visible(page, '已有基础')).toHaveValue('响应返回前的新内容');
+    await expect(visible(page, '回答 2')).toHaveValue('响应返回前的新内容');
     await page.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(page.locator('dd').filter({ hasText: /^响应返回前的新内容$/ })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '响应返回前的新内容', exact: true })).toBeVisible();
     await page.reload();
-    await expect(page.locator('dd').filter({ hasText: /^响应返回前的新内容$/ })).toBeVisible();
+    await expect(page.getByRole('cell', { name: '响应返回前的新内容', exact: true })).toBeVisible();
   } finally { release(); }
 });
 
