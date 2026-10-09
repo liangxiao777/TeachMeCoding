@@ -14,13 +14,14 @@ import { readTools } from './read-tools.js';
 
 test('a large lesson tool call reaches the final reply and commits the complete lesson', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
-  const lesson: JsonObject = { title: '长课件', intro: '独立生成检查', blocks: [
-    { type: 'p', text: `开始-${'理解参数与返回值。'.repeat(5000)}-结束` },
-    { type: 'code', file: 'greet.py', language: 'python', code: 'def greet(name="Ada"):\n    return "Hi " + name' },
-  ] };
+  const lesson: JsonObject = { title: '长课件', content: `  独立生成检查\n\n## 理解参数\n\n开始-${'理解参数与返回值。'.repeat(5000)}-结束\n\n\`\`\`python file=greet.py\ndef greet(name="Ada"):\n    return "Hi " + name\n\`\`\`\n\n## 理解参数\n\n:::unknown\n未识别的增强也保留正文\n` };
   let requests = 0;
   const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context, options) => {
     assert.equal(options?.reasoning, 'high');
+    const tool = context.messages.find((m) => m.role === 'system')?.toolsAdded?.find((t) => t.name === 'submit_lesson');
+    const schema = JSON.parse(JSON.stringify(tool!.parameters));
+    assert.deepEqual(Object.keys(schema.properties), ['title', 'content']);
+    assert.deepEqual(schema.required, ['title', 'content']);
     requests++;
     if (requests === 1) return response(reply([
       { type: 'thinking', thinking: 'Plan the lesson', thinkingSignature: 'TASK-PRIVATE-SIGNATURE' },
@@ -39,8 +40,8 @@ test('a large lesson tool call reaches the final reply and commits the complete 
     await runtime.idle(task.id);
     assert.equal(runtime.get(space.id, task.id).state, 'succeeded'); assert.equal(requests, 2);
     const saved = l.unit(space.id, unit).lesson!;
-    assert.equal(saved.revision, 1); assert.equal(saved.title, lesson.title); assert.equal(saved.intro, lesson.intro);
-    assert.deepEqual(saved.blocks, lesson.blocks);
+    assert.equal(saved.revision, 1); assert.equal(saved.title, lesson.title); assert.equal(saved.content, lesson.content);
+    assert.equal(saved.intro, undefined); assert.equal(saved.blocks, undefined);
     assert.equal(db.prepare('SELECT * FROM task_manifests').all().length, 2);
     const events = runtime.events(space.id, task.id).events;
     const parts = events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
@@ -57,12 +58,15 @@ test('a large lesson tool call reaches the final reply and commits the complete 
 
 test('independent lesson tasks are idempotent, preserve old versions and reject late writes', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
-  l.saveLesson(space.id, unit, { title: 'legacy', content: 'original text' });
+  const legacy = { title: 'legacy', content: '', intro: 'original intro', blocks: [
+    { type: 'h2', id: 'old-heading', text: 'Original section' }, { type: 'p', text: 'original text' },
+  ] };
+  l.saveLesson(space.id, unit, legacy);
   let mode = 'good';
   const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     assert.ok(!JSON.stringify(context).includes('private-chat-marker'));
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments:
-      { title: 'structured', intro: 'intro', blocks: [{ type: 'h2', id: 'arguments', text: 'Arguments' }, { type: 'code', file: 'example.py', language: 'python', code: 'print(13)' }] },
+      { title: 'Markdown lesson', content: mode === 'blank' ? '  \r\n ' : '## Arguments\n\n```python\nprint(13)\n```' },
     }], 'toolUse'));
     if (mode === 'late') l.saveLesson(space.id, unit, { title: 'user replacement', content: 'newer valid text' });
     return response(reply([{ type: 'text', text: 'done' }], mode === 'fail' ? 'error' : 'stop'));
@@ -75,16 +79,17 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
     await runtime.idle(task.id);
     assert.equal(runtime.get(space.id, task.id).state, 'succeeded');
     assert.equal(l.unit(space.id, unit).lesson?.revision, 2);
-    assert.equal(l.unit(space.id, unit).lesson?.blocks?.[1]?.type, 'code');
+    assert.equal(l.unit(space.id, unit).lesson?.content, '## Arguments\n\n```python\nprint(13)\n```');
+    assert.equal(l.unit(space.id, unit).lesson?.blocks, undefined);
     assert.equal(l.space(space.id).sessions.length, 2);
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n, 0);
-    for (mode of ['fail', 'late']) {
+    for (mode of ['blank', 'fail', 'late']) {
       const task = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 2 });
       await runtime.idle(task.id);
       assert.equal(runtime.get(space.id, task.id).state, 'failed');
-      assert.equal(l.unit(space.id, unit).lesson?.title, mode === 'fail' ? 'structured' : 'user replacement');
+      assert.equal(l.unit(space.id, unit).lesson?.title, mode === 'late' ? 'user replacement' : 'Markdown lesson');
     }
-    assert.equal((db.prepare('SELECT content FROM lesson_versions WHERE revision=1').get() as { content: string }).content, JSON.stringify({ title: 'legacy', content: 'original text' }));
+    assert.deepEqual(JSON.parse((db.prepare('SELECT content FROM lesson_versions WHERE revision=1').get() as { content: string }).content), legacy);
   } finally { await runtime.close(); db.close(); }
 });
 

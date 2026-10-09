@@ -1,6 +1,6 @@
 import { createAssistantMessageEventStream, type AssistantMessage, type JsonObject } from '../apps/server/node_modules/@earendil-works/pi-ai/dist/index.js';
 import type { StreamFn } from '../apps/server/node_modules/@earendil-works/pi-agent-core/dist/index.js';
-import { conceptIntake, reply, response, routeReply } from '../apps/server/src/agents/test-support.js';
+import { reply, response, routeReply } from '../apps/server/src/agents/test-support.js';
 
 // Deterministic test provider ONLY. Real HTTP, SQLite, Pi loop and UI are not mocked.
 let evaluationFailed = false;
@@ -15,12 +15,16 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
   if (has('ask_user_question') && all.includes('自适应问答验收')) {
     const current = context.messages.slice(context.messages.findLastIndex((m) => m.role === 'user') + 1);
     const results = current.filter((m) => m.role === 'toolResult');
-    const fields = { goal: '学习流式解析', background: '会写循环，尚未做过解析器', outcome: '处理本地流水账的坏输入', schedule: '每周两次，每次 30 分钟' };
-    const target = { kind: 'technology', name: 'Cedar（验收用项目）', version: '4.7.2', scope: '命令行账本的流式解析' };
+    const fields = { rows: [
+      { question: '想学习什么？', answer: '学习 Cedar 4.7.2 的流式解析' },
+      { question: '已有经验？', answer: '会写循环，尚未做过解析器' },
+      { question: '希望完成什么？', answer: '处理本地流水账的坏输入' },
+      { question: '时间安排？', answer: '每周两次，每次 30 分钟' },
+    ] };
     const call = (name: string, args: JsonObject) => response(reply([{ type: 'toolCall', id: `intake-${results.length}-${name}`, name, arguments: args }], 'toolUse'));
     if (text.includes('自适应问答验收')) {
       if (!results.length) return response(reply([
-        { type: 'toolCall', id: 'intake-draft', name: 'submit_requirement_draft', arguments: { ...fields, intake: { target } } },
+        { type: 'toolCall', id: 'intake-draft', name: 'submit_requirement_draft', arguments: fields },
         { type: 'toolCall', id: 'intake-questions', name: 'ask_user_question', arguments: { questions: [
           { prompt: '希望先完成哪一种成果？', multiple: false, options: [
             { label: '离线命令行工具', description: '读取本地文件，不部署服务' },
@@ -53,7 +57,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       const hostile = all.includes('不可信 Markdown 验收') ? '\n<script>window.__researchInjected = true</script>\n<img src="https://research-tracker.example/raw" onerror="window.__researchInjected = true">\n\n![追踪图片](https://research-tracker.example/pixel)\n\n[危险脚本](javascript:alert(1))\n\n[本地服务](http://127.0.0.1:4310/private)\n\n[含凭据链接](https://user:secret@public.org/private)\n' : '';
       return call('write_research_document', { content: content + hostile });
     }
-    if (results.length === 2) return call('submit_requirement_draft', { ...fields, intake: { target } });
+    if (results.length === 2) return call('submit_requirement_draft', fields);
     return response(reply([{ type: 'text', text: '已保存回答与固定版本资料，请核对摘要后再确认。' }]));
   }
   if (text.includes('推理验收')) {
@@ -65,7 +69,12 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         { type: 'text', text: '我会先整理目标。' },
         has('submit_learning_conclusion') ? { type: 'toolCall', id: 'reasoning-conclusion', name: 'submit_learning_conclusion', arguments: { text: '根据已有基础继续练习。' } }
         : { type: 'toolCall', id: 'reasoning-draft', name: 'submit_requirement_draft', arguments: {
-          goal: '学习 Python', background: '已有变量基础', outcome: '编写小程序', schedule: '每周两次', intake: conceptIntake,
+          rows: [
+            { question: '想学习什么？', answer: '学习 Python' },
+            { question: '已有经验？', answer: '已有变量基础' },
+            { question: '希望完成什么？', answer: '编写小程序' },
+            { question: '时间安排？', answer: '每周两次' },
+          ],
         } }], 'toolUse');
     const stream = createAssistantMessageEventStream();
     void (async () => {
@@ -115,17 +124,24 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       result: 'pass', summary: '本次提交符合题目要求。', mastered: [], concerns: [], evidence: ['解释题说明参数是在启动程序时传入的，不是程序自己产生的。'], toVerify: [],
     } }], 'toolUse'));
     if (has('submit_lesson')) return response(reply([{ type: 'toolCall', id: 'lesson-call', name: 'submit_lesson', arguments: {
-      title: '参数与输入', intro: '从一个小工具开始理解命令行参数。', blocks: [
-        { type: 'h2', id: 'arguments', text: '参数从哪里来' }, { type: 'p', text: '命令行参数是启动程序时由调用者提供的字符串。' },
-        { type: 'code', file: 'args.py', language: 'python', code: 'import sys\nprint(sys.argv[1:])', caption: '本示例尚未在本机执行。' },
-        { type: 'practice', items: ['比较传入零个参数与两个参数时的差异。'] },
-      ],
+      title: '参数与输入', content: [
+        '从一个小工具开始理解命令行参数。',
+        '## 参数从哪里来\n\n命令行参数是启动程序时由调用者提供的字符串。',
+        '```python file=args.py\nimport sys\nprint(sys.argv[1:])\n```',
+        '> [!TIP]\n> 本示例尚未在本机执行。可以带入 IDE 后自行尝试。',
+        '::::practice\n比较传入零个参数与两个参数时的差异。\n\n:::hint\n先观察 `sys.argv[1:]` 如何排除程序名。\n:::\n\n:::solution\n零个参数得到空列表，两个参数得到包含两个字符串的列表。\n:::\n::::',
+      ].join('\n\n'),
     } }], 'toolUse'));
     if (has('submit_learning_conclusion')) return response(reply([{ type: 'toolCall', id: 'conclusion-call', name: 'submit_learning_conclusion', arguments: {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',
     } }], 'toolUse'));
     if (!has('submit_route_proposal') && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
-      goal: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具', background: 'Python 自动化经验', outcome: '完成一个可用的工具', schedule: '每周 3 小时，共 6 周', intake: conceptIntake,
+      rows: [
+        { question: '想学习什么？', answer: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具' },
+        { question: '已有经验？', answer: 'Python 自动化经验' },
+        { question: '希望完成什么？', answer: '完成一个可用的工具' },
+        { question: '时间安排？', answer: '每周 3 小时，共 6 周' },
+      ],
     } }], 'toolUse'));
   }
   if (has('submit_route_proposal')) {

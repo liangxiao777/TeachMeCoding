@@ -3,13 +3,9 @@ import { z } from 'zod';
 const id = z.string().uuid();
 const label = z.string().trim().min(1).max(500);
 const text = z.string().trim().min(1).max(10_000);
-export const learningTargetSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('concept'), name: label, scope: text }).strict(),
-  z.object({ kind: z.literal('technology'), name: label, scope: text,
-    version: label.refine((v) => !/^(latest|current|stable|最新版?|当前版本|稳定版)$/i.test(v), 'Use a concrete applicable version') }).strict(),
-]);
 export const researchRefSchema = z.object({ id, revision: z.number().int().positive() }).strict();
-export const intakeMetadataSchema = z.object({ target: learningTargetSchema, researchRef: researchRefSchema.nullable() }).strict();
+// One document belongs to the whole requirement table; models never supply this reference.
+export const intakeMetadataSchema = z.object({ researchRef: researchRefSchema.nullable() }).strict();
 export const researchInputSchema = z.object({
   content: z.string().refine((value) => value.trim().length > 0, 'Write a non-empty Markdown document'),
 }).strict();
@@ -21,12 +17,11 @@ export const questionAnswerSchema = z.object({ answers: z.array(z.object({ quest
   optionIds: z.array(id).max(4), customText: z.string().trim().max(10_000),
 }).strict()).min(1).max(4) }).strict();
 
-export type LearningTarget = z.infer<typeof learningTargetSchema>;
 export type ResearchRef = z.infer<typeof researchRefSchema>;
 export type IntakeMetadata = z.infer<typeof intakeMetadataSchema>;
 export type ResearchInput = z.infer<typeof researchInputSchema>;
 export interface ResearchDossier extends ResearchInput, ResearchRef {
-  target: LearningTarget; runId: string | null; createdAt: number; hash: string;
+  runId: string | null; createdAt: number; hash: string;
 }
 export type QuestionInput = z.infer<typeof questionInputSchema>;
 export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;

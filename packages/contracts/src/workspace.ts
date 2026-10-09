@@ -10,8 +10,10 @@ export const provenanceSchema = z.object({ kind: z.enum(['pasted', 'lesson', 'ed
   range: z.string().max(200).optional(),
 }).strict();
 export const quoteSchema = z.object({ source: z.enum(['lesson', 'code', 'terminal', 'advice']), label: title, text, provenance: provenanceSchema.optional() }).strict();
-export const requirementSchema = z.object({ goal: title, background: text, outcome: text, schedule: text }).strict();
-// The opening request is a user message, not the structured requirement's short goal.
+export const requirementSchema = z.object({ rows: z.array(z.object({
+  question: z.string().trim().min(1).max(10_000), answer: text,
+}).strict()).max(100) }).strict();
+// The opening request is a user message, not an already organized requirement table.
 export const createSpaceSchema = z.object({ name: title, goal: text.trim().min(1) }).strict();
 export const renameSpaceSchema = z.object({ name: title, previousName: z.string().min(1).max(200) }).strict();
 export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean(),
@@ -34,7 +36,7 @@ export const lessonBlockSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('callout'), title, text }).strict(),
   z.object({ type: z.literal('practice'), items: z.array(text).max(50) }).strict(),
 ]);
-export const structuredLessonSchema = z.object({ title, intro: text, blocks: z.array(lessonBlockSchema).min(1).max(100) }).strict();
+export const lessonSubmissionSchema = z.object({ title, content: text.min(1).refine((value) => value.trim().length > 0, 'Lesson content must not be blank.') }).strict();
 export const lessonSchema = z.object({ title, content: text.default(''), intro: text.optional(), blocks: z.array(lessonBlockSchema).optional() }).strict();
 export const conclusionSchema = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
 export const conclusionDecisionSchema = z.object({ revision: z.number().int().nonnegative(), adopted: z.boolean() }).strict();

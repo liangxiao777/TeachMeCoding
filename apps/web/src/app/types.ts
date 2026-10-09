@@ -126,12 +126,7 @@ export interface OnboardMsg {
   status?: MessageStatus
 }
 
-export interface Requirement {
-  goal: string
-  background: string
-  outcome: string
-  schedule: string
-}
+export type Requirement = import('@teach-me-coding/contracts').Requirement
 
 export interface Space {
   id: string
@@ -199,6 +194,7 @@ export type LessonBlock =
 export interface Lesson {
   intro: string
   blocks: LessonBlock[]
+  content?: string
 }
 
 export interface AssessmentSpec {

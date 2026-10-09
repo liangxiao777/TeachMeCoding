@@ -49,7 +49,7 @@ test('options/custom answers survive a lost receipt, preserve the composer, and 
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   const { id, session } = await open(page, `答案重试 ${info.project.name}`);
   await expect(confirm(page)).toBeDisabled();
-  await expect(page.getByText('请先整理这项技术的调研资料。', { exact: true })).toBeVisible();
+  await expect(page.getByText('请回答待确认问题，或修改需求后重新核对。', { exact: true })).toBeVisible();
   const submit = page.getByRole('button', { name: '提交全部回答', exact: true });
   const navigation = page.getByRole('navigation', { name: '问题切换', exact: true });
   const previous = navigation.getByRole('button', { name: '上一个', exact: true });
@@ -174,7 +174,7 @@ test('options/custom answers survive a lost receipt, preserve the composer, and 
   expect(dossier.content).toBe(markdown);
   expect(dossier).not.toHaveProperty('facts'); expect(dossier).not.toHaveProperty('sources');
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('只改时间：每周三 45 分钟');
+  await page.getByLabel('回答 4', { exact: true }).fill('只改时间：每周三 45 分钟');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(confirm(page)).toBeEnabled();
   expect((await business<Workspace>(page, `/spaces/${id}`)).value.requirement.intake!.researchRef).toEqual(ref);
@@ -271,11 +271,11 @@ for (const count of [1, 4] as const) test(`one visible question preserves distin
   expect(saved.messages.filter((message) => message.role === 'user')).toHaveLength(2);
 });
 
-test('summary edits supersede old questions, reject stale answers and never admit a moving/unverified version', async ({ page }, info) => {
+test('table edits supersede old questions and reject stale answers without forcing technology metadata', async ({ page }, info) => {
   const { id, session } = await open(page, `旧问题 ${info.project.name}`);
   const round = (await business<SessionDetail>(page, `/spaces/${id}/sessions/${session}`)).value.questions![0]!;
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('用户重新核对：周末半小时');
+  await page.getByLabel('回答 4', { exact: true }).fill('用户重新核对：周末半小时');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('summary').filter({ hasText: '确认问题 · 已取代' })).toBeVisible();
   await expect(page.getByRole('button', { name: '提交全部回答', exact: true })).toHaveCount(0);
@@ -284,20 +284,71 @@ test('summary edits supersede old questions, reject stale answers and never admi
   });
   expect(stale.status).toBe(409);
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('具体适用版本', { exact: true }).fill('latest');
+  await expect(page.getByLabel('学习对象类型', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '添加问题', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存', exact: true })).toBeDisabled();
-  await expect(page.getByText('请填写对象名称、范围；具体技术还需明确版本，不能使用“最新版”。', { exact: true })).toBeVisible();
+  await page.getByLabel('问题 5', { exact: true }).fill('哪些信息还没确定？');
+  await page.getByLabel('回答 5', { exact: true }).fill('版本暂不决定，之后结合调研再核对。');
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
   await shot(page, info, 'editing');
-  await page.getByLabel('具体适用版本', { exact: true }).fill('4.8.0');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.locator('dd').filter({ hasText: /^4\.8\.0$/ })).toBeVisible();
-  await expect(confirm(page)).toBeDisabled();
-  await shot(page, info, 'blocked');
+  await expect(page.getByRole('cell', { name: '版本暂不决定，之后结合调研再核对。', exact: true })).toBeVisible();
+  await expect(confirm(page)).toBeEnabled();
   const current = (await business<Workspace>(page, `/spaces/${id}`)).value;
-  expect(current.requirement.intake!.researchRef).toBeNull();
-  const rejected = await business(page, `/spaces/${id}/plan`, { ...current.requirement, confirmed: true });
-  expect(rejected.status).toBe(422);
-  expect((await business<Workspace>(page, `/spaces/${id}`)).value.runs).toHaveLength(1);
+  expect(current.requirement.value.rows).toHaveLength(5);
+  expect(current.requirement.value.rows[4]).toEqual({ question: '哪些信息还没确定？', answer: '版本暂不决定，之后结合调研再核对。' });
+  expect(current.requirement.intake).toBeUndefined();
+  expect(current.runs).toHaveLength(1);
+});
+
+test('the two-column table supports arbitrary questions, add/remove, blank answers and one whole-table document reference', async ({ page }, info) => {
+  const { id, ref } = await researched(page, `轻量需求表格 ${info.project.name}`);
+  const table = page.getByRole('table', { name: '学习需求', exact: true });
+  await expect(table.getByRole('columnheader')).toHaveText(['问题', '回答']);
+  await expect(table.getByRole('row')).toHaveCount(5);
+  await shot(page, info, 'qa-table');
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('问题 1', { exact: true }).fill('希望解决什么实际困难？');
+  await page.getByLabel('回答 1', { exact: true }).fill('能定位中文账本中的损坏记录，保留行号。');
+  await page.getByRole('button', { name: '移除第 2 行', exact: true }).click();
+  await expect(page.getByLabel('回答 2', { exact: true })).toHaveValue('处理本地流水账的坏输入');
+  await page.getByRole('button', { name: '添加问题', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeDisabled();
+  await page.getByLabel('问题 4', { exact: true }).fill('有什么暂时没决定的？');
+  await expect(page.getByLabel('回答 4', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: '保存', exact: true })).toBeEnabled();
+  await shot(page, info, 'qa-editor');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(confirm(page)).toBeEnabled();
+  const current = (await business<Workspace>(page, `/spaces/${id}`)).value;
+  expect(current.requirement.value.rows).toEqual([
+    { question: '希望解决什么实际困难？', answer: '能定位中文账本中的损坏记录，保留行号。' },
+    { question: '希望完成什么？', answer: '处理本地流水账的坏输入' },
+    { question: '时间安排？', answer: '每周两次，每次 30 分钟' },
+    { question: '有什么暂时没决定的？', answer: '' },
+  ]);
+  expect(current.requirement.intake).toEqual({ researchRef: ref });
+  await page.reload();
+  await expect(table.getByRole('cell', { name: '有什么暂时没决定的？', exact: true })).toBeVisible();
+  await expect(table.getByRole('cell', { name: '待补充', exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('aside').scrollIntoViewIfNeeded();
+  await expect(table).toBeInViewport();
+  await expect(page.getByRole('button', { name: '全屏预览', exact: true })).toBeInViewport();
+  await expect(confirm(page)).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await shot(page, info, 'qa-narrow');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  for (let count = 4; count > 0; count--) await page.getByRole('button', { name: '移除第 1 行', exact: true }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(confirm(page)).toBeDisabled();
+  await expect(table).toHaveCount(0);
+  await shot(page, info, 'qa-empty');
+  const empty = (await business<Workspace>(page, `/spaces/${id}`)).value;
+  expect(empty.requirement.value).toEqual({ rows: [] });
+  expect(empty.requirement.intake).toEqual({ researchRef: ref });
+  expect((await business(page, `/spaces/${id}/requirement`, { ...empty.requirement, confirmed: true })).status).toBe(422);
 });
 
 test('fullscreen Markdown supports rendered/source modes, dirty-close protection and one durable save after a lost receipt', async ({ page }, info) => {

@@ -256,7 +256,7 @@ export function ResearchCard({ researchRef }: { researchRef: ResearchRef }) {
       <header className="flex shrink-0 items-center justify-between gap-4 border-b px-6 py-5">
         <div className="min-w-0 space-y-2">
           <DialogTitle className="flex items-center gap-2 text-lg"><FileText className="size-5 text-primary" aria-hidden />调研资料预览</DialogTitle>
-          <DialogDescription className="truncate">{dossier ? `${dossier.target.name} · 修订 ${dossier.revision} · Markdown` : '当前学习空间的 Markdown 调研资料'}</DialogDescription>
+          <DialogDescription className="truncate">{dossier ? `学习需求的调研资料 · 修订 ${dossier.revision} · Markdown` : '当前学习空间的 Markdown 调研资料'}</DialogDescription>
         </div>
         <Button variant="ghost" size="icon" disabled={saving} aria-label="关闭资料预览" onClick={close}><X aria-hidden /></Button>
       </header>

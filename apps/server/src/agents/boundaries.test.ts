@@ -30,22 +30,21 @@ test('real scene and task tool sets never include side effects, cross-scene arti
   } finally { db.close(); }
 });
 
-test('lesson tools reject section bodies in headings and accept a corrected structured submission', async () => {
+test('lesson submission validates bounded text without enforcing Markdown layout', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning);
   const unit = units[0]!;
   const task = createTask(learning, { spaceId: space.id, sessionId: null, unitId: unit.id, scenario: 'lesson',
     requirement: space.requirement, route: space.route, unit, lesson: null, references: [] });
-  const artifact = { title: '编译配置', intro: '理解编译与运行。', blocks: [{ type: 'h2', id: 'config', text: '编译配置' }] };
   try {
-    for (const text of ['## 编译配置\n\n正文和代码', '编译配置\r\n正文', '## 编译配置', '   ']) {
-      await assert.rejects(task.tools[0]!.execute('bad', { ...artifact, blocks: [{ ...artifact.blocks[0], text }] }), /single heading/);
+    for (const content of [undefined, 123, '', '  \r\n ', 'x'.repeat(100_001)]) {
+      await assert.rejects(task.tools[0]!.execute('bad', { title: '编译配置', content }), /content/);
       assert.throws(() => task.commit(), /没有提交有效课件/);
       assert.equal(learning.unit(space.id, unit.id).lesson, null);
     }
-    const valid = { ...artifact, blocks: [...artifact.blocks, { type: 'markdown', text: '正文\n\n| 配置 | 值 |\n| --- | --- |\n| strict | true |' }] };
+    const valid = { title: '编译配置', content: '  理解编译与运行。\n\n## 编译配置\r\n\n正文\n\n| 配置 | 值 |\n| --- | --- |\n| strict | true |\n\n:::unknown\n标记不完整也可以保存。\n' };
     await task.tools[0]!.execute('corrected', valid);
     task.commit();
-    assert.deepEqual(learning.unit(space.id, unit.id).lesson!.blocks, valid.blocks);
+    assert.equal(learning.unit(space.id, unit.id).lesson!.content, valid.content);
   } finally { db.close(); }
 });
 

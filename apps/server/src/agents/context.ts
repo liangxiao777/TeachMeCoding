@@ -28,7 +28,7 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '7';
+export const compilerVersion = '9';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const budget = { milliseconds: 300_000 };
 

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import type { JsonObject, Message } from '@earendil-works/pi-ai';
-import type { LearningTarget, QuestionAnswer, QuestionInput, QuestionRound, ResearchInput, RouteContent } from '@teach-me-coding/contracts';
+import type { QuestionAnswer, QuestionInput, QuestionRound, ResearchInput, RouteContent } from '@teach-me-coding/contracts';
 import { SearchService } from '../extensions/search.js';
 import type { WebFetchOptions } from '../extensions/web-fetch.js';
 import { createApp } from '../http/app.js';
@@ -16,10 +16,18 @@ import { createIntakeTools } from './intake-tools.js';
 import { TeachingRuntime } from './runtime.js';
 import { reply, response, routeReply, syntheticSource } from './test-support.js';
 
-const concept: LearningTarget = { kind: 'concept', name: '回溯与反例', scope: '有限状态树的剪枝，不涉及具体框架' };
-const technology: LearningTarget = { kind: 'technology', name: 'Cedar', version: '4.7.2', scope: '命令行账本的流式解析' };
-const fields = { goal: '写一个流式账本解析器', background: '会写循环，不会解析器组合', outcome: '处理三种损坏记录', schedule: '每周二 35 分钟' };
-const conceptFields = { goal: '理解回溯搜索并构造反例', background: '会循环和递归', outcome: '解释有限状态树的不变量与剪枝条件', schedule: '周一 40 分钟' };
+const fields = { rows: [
+  { question: '想完成什么？', answer: '用 Cedar 4.7.2 写一个流式账本解析器' },
+  { question: '已经会什么？', answer: '会写循环，不会解析器组合' },
+  { question: '想验证哪些成果？', answer: '处理三种损坏记录' },
+  { question: '什么时候练习？', answer: '每周二 35 分钟' },
+] };
+const conceptFields = { rows: [
+  { question: '想理解什么？', answer: '理解回溯搜索并构造反例' },
+  { question: '已有经验？', answer: '会循环和递归' },
+  { question: '如何检查理解？', answer: '解释有限状态树的不变量与剪枝条件' },
+  { question: '练习时间？', answer: '周一 40 分钟' },
+] };
 const url = 'https://docs.cedar.example/4.7.2/parser';
 const identityExcerpt = 'Cedar is a streaming parser toolkit.';
 const versionExcerpt = 'Version 4.7.2 requires Node 24.';
@@ -40,7 +48,7 @@ const questions: QuestionInput = { questions: [
 function setup() {
   const db = openDatabase(':memory:'), learning = new Learning(db);
   const space = learning.create({ name: '独立 intake fixture', goal: '开场目标不是结构化需求' });
-  learning.saveRequirement(space.id, { revision: 0, value: conceptFields, confirmed: false, intake: { target: concept, researchRef: null } });
+  learning.saveRequirement(space.id, { revision: 0, value: conceptFields, confirmed: false, intake: { researchRef: null } });
   return { db, learning, spaceId: space.id,
     sessionId: space.sessions.find((s) => s.scope === 'intake')!.id,
     routeSession: space.sessions.find((s) => s.scope === 'route')!.id };
@@ -106,7 +114,7 @@ async function publishResearch(learning: Learning, space: string, session: strin
       if (fetch) fetchedText = payload(context.messages, 'web_fetch').text;
       return call('write_research_document', research(content));
     }
-    if (step === 3) return call('submit_requirement_draft', { ...fields, intake: { target: technology } });
+    if (step === 3) return call('submit_requirement_draft', fields);
     return done();
   } });
   try {
@@ -126,11 +134,12 @@ function route(): RouteContent {
 
 test('draft and questions publish only on stop, bind R+1, reject forged answers and preserve actual custom text', async () => {
   const { db, learning, spaceId, sessionId, routeSession } = setup();
+  const updated = { rows: [...conceptFields.rows.slice(0, 3), { question: '练习时间？', answer: '周三午休' }] };
   let requests = 0;
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
     if (++requests === 1) return response(reply([
       { type: 'toolCall', id: 'questions-first', name: 'ask_user_question', arguments: questions },
-      { type: 'toolCall', id: 'draft-second', name: 'submit_requirement_draft', arguments: { ...conceptFields, schedule: '周三午休', intake: { target: concept, researchRef: null } } },
+      { type: 'toolCall', id: 'draft-second', name: 'submit_requirement_draft', arguments: updated },
     ], 'toolUse'));
     if (requests === 2) {
       assert.equal(learning.space(spaceId).requirement.revision, 1);
@@ -143,7 +152,7 @@ test('draft and questions publish only on stop, bind R+1, reject forged answers 
     await runtime.idle(initial.run.id);
     assert.equal(runtime.get(spaceId, initial.run.id).state, 'succeeded');
     const saved = learning.space(spaceId).requirement;
-    assert.deepEqual(saved.value, { ...conceptFields, schedule: '周三午休' }); assert.equal(saved.confirmed, false); assert.equal(saved.revision, 2);
+    assert.deepEqual(saved.value, updated); assert.equal(saved.confirmed, false); assert.equal(saved.revision, 2);
     const round = learning.session(spaceId, sessionId).questions![0]!;
     assert.equal(round.runId, initial.run.id); assert.equal(round.sessionId, sessionId);
     assert.equal(round.generationRevision, 1); assert.equal(round.requirementRevision, 2); assert.equal(round.state, 'pending');
@@ -251,7 +260,7 @@ test('cancel, length, changed requirement and publication failure never leak sta
       if (++requests === 1) return call('web_fetch', { url });
       if (requests === 2) return call('write_research_document', research());
       if (requests === 3) return response(reply([
-        { type: 'toolCall', id: 'stage-draft', name: 'submit_requirement_draft', arguments: { ...fields, intake: { target: technology } } },
+        { type: 'toolCall', id: 'stage-draft', name: 'submit_requirement_draft', arguments: fields },
         { type: 'toolCall', id: 'stage-question', name: 'ask_user_question', arguments: questions },
       ], 'toolUse'));
       stagedResults = context.messages.flatMap((m) => m.role === 'toolResult' ? [{ name: m.toolName, isError: m.isError }] : []);
@@ -266,7 +275,7 @@ test('cancel, length, changed requirement and publication failure never leak sta
       assert.equal(db.prepare('SELECT * FROM research_dossiers').all().length, 0);
       let expected = baseline;
       if (mode === 'cancel') runtime.stop(spaceId, run.id);
-      if (mode === 'late-edit') expected = learning.saveRequirement(spaceId, { ...baseline, value: { ...baseline.value, outcome: '用户迟到但明确的新目标' } });
+      if (mode === 'late-edit') expected = learning.saveRequirement(spaceId, { ...baseline, value: { rows: [...baseline.value.rows, { question: '新目标？', answer: '用户迟到但明确的新目标' }] } });
       if (mode === 'question-storage-fault') {
         db.function('observe_publication', (revision: number, dossiers: number) => {
           publication = { revision, dossiers };
@@ -298,7 +307,7 @@ test('free-text clarification and manually edited summary supersede pending ques
       const round = learning.session(spaceId, sessionId).questions![0]!;
       if (mode === 'summary') {
         const current = learning.space(spaceId).requirement;
-        learning.saveRequirement(spaceId, { ...current, value: { ...current.value, background: '用户纠正：没学过循环' } });
+        learning.saveRequirement(spaceId, { ...current, value: { rows: [...current.value.rows, { question: '纠正基础？', answer: '用户纠正：没学过循环' }] } });
       } else {
         const next = submit(runtime, spaceId, sessionId, '不用账本了，只想证明搜索的完备性');
         assert.equal(next.session.questions![0]!.state, 'superseded'); await runtime.idle(next.run.id);
@@ -312,22 +321,23 @@ test('free-text clarification and manually edited summary supersede pending ques
   });
 });
 
-test('technical planning requires a research document, not a machine-validated content outline; concepts need no network', async (t) => {
-  await t.test('missing-document', async () => {
+test('confirmation needs an answered row, not a fixed checklist, classification or mandatory research', async (t) => {
+  for (const value of [{ rows: [] }, { rows: [{ question: '想做什么？', answer: '' }] }]) await t.test('no answered row', async () => {
     const { db, learning, spaceId } = setup();
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => { assert.fail('blocked planning must not ask a model'); } });
     try {
-      learning.saveRequirement(spaceId, { revision: 1, value: fields, confirmed: false, intake: { target: technology, researchRef: null } });
+      learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value });
       const current = learning.space(spaceId), before = snapshot(learning);
       assert.equal(current.readiness!.ready, false);
-      assert.deepEqual(current.readiness!.reasons, ['请先整理这项技术的调研资料。']);
+      assert.deepEqual(current.readiness!.reasons, ['请先整理学习需求。']);
       assert.throws(() => learning.saveRequirement(spaceId, { ...current.requirement, confirmed: true }), status(422));
       assert.throws(() => runtime.plan(spaceId, randomUUID(), current.requirement), status(422));
       assert.deepEqual(snapshot(learning), before); assert.equal(current.route.content, null);
     } finally { await runtime.close(); db.close(); }
   });
-  await t.test('concept', async () => {
+  for (const value of [conceptFields, fields]) await t.test('no forced network or target object', async () => {
     const { db, learning, spaceId } = setup(); let network = 0;
+    learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value });
     const runtime = new TeachingRuntime(learning, syntheticSource, { webFetch: fetchFixture(() => { network++; }), stream: (_m, context) => {
       assert.doesNotMatch(JSON.stringify(context.messages.filter((m) => m.role === 'user')), /research-dossier/);
       return response(routeReply(context.messages, { note: '概念目标先理解不变量', stages: [{ title: '状态树', units: [
@@ -339,7 +349,8 @@ test('technical planning requires a research document, not a machine-validated c
       assert.equal(runtime.get(spaceId, planned.run.id).state, 'succeeded', runtime.get(spaceId, planned.run.id).error ?? '');
       const result = learning.space(spaceId);
       assert.equal(result.requirement.confirmed, true); assert.equal(result.readiness!.ready, true);
-      assert.deepEqual(result.route.intake, { target: concept, researchRef: null });
+      assert.deepEqual(result.requirement.value, value);
+      assert.deepEqual(result.route.intake, { researchRef: null });
       assert.equal(result.route.content!.stages[0]!.units[0]!.title, '撤销选择'); assert.equal(network, 0);
     } finally { await runtime.close(); db.close(); }
   });
@@ -365,7 +376,7 @@ test('pending questions gate confirmation, route freeze, propose and apply witho
 
 test('research writing only needs Markdown, accepts paraphrases and preserves content without source receipts', async () => {
   const { db, learning, spaceId, sessionId } = setup();
-  learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value: fields, intake: { target: technology, researchRef: null } });
+  learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value: fields });
   const scene = createIntakeTools(learning, frozen(learning, spaceId, sessionId), randomUUID());
   const content = '\r\nCedar 可在 Node 24 中处理分块输入。无需与英文原文或 Markdown 符号一致。\r\n\r\n```ts\r\n  parse("a");\r\n```\r\n';
   let requests = 0;
@@ -390,7 +401,7 @@ test('research writing only needs Markdown, accepts paraphrases and preserves co
     const saved = learning.space(spaceId);
     assert.equal(saved.requirement.confirmed, false); assert.equal(saved.readiness!.ready, true);
     const dossier = learning.intake.research(spaceId, saved.requirement.intake!.researchRef!);
-    assert.equal(dossier.content, content); assert.deepEqual(dossier.target, technology);
+    assert.equal(dossier.content, content); assert.equal('target' in dossier, false);
     assert.equal(dossier.hash, createHash('sha256').update(content).digest('hex'));
     assert.equal(dossier.runId, run.id);
     assert.equal(db.prepare('SELECT * FROM research_dossiers').all().length, 1, 'only the final staged document becomes a version');
@@ -412,7 +423,7 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
       assert.doesNotMatch(JSON.stringify(context.messages.at(-1)), /researchSources|sourceId/);
       return call('write_research_document', research());
     }
-    if (requests === 3) return call('submit_requirement_draft', { ...fields, intake: { target: technology } });
+    if (requests === 3) return call('submit_requirement_draft', fields);
     return done();
   } });
   let lessonRuntime: TeachingRuntime | undefined;
@@ -425,20 +436,14 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
     assert.equal(original.revision, 1); assert.equal(dossier.content, researchContent);
     assert.doesNotMatch(JSON.stringify(dossier), /WHOLE-PAGE-ONLY|UNTRUSTED_WEB_CONTENT/);
     const confirmed = learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, confirmed: true });
-    const scheduled = learning.saveRequirement(spaceId, { revision: confirmed.revision, value: { ...confirmed.value, schedule: '周五 50 分钟，周日 10 分钟' }, confirmed: true });
+    const scheduled = learning.saveRequirement(spaceId, { revision: confirmed.revision,
+      value: { rows: [...confirmed.value.rows.slice(0, 3), { question: '什么时候练习？', answer: '周五 50 分钟，周日 10 分钟' }] }, confirmed: true });
     assert.deepEqual(scheduled.intake!.researchRef, original); assert.equal(db.prepare('SELECT * FROM research_dossiers').all().length, 1);
     const content = route(), proposal = learning.proposeRoute(spaceId, routeSession, content);
-    assert.deepEqual(proposal.intake, { target: technology, researchRef: original });
+    assert.deepEqual(proposal.intake, { researchRef: original });
     learning.applyProposal(spaceId, proposal.id);
-    assert.deepEqual(learning.space(spaceId).route.intake, { target: technology, researchRef: original });
+    assert.deepEqual(learning.space(spaceId).route.intake, { researchRef: original });
 
-    // Scope/version/name must all match, even when the human-facing name is identical.
-    for (const target of [{ ...technology, version: '4.8.0' }, { ...technology, scope: '浏览器 UI 渲染' }, { ...technology, name: 'Cedar UI' }]) {
-      const before = snapshot(learning);
-      assert.throws(() => learning.saveRequirement(spaceId, { ...scheduled, intake: { target, researchRef: original } }), status(422, /不相容/));
-      assert.throws(() => runtime.plan(spaceId, randomUUID(), { ...scheduled, intake: { target, researchRef: original } }), status(422, /不相容/));
-      assert.deepEqual(snapshot(learning), before);
-    }
     const updated = await publishResearch(learning, spaceId, sessionId, `${researchContent}\nREVISION-TWO-ONLY: 改为分块测试优先`, false);
     assert.deepEqual(updated.ref, { id: original.id, revision: 2 });
     learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, confirmed: true });
@@ -449,9 +454,7 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
       lessonContext = JSON.stringify(context);
       assert.match(lessonContext, /research-dossier/); assert.match(lessonContext, /先处理损坏记录/);
       assert.doesNotMatch(lessonContext, /REVISION-TWO-ONLY|WHOLE-PAGE-ONLY/);
-      return ++lessonCalls === 1 ? call('submit_lesson', { title: '三种损坏记录', intro: '依据路线固定的 Cedar 4.7.2', blocks: [
-        { type: 'h2', id: 'separator', text: '分隔符边界' }, { type: 'p', text: '对比合法与损坏记录。' },
-      ] }) : done();
+      return ++lessonCalls === 1 ? call('submit_lesson', { title: '三种损坏记录', content: '依据路线固定的 Cedar 4.7.2\n\n## 分隔符边界\n\n对比合法与损坏记录。' }) : done();
     } });
     const unit = content.stages[0]!.units[0]!.id;
     const task = lessonRuntime.generate(spaceId, unit, randomUUID(), { kind: 'lesson', revision: 0 }); await lessonRuntime.idle(task.id);
@@ -481,18 +484,18 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
     const other = learning.create({ name: '另一个 Cedar 空间', goal: '不能偷用资料' });
     assert.equal((await api.request(`/spaces/${other.id}/research/${original.id}/1`)).status, 404);
     assert.equal((await api.request(`/spaces/${spaceId}/research/${original.id}/99?format=markdown`)).status, 404);
-    assert.throws(() => learning.saveRequirement(other.id, { revision: 0, value: fields, confirmed: true, intake: { target: technology, researchRef: original } }), status(404));
+    assert.throws(() => learning.saveRequirement(other.id, { revision: 0, value: fields, confirmed: true, intake: { researchRef: original } }), status(404));
   } finally { await Promise.all([runtime.close(), lessonRuntime?.close()]); search.close(); db.close(); }
 });
 
-test('the host associates documents with the final draft in either tool order and drops stale references on target changes', async (t) => {
+test('the host associates documents with the whole table in either tool order and preserves references through rewording', async (t) => {
   for (const order of ['document-first', 'draft-first'] as const) await t.test(order, async () => {
     const { db, learning, spaceId, sessionId } = setup();
     let requests = 0;
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
       requests++;
       if (requests === (order === 'document-first' ? 1 : 2)) return call('write_research_document', research());
-      if (requests === (order === 'draft-first' ? 1 : 2)) return call('submit_requirement_draft', { ...fields, intake: { target: technology } });
+      if (requests === (order === 'draft-first' ? 1 : 2)) return call('submit_requirement_draft', fields);
       return done();
     } });
     try {
@@ -501,60 +504,54 @@ test('the host associates documents with the final draft in either tool order an
       assert.equal(runtime.get(spaceId, run.id).state, 'succeeded');
       const saved = learning.space(spaceId);
       assert.deepEqual(saved.requirement.value, fields);
-      assert.deepEqual(saved.requirement.intake!.target, technology);
-      assert.deepEqual(learning.intake.research(spaceId, saved.requirement.intake!.researchRef!).target, technology);
+      const ref = saved.requirement.intake!.researchRef!;
+      assert.equal(learning.intake.research(spaceId, ref).content, researchContent);
       assert.equal(saved.readiness!.ready, true);
       assert.equal(requests, 3);
       const scene = createIntakeTools(learning, frozen(learning, spaceId, sessionId), randomUUID());
-      await scene.tools.find((t) => t.name === 'submit_requirement_draft')!.execute('new-target', { ...fields,
-        intake: { target: { ...technology, version: '4.8.0' }, researchRef: saved.requirement.intake!.researchRef } });
+      const value = { rows: [...fields.rows.slice(1).reverse(), { question: '产物和版本？', answer: 'Cedar 4.7.2 的离线账本解析器' }] };
+      await scene.tools.find((t) => t.name === 'submit_requirement_draft')!.execute('reworded-table', value);
       scene.commit();
-      assert.equal(learning.space(spaceId).requirement.intake!.researchRef, null);
-      assert.equal(learning.space(spaceId).readiness!.ready, false);
+      assert.deepEqual(learning.space(spaceId).requirement.value, value);
+      assert.deepEqual(learning.space(spaceId).requirement.intake!.researchRef, ref);
+      assert.equal(learning.space(spaceId).requirement.confirmed, false);
+      assert.equal(db.prepare('SELECT * FROM research_dossiers').all().length, 1);
     } finally { await runtime.close(); db.close(); }
   });
 });
 
-test('omitting a target preserves it, but clearing it cannot attach a document to the old target', async (t) => {
-  for (const mode of ['omitted', 'cleared'] as const) await t.test(mode, async () => {
-    const { db, learning, spaceId, sessionId } = setup();
-    learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value: fields, intake: { target: technology, researchRef: null } });
-    let requests = 0;
-    const content = '解析器调研补充：练习材料仍需要用户确认。';
-    const draft = { ...fields, goal: '重新核对学习目标', ...(mode === 'cleared' ? { intake: null } : {}) };
-    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
-      if (++requests === 1) return response(reply([
-        { type: 'toolCall', id: 'new-document', name: 'write_research_document', arguments: research(content) },
-        { type: 'toolCall', id: 'target-draft', name: 'submit_requirement_draft', arguments: draft },
-      ], 'toolUse'));
-      return done();
-    } });
-    try {
-      const baseline = learning.space(spaceId).requirement;
-      const { run } = submit(runtime, spaceId, sessionId);
-      await runtime.idle(run.id);
-      assert.equal(runtime.get(spaceId, run.id).state, mode === 'cleared' ? 'failed' : 'succeeded');
-      if (mode === 'cleared') {
-        assert.match(runtime.get(spaceId, run.id).error!, /说明调研资料对应的学习对象/);
-        assert.deepEqual(learning.space(spaceId).requirement, baseline);
-        assert.equal(db.prepare('SELECT * FROM research_dossiers').all().length, 0);
-      } else {
-        const saved = learning.space(spaceId).requirement;
-        assert.equal(saved.value.goal, '重新核对学习目标');
-        assert.deepEqual(saved.intake!.target, technology);
-        assert.equal(learning.intake.research(spaceId, saved.intake!.researchRef!).content, content);
-      }
-    } finally { await runtime.close(); db.close(); }
-  });
+test('requirement tools accept arbitrary questions, incomplete answers and Markdown without row identities or classifications', async () => {
+  const { db, learning, spaceId, sessionId } = setup();
+  const scene = createIntakeTools(learning, frozen(learning, spaceId, sessionId), randomUUID());
+  const tool = scene.tools.find((t) => t.name === 'submit_requirement_draft')!;
+  const value = { rows: [
+    { question: '为什么想学？', answer: '  改善自己的工具，不是为了考试。\r\n' },
+    { question: '哪些还没想好？', answer: '' },
+    { question: '喜欢怎样练习？', answer: '先用 `例子`，再解释 <边界 & 限制>。' },
+  ] };
+  try {
+    const schema = JSON.parse(JSON.stringify(tool.parameters));
+    assert.deepEqual(Object.keys(schema.properties), ['rows']);
+    assert.deepEqual(Object.keys(schema.properties.rows.items.properties), ['question', 'answer']);
+    await tool.execute('table', value);
+    assert.deepEqual(learning.space(spaceId).requirement.value, conceptFields, 'staging is not publication');
+    scene.commit();
+    const saved = learning.space(spaceId);
+    assert.deepEqual(saved.requirement.value, value);
+    assert.deepEqual(saved.requirement.intake, { researchRef: null });
+    assert.equal(saved.requirement.confirmed, false);
+    assert.equal(saved.readiness!.ready, true);
+  } finally { db.close(); }
 });
 
-test('migration preserves legacy routes/lessons without inventing verification; new planning and lessons need evidence', async () => {
+test('migration converts legacy fields to ordinary rows without changing confirmed routes or lesson history', async () => {
   const db = new Database(':memory:'); db.pragma('foreign_keys = ON');
   migrate(db, migrations.slice(0, 8));
   const space = randomUUID(), session = randomUUID(), content = route(), unit = content.stages[0]!.units[0]!.id;
   const lesson = { title: '历史课件', content: '保持原文，不添加不存在的历史核验说明。' };
+  const legacy = { goal: '  写一个流式账本解析器\r\n', background: '', outcome: '处理三种损坏记录\n', schedule: '   ' };
   db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(space, '历史学习空间', 17);
-  db.prepare('INSERT INTO requirements(space_id,revision,confirmed,value) VALUES (?,3,1,?)').run(space, JSON.stringify(fields));
+  db.prepare('INSERT INTO requirements(space_id,revision,confirmed,value) VALUES (?,3,1,?)').run(space, JSON.stringify(legacy));
   db.prepare('INSERT INTO routes(space_id,revision,content) VALUES (?,2,?)').run(space, JSON.stringify(content));
   for (const u of content.stages.flatMap((s) => s.units)) db.prepare('INSERT INTO units(space_id,id) VALUES (?,?)').run(space, u.id);
   db.prepare("INSERT INTO sessions(space_id,id,scope,unit_id,title) VALUES (?,?,'unit',?,'历史辅导')").run(space, session, unit);
@@ -567,15 +564,15 @@ test('migration preserves legacy routes/lessons without inventing verification; 
     return done();
   } });
   try {
-    const saved = learning.space(space), before = snapshot(learning);
-    assert.equal(db.pragma('user_version', { simple: true }), 10);
+    const saved = learning.space(space);
+    assert.equal(db.pragma('user_version', { simple: true }), 11);
     assert.deepEqual(saved.route, { revision: 2, content });
-    assert.deepEqual(saved.requirement, { revision: 3, confirmed: true, value: fields });
+    assert.deepEqual(saved.requirement, { revision: 3, confirmed: true, value: { rows: [
+      { question: '学习目标', answer: '  写一个流式账本解析器\r\n' }, { question: '期望达成', answer: '处理三种损坏记录\n' },
+    ] } });
     assert.deepEqual(learning.unit(space, unit).lesson, { ...lesson, revision: 1 });
     assert.deepEqual(db.prepare('SELECT * FROM research_dossiers').all(), []);
-    assert.throws(() => runtime.plan(space, randomUUID(), saved.requirement), status(422));
-    assert.throws(() => runtime.generate(space, unit, randomUUID(), { kind: 'lesson', revision: 1 }), status(422));
-    assert.deepEqual(snapshot(learning), before);
+    assert.equal(saved.readiness!.ready, true);
     const tutoring = submit(runtime, space, session, '继续讨论历史课件，不声称已核验技术。');
     await runtime.idle(tutoring.run.id);
     assert.equal(runtime.get(space, tutoring.run.id).state, 'succeeded');
@@ -625,9 +622,9 @@ test('manual Markdown saves are protected, atomic and idempotent; stale edits ca
     assert.equal(result.document.revision, 2); assert.equal(result.document.runId, null);
     assert.equal(result.document.content, content);
     assert.equal(result.document.hash, createHash('sha256').update(content).digest('hex'));
-    assert.deepEqual(result.document.target, technology);
+    assert.equal('target' in result.document, false);
     assert.deepEqual(result.workspace.requirement, { ...baseline, revision: baseline.revision + 1, confirmed: false,
-      intake: { target: technology, researchRef: { id: original.ref.id, revision: 2 } } });
+      intake: { researchRef: { id: original.ref.id, revision: 2 } } });
     assert.deepEqual(await (await post(path, input, { 'Idempotency-Key': key })).json(), result);
     assert.equal((await post(path, { content: '不同输入' }, { 'Idempotency-Key': key })).status, 409);
     assert.equal((await post(path, { content: '另一个窗口的旧稿' })).status, 409);
@@ -652,14 +649,14 @@ test('migration 9 to 10 preserves agent document bytes and foreign keys while al
   try {
     const original = await publishResearch(learning, space.id, session, '\n# 已有资料\n\n```ts\n  parse("b");\n```\n', false);
     const before = snapshot(learning);
-    migrate(db);
+    migrate(db, migrations.slice(0, 10));
     assert.equal(db.pragma('user_version', { simple: true }), 10);
     assert.deepEqual(snapshot(learning), before);
     assert.deepEqual(learning.intake.research(space.id, original.ref), original.dossier);
     const manual = learning.saveResearch(space.id, original.ref, { content: '# 用户的新资料\n\n手动说明。\n' });
     assert.equal(manual.document.runId, null); assert.equal(manual.document.revision, 2);
     assert.deepEqual(db.prepare('SELECT run_id FROM research_dossiers ORDER BY revision').all(), [{ run_id: original.runId }, { run_id: null }]);
-    const invalid = learning.intake.prepareResearch({ id: original.ref.id, revision: 3 }, randomUUID(), technology, research());
+    const invalid = learning.intake.prepareResearch({ id: original.ref.id, revision: 3 }, randomUUID(), research());
     assert.throws(() => learning.intake.saveResearch(space.id, invalid), /FOREIGN KEY/);
     assert.throws(() => learning.intake.saveResearch(randomUUID(), { ...invalid, runId: null }), /FOREIGN KEY/);
     assert.deepEqual(db.pragma('foreign_key_check'), []);

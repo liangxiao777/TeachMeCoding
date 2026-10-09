@@ -1,8 +1,7 @@
 'use client'
 
-import { ArrowLeft, Check, ClipboardList, Pencil } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { intakeMetadataSchema, type LearningTarget } from '@teach-me-coding/contracts'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
 import { QuestionRoundCard, ResearchCard } from '@/components/intake-panel'
@@ -14,7 +13,6 @@ import { Generating, isComposing } from '@/components/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Kbd } from '@/components/ui/kbd'
 import { Separator } from '@/components/ui/separator'
@@ -22,14 +20,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useApp, useSpace, type RequirementDraft } from '@/app/context'
 import { ThemeToggle } from '@/app/theme'
-import type { Requirement } from '@/app/types'
-
-const FIELDS: { key: keyof Requirement; label: string }[] = [
-  { key: 'goal', label: '学习目标' },
-  { key: 'background', label: '已有基础' },
-  { key: 'outcome', label: '期望达成' },
-  { key: 'schedule', label: '时间安排' },
-]
 
 function RequirementCard() {
   const space = useSpace()
@@ -44,10 +34,10 @@ function RequirementCard() {
   const savingRef = useRef(false)
   const req = space.requirement
   const busy = saving || !!persistence && (persistence.busy || !persistence.ready)
-  const validIntake = !draft?.intake || intakeMetadataSchema.safeParse(draft.intake).success
+  const validRows = !draft || draft.rows.every((row) => row.question.trim())
 
   const save = async () => {
-    if (!draft || busy || savingRef.current || !validIntake) return
+    if (!draft || busy || savingRef.current || !validRows) return
     savingRef.current = true
     setSaving(true)
     setSaveError('')
@@ -76,23 +66,19 @@ function RequirementCard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ul className="flex flex-col gap-4">
-            {FIELDS.map((f) => (
-              <li key={f.key} className="flex flex-col gap-2">
-                <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{f.label}</span>
-                <Skeleton className="h-3 w-3/4 animate-none" />
-              </li>
-            ))}
-          </ul>
+          <div className="space-y-4" aria-label="正在整理需求表格">
+            <div className="grid grid-cols-[2fr_3fr] gap-4 text-xs font-medium text-muted-foreground"><span>问题</span><span>回答</span></div>
+            {[0, 1, 2].map((index) => <div key={index} className="grid grid-cols-[2fr_3fr] gap-4"><Skeleton className="h-3 animate-none" /><Skeleton className="h-3 animate-none" /></div>)}
+          </div>
         </CardContent>
       </Card>
     )
   }
 
   const current: RequirementDraft = editing && draft ? draft : { ...req, intake: persistence?.intake }
-  const target = current.intake?.target
-  const editTarget = (value: LearningTarget | null) => setDraft({ ...current, intake: value ? { target: value, researchRef: null } : null })
-  const awaitingSummary = !!persistence && !Object.values(req).some((value) => value.trim())
+  const awaitingSummary = !req.rows.some((row) => row.answer.trim())
+  const editRow = (index: number, field: 'question' | 'answer', value: string) => setDraft({ ...current,
+    rows: current.rows.map((row, at) => at === index ? { ...row, [field]: value } : row) })
   return (
     <Card aria-labelledby="req-title" className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
       <CardHeader>
@@ -109,7 +95,7 @@ function RequirementCard() {
             </Button>
             <Button
               size="sm"
-              disabled={busy || !validIntake || !!persistence && !current.goal.trim()}
+              disabled={busy || !validRows}
               onClick={() => void save()}
             >
               {saving ? '保存中…' : '保存'}
@@ -121,7 +107,7 @@ function RequirementCard() {
             size="sm"
             disabled={busy}
             onClick={() => {
-              setDraft(persistence ? { ...req, intake: persistence.intake } : req)
+              setDraft({ ...req, rows: req.rows.length ? structuredClone(req.rows) : [{ question: '', answer: '' }], intake: persistence?.intake })
               setSaveError('')
               setEditing(true)
             }}
@@ -134,75 +120,30 @@ function RequirementCard() {
       </CardHeader>
       <CardContent>
         {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
-        {editing ? (
-          <FieldGroup className="gap-4">
-            {FIELDS.map((f) => (
-              <Field key={f.key}>
-                <FieldLabel htmlFor={`req-${f.key}`}>{f.label}</FieldLabel>
-                <Textarea
-                  id={`req-${f.key}`}
-                  rows={2}
-                  value={current[f.key]}
-                  onChange={(e) => setDraft({ ...current, [f.key]: e.target.value,
-                    ...(persistence && (f.key === 'goal' || f.key === 'outcome') ? { intake: null } : {}) })}
-                  className="resize-none leading-relaxed"
-                />
-              </Field>
-            ))}
-            {persistence && <>
-              <Field>
-                <FieldLabel htmlFor="req-target-kind">学习对象类型</FieldLabel>
-                <select id="req-target-kind" disabled={saving} value={target?.kind ?? ''}
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring"
-                  onChange={(event) => editTarget(event.target.value === 'concept'
-                    ? { kind: 'concept', name: target?.name ?? '', scope: target?.scope ?? '' }
-                    : event.target.value === 'technology' ? { kind: 'technology', name: target?.name ?? '', scope: target?.scope ?? '', version: '' } : null)}>
-                  <option value="">待明确</option><option value="concept">概念学习（无需技术版本）</option><option value="technology">具体技术</option>
-                </select>
-              </Field>
-              {target && <>
-                <Field>
-                  <FieldLabel htmlFor="req-target-name">{target.kind === 'technology' ? '技术对象' : '概念名称'}</FieldLabel>
-                  <Input id="req-target-name" disabled={saving} maxLength={500} value={target.name} onChange={(event) => editTarget({ ...target, name: event.target.value })} />
-                </Field>
-                {target.kind === 'technology' && <Field>
-                  <FieldLabel htmlFor="req-target-version">具体适用版本</FieldLabel>
-                  <Input id="req-target-version" disabled={saving} maxLength={500} value={target.version} placeholder="填写具体版本，不使用最新版 / latest"
-                    onChange={(event) => editTarget({ ...target, version: event.target.value })} />
-                </Field>}
-                <Field>
-                  <FieldLabel htmlFor="req-target-scope">学习 / 核验范围</FieldLabel>
-                  <Textarea id="req-target-scope" disabled={saving} rows={2} maxLength={10_000} value={target.scope} onChange={(event) => editTarget({ ...target, scope: event.target.value })} />
-                </Field>
-              </>}
-              {!validIntake && <p role="status" className="text-xs text-destructive">请填写对象名称、范围；具体技术还需明确版本，不能使用“最新版”。</p>}
-              <p className="text-xs leading-relaxed text-muted-foreground">修改目标或期望会清除对象与核验资料；修改技术、版本或范围会清除资料引用，需重新核验。仅修改基础或时间可保留资料。</p>
-            </>}
-          </FieldGroup>
-        ) : (
-          <dl className="flex flex-col gap-4">
-            {FIELDS.map((f) => (
-              <div key={f.key} className="flex flex-col gap-1">
-                <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{f.label}</dt>
-                <dd className="whitespace-pre-wrap break-words text-sm leading-relaxed">{current[f.key] || (persistence ? '待补充' : '')}</dd>
-              </div>
-            ))}
-            {persistence && <>
-              <div className="flex flex-col gap-1">
-                <dt className="text-xs font-medium tracking-wider text-muted-foreground">{target?.kind === 'concept' ? '概念对象' : '技术对象'}</dt>
-                <dd className="break-words text-sm">{target?.name || '待明确'}</dd>
-              </div>
-              {target?.kind === 'technology' && <div className="flex flex-col gap-1">
-                <dt className="text-xs font-medium tracking-wider text-muted-foreground">具体适用版本</dt>
-                <dd className="break-words text-sm">{target.version}</dd>
-              </div>}
-              <div className="flex flex-col gap-1">
-                <dt className="text-xs font-medium tracking-wider text-muted-foreground">学习 / 核验范围</dt>
-                <dd className="whitespace-pre-wrap break-words text-sm">{target?.scope || '待明确'}</dd>
-              </div>
-            </>}
-          </dl>
-        )}
+        {current.rows.length > 0 ? <table aria-label="学习需求" className="w-full table-fixed text-sm">
+          <thead><tr className="border-b text-left text-xs text-muted-foreground">
+            <th scope="col" className="w-2/5 px-2 pb-3 font-medium">问题</th>
+            <th scope="col" className="px-2 pb-3 font-medium">回答</th>
+          </tr></thead>
+          <tbody>{current.rows.map((row, index) => <tr key={index} className="border-b last:border-0">
+            <td className="px-2 py-3 align-top whitespace-pre-wrap break-words font-medium leading-relaxed">
+              {editing ? <Textarea aria-label={`问题 ${index + 1}`} rows={2} maxLength={10_000}
+                value={row.question} onChange={(event) => editRow(index, 'question', event.target.value)} className="resize-y leading-relaxed" /> : row.question}
+            </td>
+            <td className="px-2 py-3 align-top whitespace-pre-wrap break-words leading-relaxed">
+              {editing ? <div className="space-y-2"><Textarea aria-label={`回答 ${index + 1}`} rows={3} maxLength={100_000}
+                value={row.answer} onChange={(event) => editRow(index, 'answer', event.target.value)} className="resize-y leading-relaxed" />
+                <Button variant="ghost" size="xs" disabled={saving} aria-label={`移除第 ${index + 1} 行`}
+                  onClick={() => setDraft({ ...current, rows: current.rows.filter((_, at) => at !== index) })}><Trash2 aria-hidden />移除</Button>
+              </div> : row.answer || <span className="text-muted-foreground">待补充</span>}
+            </td>
+          </tr>)}</tbody>
+        </table> : <p className="py-3 text-sm leading-relaxed text-muted-foreground">还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。</p>}
+        {editing && <div className="mt-4 space-y-3">
+          <Button variant="outline" size="sm" disabled={saving || current.rows.length >= 100}
+            onClick={() => setDraft({ ...current, rows: [...current.rows, { question: '', answer: '' }] })}><Plus aria-hidden />添加问题</Button>
+          {!validRows && <p role="status" className="text-xs text-muted-foreground">请填写每行的问题；暂不确定的回答可以留空。</p>}
+        </div>}
         {!editing && current.intake?.researchRef && <ResearchCard key={`${space.id}:${current.intake.researchRef.id}`} researchRef={current.intake.researchRef} />}
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t">
@@ -213,7 +154,7 @@ function RequirementCard() {
           </ul>
         </div>}
         <Button size="lg" aria-describedby={persistence && !persistence.readiness?.ready ? 'req-readiness' : undefined}
-          disabled={editing || busy || persistence?.requirementConfirmed || !!persistence && (!req.goal.trim() || !persistence.readiness?.ready)} onClick={confirmRequirement}>
+          disabled={editing || busy || awaitingSummary || persistence?.requirementConfirmed || !!persistence && !persistence.readiness?.ready} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
           {persistence?.requirementConfirmed ? '已确认学习需求' : capabilities.agent ? '确认，开始规划路线' : '确认学习需求'}
         </Button>

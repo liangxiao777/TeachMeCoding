@@ -173,17 +173,21 @@ export function initialRequirement(kind: Space['kind'], topic: string, answers: 
   const scheduleText = answers[2] || ''
   if (kind === 'rust') {
     return {
-      goal: '系统学习 Rust，能独立完成一个简单的命令行工具',
-      background: /python/i.test(background) ? '熟悉 Python，没有接触过需要手动管理内存的语言' : background,
-      outcome: '理解所有权等核心概念，独立写出一个可用的 CLI 工具',
-      schedule: /\d/.test(scheduleText) ? scheduleText : '每周约 5 小时',
+      rows: [
+        { question: '想学习什么？', answer: '系统学习 Rust，能独立完成一个简单的命令行工具' },
+        { question: '已有经验？', answer: /python/i.test(background) ? '熟悉 Python，没有接触过需要手动管理内存的语言' : background },
+        { question: '希望完成什么？', answer: '理解所有权等核心概念，独立写出一个可用的 CLI 工具' },
+        { question: '时间安排？', answer: /\d/.test(scheduleText) ? scheduleText : '每周约 5 小时' },
+      ],
     }
   }
   return {
-    goal: `学习 ${topic}`,
-    background,
-    outcome: `能用 ${topic} 独立完成一个小项目`,
-    schedule: /\d/.test(scheduleText) ? scheduleText : '每周约 5 小时',
+    rows: [
+      { question: '想学习什么？', answer: `学习 ${topic}` },
+      { question: '已有经验？', answer: background },
+      { question: '希望完成什么？', answer: `能用 ${topic} 独立完成一个小项目` },
+      { question: '时间安排？', answer: /\d/.test(scheduleText) ? scheduleText : '每周约 5 小时' },
+    ],
   }
 }
 
@@ -249,10 +253,12 @@ export function rustInProgressSpace(): Space {
     name: 'Rust 入门',
     topic: 'Rust',
     requirement: {
-      goal: '系统学习 Rust，能独立完成一个简单的命令行工具',
-      background: '熟悉 Python，没有接触过需要手动管理内存的语言',
-      outcome: '理解所有权等核心概念，独立写出一个可用的 CLI 工具',
-      schedule: '每周约 5 小时',
+      rows: [
+        { question: '想学习什么？', answer: '系统学习 Rust，能独立完成一个简单的命令行工具' },
+        { question: '已有经验？', answer: '熟悉 Python，没有接触过需要手动管理内存的语言' },
+        { question: '希望完成什么？', answer: '理解所有权等核心概念，独立写出一个可用的 CLI 工具' },
+        { question: '时间安排？', answer: '每周约 5 小时' },
+      ],
     },
     onboarding: { messages: [], step: 3, agentTyping: false, summaryReady: true },
     routeNote: RUST_ROUTE_NOTE,
@@ -306,10 +312,12 @@ export function pytorchSpace(): Space {
     name: 'PyTorch 基础',
     topic: 'PyTorch',
     requirement: {
-      goal: '能用 PyTorch 训练一个简单的图像分类模型',
-      background: '熟悉 Python 与 NumPy，线性代数基础一般',
-      outcome: '独立完成 MNIST 手写数字分类',
-      schedule: '周末集中学习',
+      rows: [
+        { question: '想学习什么？', answer: '能用 PyTorch 训练一个简单的图像分类模型' },
+        { question: '已有经验？', answer: '熟悉 Python 与 NumPy，线性代数基础一般' },
+        { question: '希望完成什么？', answer: '独立完成 MNIST 手写数字分类' },
+        { question: '时间安排？', answer: '周末集中学习' },
+      ],
     },
     onboarding: { messages: [], step: 3, agentTyping: false, summaryReady: true },
     routeNote: '从你熟悉的 NumPy 出发理解张量，再逐步过渡到自动求导和完整的训练循环。',

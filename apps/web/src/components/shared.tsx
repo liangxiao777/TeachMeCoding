@@ -72,13 +72,15 @@ export function RichText({
   text,
   renderCode,
   components,
+  ...markdownProps
 }: {
   text: string
-  renderCode?: (code: string, lang: string) => ReactNode
+  renderCode?: (code: string, lang: string, meta: string) => ReactNode
   components?: MessageResponseProps['components']
-}) {
+} & Pick<MessageResponseProps, 'remarkPlugins' | 'allowedTags' | 'normalizeHtmlIndentation'>) {
   return (
     <MessageResponse mode="static" parseIncompleteMarkdown={false} controls={false}
+      {...markdownProps}
       className="h-auto min-w-0 max-w-full space-y-3 break-words leading-relaxed"
       components={{
         p: ({ children }) => <p>{children}</p>,
@@ -89,7 +91,8 @@ export function RichText({
           const value = code?.type === 'element' ? code.children.filter((child) => child.type === 'text').map((child) => child.value).join('') : ''
           const classes = code?.type === 'element' ? code.properties.className : undefined
           const language = Array.isArray(classes) ? classes.find((name) => String(name).startsWith('language-'))?.toString().slice(9) ?? '' : ''
-          return renderCode ? renderCode(value.replace(/\n$/, ''), language) : (
+          const meta = code?.type === 'element' && typeof code.properties.metastring === 'string' ? code.properties.metastring : ''
+          return renderCode ? renderCode(value.replace(/\n$/, ''), language, meta) : (
             <pre className="overflow-x-auto rounded-md bg-ide p-3 font-mono text-xs leading-relaxed text-ide-foreground">{value}</pre>
           )
         },

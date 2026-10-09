@@ -3,7 +3,7 @@
 - 日期：2026-10-07
 - 状态：已提交并快进合入本地 `main`，本机部署及检查完成；未推送。
 - 范围：统一每次教学运行的工具装配、名称冲突检查和请求工具清单。
-- 关联：[Agent 上下文设计](./agent-context-design.md)、[设计与批准讨论](https://ampcode.com/threads/T-01a115dd-370e-727e-bcad-da54c12a5dfa)。
+- 关联：[Agent 上下文设计](./agent-context-design.md)、[设计与批准讨论](https://ampcode.com/threads/T-01a115dd-370e-727e-bcad-da54c12a5dfa)、[后续工具简化与修复待办](./tool-simplification-plan.md)。
 
 ## 1. 目标与边界
 

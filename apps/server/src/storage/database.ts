@@ -1,5 +1,19 @@
 import Database from 'better-sqlite3';
 
+// Convert old content once, including technical details previously kept outside the table.
+const legacyRequirement = (value: string, intake: string) => `json_object('rows', json((
+  SELECT json_group_array(json_object('question', field.key, 'answer', field.value))
+  FROM json_each(json_object(
+    '学习目标', json_extract(${value}, '$.goal'),
+    '已有基础', json_extract(${value}, '$.background'),
+    '期望达成', json_extract(${value}, '$.outcome'),
+    '时间安排', json_extract(${value}, '$.schedule'),
+    '学习对象', json_extract(${intake}, '$.target.name'),
+    '适用版本', json_extract(${intake}, '$.target.version'),
+    '学习范围', json_extract(${intake}, '$.target.scope')
+  )) AS field WHERE field.value IS NOT NULL AND trim(field.value) != ''
+)))`;
+
 // Migrations are append-only. Each version, including user_version, commits atomically.
 export const migrations = [
   `CREATE TABLE spaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -93,6 +107,16 @@ export const migrations = [
    INSERT INTO research_dossiers_next SELECT * FROM research_dossiers;
    DROP TABLE research_dossiers;
    ALTER TABLE research_dossiers_next RENAME TO research_dossiers;`,
+  `UPDATE requirements SET value = ${legacyRequirement('requirements.value', 'requirements.intake')}
+     WHERE json_type(value, '$.rows') IS NULL;
+   ${['agent_runs', 'task_runs'].map((table) => `UPDATE ${table} SET input = json_set(input, '$.requirement.value',
+     ${legacyRequirement("json_extract(input, '$.requirement.value')", "json_extract(input, '$.requirement.intake')")})
+     WHERE json_type(input, '$.requirement.value') = 'object' AND json_type(input, '$.requirement.value.rows') IS NULL;
+   UPDATE ${table} SET input = json_remove(input, '$.requirement.intake.target', '$.route.intake.target', '$.research.target');`).join('\n')}
+   UPDATE requirements SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE routes SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE proposals SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
+   UPDATE research_dossiers SET value = json_remove(value, '$.target');`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

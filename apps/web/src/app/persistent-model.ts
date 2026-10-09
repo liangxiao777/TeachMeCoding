@@ -424,10 +424,9 @@ export function usePersistentModel(): AppModel {
     if (!current || !selected) return Promise.resolve(false)
     const id = current.id, revision = selected.saved.requirement.revision
     const { intake, ...value } = draft
-    const metadata = intake && !same(intake.target, selected.saved.requirement.intake?.target) ? { ...intake, researchRef: null } : intake
     let saved: RequirementState | undefined, applied = false
     return run(`requirement:${id}`, async () => {
-      saved ??= await api<RequirementState>(`/spaces/${id}/requirement`, { revision, value, confirmed, ...(metadata !== undefined ? { intake: metadata } : {}) })
+      saved ??= await api<RequirementState>(`/spaces/${id}/requirement`, { revision, value, confirmed, ...(intake !== undefined ? { intake } : {}) })
       const requirement = saved
       if (!applied) {
         invalidateBusiness(id)
@@ -571,10 +570,10 @@ export function usePersistentModel(): AppModel {
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null
-      const blocks: LessonBlock[] = lesson.blocks ?? [{ type: 'markdown', text: lesson.content }]
+      if (!lesson.blocks) return { intro: lesson.intro ?? '', blocks: [], content: lesson.content }
       // Earlier model output stored entire Markdown sections as h2.text. Split
       // only the display model, preserving saved content and stable TOC anchors.
-      return { intro: lesson.intro ?? '', blocks: blocks.flatMap((block): LessonBlock[] => {
+      return { intro: lesson.intro ?? '', blocks: lesson.blocks.flatMap((block): LessonBlock[] => {
         if (block.type !== 'h2') return [block]
         const [heading = '', ...lines] = block.text.split(/\r\n?|\n/)
         const body = lines.join('\n')

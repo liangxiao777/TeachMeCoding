@@ -16,7 +16,7 @@ async function send(page: Page, text: string) {
 // Browser-only public projection fixtures; the underlying test server is disposable.
 async function mockToolRun(page: Page, goal: string, parts: AgentDisplayPart[], live = false) {
   await create(page, goal);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
   const saved = await workspace(page, goal);
   const runId: string = saved.runs[0].id;
@@ -168,9 +168,9 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   const opening = `我想做一个命令行工具，有 Python 自动化经验，每周 3 小时，计划 6 周完成。${info.project.name}`;
   await create(page, opening);
   await expect(page.getByText(opening, { exact: true })).toHaveCount(1);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
-  await expect(page.locator('dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
-  await expect(page.locator('dd').filter({ hasText: opening })).toHaveCount(0);
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: opening })).toHaveCount(0);
   await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveValue('');
   await page.screenshot({ path: `.amp/in/artifacts/intake-opening-${info.project.name}.png`, animations: 'disabled' });
   let dropped = false;
@@ -181,14 +181,14 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByLabel('回复 Agent', { exact: true }).fill('请求重试时的新草稿');
   await page.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(page.locator('dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
-  await expect(page.locator('dd').filter({ hasText: /^每周 3 小时，共 6 周$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^每周 3 小时，共 6 周$/ })).toBeVisible();
   await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveValue('请求重试时的新草稿');
   await expect(page.getByText('我有 Python 自动化经验，每周 3 小时，6 周做一个命令行工具', { exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('每周 4 小时');
+  await page.getByLabel('回答 4', { exact: true }).fill('每周 4 小时');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-intake-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   await expect(page.getByText(`正在为「${opening.slice(0, 80)}」规划学习路线`, { exact: true })).toBeVisible();
@@ -199,11 +199,14 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
-  await expect(page.locator('dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-route-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
-  await expect(page.getByText('本示例尚未在本机执行。', { exact: true })).toBeVisible();
+  const lesson = page.locator('.lesson-prose');
+  await expect(lesson.getByRole('alert').filter({ hasText: '本示例尚未在本机执行。' })).toBeVisible();
+  await expect(lesson.getByRole('region', { name: '动手试试', exact: true })).toContainText('比较传入零个参数与两个参数时的差异。');
+  await expect(lesson.locator('details[open]')).toHaveCount(0);
   await page.reload();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByPlaceholder('说说你的想法…', { exact: true }).fill('参数读取和验证有什么区别？');
@@ -278,7 +281,7 @@ test('stream survives page reload and session switching; stop and model failure 
 test('reasoning assessment failure retries the same attempt; expired evidence stays historical', async ({ page }, info) => {
   test.setTimeout(60000);
   await create(page, `纯推理 ${info.project.name}`);
-  await expect(page.locator('dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
@@ -303,7 +306,7 @@ test('reasoning assessment failure retries the same attempt; expired evidence st
     const headers = { 'X-TMC-Token': token, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() };
     const workspace = await (await fetch(`/api/spaces/${id}`, { headers })).json();
     return (await fetch(`/api/spaces/${id}/requirement`, { method: 'POST', headers, body: JSON.stringify({ ...workspace.requirement,
-      value: { ...workspace.requirement.value, schedule: '改变后的计划' } }) })).status;
+      value: { rows: [...workspace.requirement.value.rows, { question: '补充计划？', answer: '改变后的计划' }] } }) })).status;
   });
   expect(changed).toBe(200);
   await page.reload();
@@ -327,7 +330,7 @@ test('a lost opening response retries one space, message and automatically start
   await expect(page.getByLabel('你想学什么', { exact: true })).toHaveValue(opening);
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.getByText(opening, { exact: true })).toHaveCount(1);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.reload();
   await expect(page.getByText(opening, { exact: true })).toHaveCount(1);
   const counts = await page.evaluate(async (name) => {
@@ -346,25 +349,28 @@ test('empty requirements are editable and late intake cannot replace saved or un
   for (const saveEarly of [false, true]) {
     await create(page, `延迟摘要 ${saveEarly} ${info.project.name}`);
     await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
-    await expect(page.locator('dd').filter({ hasText: /^待补充$/ })).toHaveCount(4);
+    await expect(page.getByText('还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。', { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeDisabled();
     if (!saveEarly) await page.screenshot({ path: `.amp/in/artifacts/intake-empty-${info.project.name}.png`, animations: 'disabled' });
     await page.getByRole('button', { name: '修改', exact: true }).click();
-    await page.getByLabel('学习目标', { exact: true }).fill('手动指定：分析日志文件');
-    await page.getByLabel('已有基础', { exact: true }).fill('只会 SQL');
+    await page.getByLabel('问题 1', { exact: true }).fill('想分析什么？');
+    await page.getByLabel('回答 1', { exact: true }).fill('手动指定：分析日志文件');
+    await page.getByRole('button', { name: '添加问题', exact: true }).click();
+    await page.getByLabel('问题 2', { exact: true }).fill('已有经验？');
+    await page.getByLabel('回答 2', { exact: true }).fill('只会 SQL');
     if (saveEarly) await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0, { timeout: 15000 });
     if (!saveEarly) {
       // The tool's result has refreshed the server revision, but not this local edit.
       await expect(page.getByText('需求草稿已更新，请检查右侧摘要。', { exact: false })).toBeVisible();
-      await expect(page.getByLabel('学习目标', { exact: true })).toHaveValue('手动指定：分析日志文件');
-      await expect(page.getByLabel('已有基础', { exact: true })).toHaveValue('只会 SQL');
+      await expect(page.getByLabel('回答 1', { exact: true })).toHaveValue('手动指定：分析日志文件');
+      await expect(page.getByLabel('回答 2', { exact: true })).toHaveValue('只会 SQL');
       await page.screenshot({ path: `.amp/in/artifacts/intake-manual-${info.project.name}.png`, animations: 'disabled' });
       await page.getByRole('button', { name: '保存', exact: true }).click();
     } else await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
-    await expect(page.locator('dd').filter({ hasText: /^手动指定：分析日志文件$/ })).toBeVisible();
+    await expect(page.locator('td, dd').filter({ hasText: /^手动指定：分析日志文件$/ })).toBeVisible();
     await page.reload();
-    await expect(page.locator('dd').filter({ hasText: /^只会 SQL$/ })).toBeVisible();
+    await expect(page.locator('td, dd').filter({ hasText: /^只会 SQL$/ })).toBeVisible();
   }
 });
 
@@ -372,9 +378,9 @@ test('standalone planning survives reload and leaving; only later route adjustme
   test.setTimeout(60000);
   const goal = `规划恢复 ${info.project.name}`;
   await create(page, goal);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-SLOW 每周 4 小时');
+  await page.getByLabel('回答 4', { exact: true }).fill('PLAN-SLOW 每周 4 小时');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   const title = page.getByText(`正在为「${goal}」规划学习路线`, { exact: true });
@@ -423,9 +429,9 @@ test('planning response loss, provider failure and cancellation remain recoverab
   test.setTimeout(60000);
   const goal = `规划错误恢复 ${info.project.name}`;
   await create(page, goal);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-FAIL-ONCE PLAN-SLOW');
+  await page.getByLabel('回答 4', { exact: true }).fill('PLAN-FAIL-ONCE PLAN-SLOW');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeEnabled();
   let dropped = false, failedRefresh = false, confirmations = 0;
@@ -503,13 +509,14 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(reasoning.first()).toContainText('先核对已有基础。再区分目标与时间。最后整理需求。');
   await reasoning.last().getByRole('button').click();
   await expect(reasoning.last()).toContainText('工具已返回。核对学习时间与目标。');
-  await expect(page.getByRole('table')).toContainText('每周两次');
+  await expect(page.getByTestId('run-content').getByRole('table')).toContainText('每周两次');
   await expect(page.getByText('我会先整理目标。', { exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '工具调用', exact: true }).click();
   await page.getByRole('button', { name: /submit_requirement_draft.*成功/ }).click();
   await expect(page.getByTestId('tool-call').locator('pre')).toContainText('已有变量基础');
-  await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"schedule": "每周两次"');
+  await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"question": "时间安排？"');
+  await expect(page.getByTestId('tool-call').locator('pre')).toContainText('"answer": "每周两次"');
   await expect(page.getByTestId('tool-call').getByText('参数', { exact: true })).toHaveCount(0);
   await page.getByTestId('tool-call').screenshot({ path: `.amp/in/artifacts/tool-arguments-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.locator('button button')).toHaveCount(0);
@@ -607,9 +614,9 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   await page.clock.install();
   const goal = `学习路线 ${info.project.name}`;
   await create(page, goal);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-STREAM-ERROR');
+  await page.getByLabel('回答 4', { exact: true }).fill('PLAN-STREAM-ERROR');
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   const group = page.getByTestId('tool-call-group');
@@ -672,10 +679,12 @@ test('a silent event connection recovers the terminal state by polling every dur
   await page.clock.install();
   const goal = `断线恢复 ${info.project.name}`;
   await create(page, goal);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '修改', exact: true }).click();
-  await page.getByLabel('时间安排', { exact: true }).fill('PLAN-STREAM-ERROR');
+  await page.getByLabel('回答 4', { exact: true }).fill('PLAN-STREAM-ERROR');
   await page.getByRole('button', { name: '保存', exact: true }).click();
+  // Keep the client polling timer frozen while the real server finishes the run.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   // Simulate an intermediary holding SSE open forever, while normal HTTP works.
   await page.evaluate(() => {
     const original = window.fetch;
@@ -722,7 +731,7 @@ async function workspace(page: Page, name: string) {
 test('local proposals require confirmation, recover pending cards and return real execution to their session', async ({ page }, info) => {
   test.setTimeout(60000);
   await create(page, `确认本机操作 ${info.project.name}`);
-  await expect(page.locator('dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
@@ -777,7 +786,7 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   test.setTimeout(90000);
   const name = `真实代码测评 ${info.project.name}`;
   await create(page, name);
-  await expect(page.locator('dd').filter({ hasText: /^真实代码测评$/ })).toBeVisible();
+  await expect(page.locator('td, dd').filter({ hasText: /^真实代码测评$/ })).toBeVisible();
   await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();

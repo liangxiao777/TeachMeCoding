@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import Database from 'better-sqlite3';
 import { createSessionSchema, routeContentSchema, saveRequirementSchema } from '@teach-me-coding/contracts';
-import { openDatabase } from './database.js';
+import { migrate, migrations, openDatabase } from './database.js';
 
 test('schema enforces cross-space ownership and atomically rolls back incomplete routes', () => {
   const db = openDatabase(':memory:');
@@ -34,4 +35,61 @@ test('public request schemas reject invalid scopes, absent fields and leaked int
   assert.equal(saveRequirementSchema.safeParse({ revision: 0, confirmed: false, value: { goal: 'x' } }).success, false);
   assert.equal(routeContentSchema.safeParse({ note: '', stages: [], piState: {} }).success, false);
   assert.equal(createSessionSchema.safeParse({ scope: 'intake', unitId: null, title: '需求' }).success, true);
+});
+
+test('migration 11 preserves each frozen baseline and document pin while moving old technical metadata into plain answers', () => {
+  const db = new Database(':memory:'); db.pragma('foreign_keys = ON');
+  migrate(db, migrations.slice(0, 10));
+  const space = randomUUID(), session = randomUUID(), run = randomUUID(), task = randomUUID(), document = randomUUID();
+  const researchRef = { id: document, revision: 2 };
+  const target = { kind: 'technology', name: 'Cedar <边界>', version: '4.7.2', scope: '  分块解析\r\n' };
+  const intake = { target, researchRef };
+  const current = { goal: '现在想整理账本', background: '', outcome: '保留损坏记录', schedule: '周五 50 分钟' };
+  const original = { revision: 3, confirmed: false, value: { goal: '  原来想写解析器\r\n', background: '会循环', outcome: '', schedule: '' }, intake };
+  const research = { id: document, revision: 2, target, content: '\r\n# 旧调研\r\n\r\n资料正文原样保留。\r\n', hash: 'existing-hash', runId: run, createdAt: 71 };
+  const frozen = { requirement: original, route: { revision: 2, intake, content: null }, research,
+    submitted: { text: '原问题不能变', quote: null }, references: [{ source: 'code', label: 'sample.ts', text: 'const a = 17;' }] };
+  try {
+    db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(space, '旧内容', 19);
+    db.prepare('INSERT INTO requirements VALUES (?,8,1,?,?)').run(space, JSON.stringify(current), JSON.stringify(intake));
+    db.prepare('INSERT INTO routes VALUES (?,2,NULL,?)').run(space, JSON.stringify(intake));
+    db.prepare("INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,'intake','旧会话')").run(space, session);
+    db.prepare("INSERT INTO runs VALUES (?,?,NULL,?,'intake','failed')").run(space, run, session);
+    db.prepare('INSERT INTO agent_runs VALUES (?,?,?,NULL,0,23)').run(space, run, JSON.stringify(frozen));
+    db.prepare("INSERT INTO tasks VALUES (?,?,NULL,NULL,'lesson','failed')").run(space, task);
+    db.prepare('INSERT INTO task_runs VALUES (?,?,?,NULL,0,29)').run(space, task, JSON.stringify(frozen));
+    db.prepare('INSERT INTO research_dossiers VALUES (?,?,?,?,?)').run(space, document, 2, run, JSON.stringify(research));
+    for (const [id, value] of [['empty', { goal: '', background: '', outcome: '', schedule: '' }], ['new', { rows: [{ question: '新的问题', answer: '新的内容' }] }]] as const) {
+      db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(id, id, 31);
+      db.prepare('INSERT INTO requirements VALUES (?,0,0,?,NULL)').run(id, JSON.stringify(value));
+    }
+    migrate(db);
+    const read = (table: string, id: string, column: string) => JSON.parse((db.prepare(`SELECT ${column} AS value FROM ${table} WHERE ${table === 'requirements' || table === 'routes' ? 'space_id' : 'id'}=?`).get(id) as { value: string }).value);
+    assert.equal(db.pragma('user_version', { simple: true }), 11);
+    assert.deepEqual(read('requirements', space, 'value'), { rows: [
+      { question: '学习目标', answer: '现在想整理账本' }, { question: '期望达成', answer: '保留损坏记录' },
+      { question: '时间安排', answer: '周五 50 分钟' }, { question: '学习对象', answer: 'Cedar <边界>' },
+      { question: '适用版本', answer: '4.7.2' }, { question: '学习范围', answer: '  分块解析\r\n' },
+    ] });
+    const rows = [
+      { question: '学习目标', answer: '  原来想写解析器\r\n' }, { question: '已有基础', answer: '会循环' },
+      { question: '学习对象', answer: 'Cedar <边界>' }, { question: '适用版本', answer: '4.7.2' },
+      { question: '学习范围', answer: '  分块解析\r\n' },
+    ];
+    const { target: _target, ...documentValue } = research;
+    for (const [table, id] of [['agent_runs', run], ['task_runs', task]]) assert.deepEqual(read(table!, id!, 'input'), {
+      ...frozen, requirement: { ...original, value: { rows }, intake: { researchRef } },
+      route: { ...frozen.route, intake: { researchRef } }, research: documentValue,
+    });
+    assert.deepEqual(read('research_dossiers', document, 'value'), documentValue);
+    assert.deepEqual(read('requirements', 'empty', 'value'), { rows: [] });
+    assert.deepEqual(read('requirements', 'new', 'value'), { rows: [{ question: '新的问题', answer: '新的内容' }] });
+    assert.deepEqual(read('requirements', space, 'intake'), { researchRef });
+    assert.deepEqual(read('routes', space, 'intake'), { researchRef });
+    assert.deepEqual(db.prepare('SELECT revision,confirmed FROM requirements WHERE space_id=?').get(space), { revision: 8, confirmed: 1 });
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+    const before = db.prepare('SELECT * FROM agent_runs').all();
+    migrate(db);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_runs').all(), before);
+  } finally { db.close(); }
 });

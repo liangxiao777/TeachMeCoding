@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { intakeMetadataSchema, questionAnswerSchema, questionInputSchema, researchInputSchema,
-  type IntakeMetadata, type IntakeReadiness, type LearningTarget, type QuestionRound, type RequirementState, type ResearchDossier, type ResearchRef } from '@teach-me-coding/contracts';
+  type IntakeMetadata, type IntakeReadiness, type QuestionRound, type RequirementState, type ResearchDossier, type ResearchRef } from '@teach-me-coding/contracts';
 import { BusinessError } from './learning.js';
 
 export class Intake {
@@ -20,9 +20,9 @@ export class Intake {
       .get(space, previous.id) as { revision: number };
     return { id: previous.id, revision: row.revision + 1 };
   }
-  prepareResearch(ref: ResearchRef, runId: string | null, target: LearningTarget, raw: unknown): ResearchDossier {
+  prepareResearch(ref: ResearchRef, runId: string | null, raw: unknown): ResearchDossier {
     const value = researchInputSchema.parse(raw);
-    return { ...value, target, ...ref, runId, createdAt: Date.now(),
+    return { ...value, ...ref, runId, createdAt: Date.now(),
       hash: createHash('sha256').update(value.content).digest('hex') };
   }
   saveResearch(space: string, value: ResearchDossier) {
@@ -30,20 +30,12 @@ export class Intake {
   }
   validateMetadata(space: string, value: IntakeMetadata) {
     intakeMetadataSchema.parse(value);
-    if (value.researchRef) {
-      const dossier = this.research(space, value.researchRef);
-      if (JSON.stringify(dossier.target) !== JSON.stringify(value.target)) throw new BusinessError(422, '调研资料与当前技术、版本或学习范围不相容。');
-    }
+    if (value.researchRef) this.research(space, value.researchRef);
   }
   readiness(space: string, requirement: RequirementState, checkQuestions = true): IntakeReadiness {
     const reasons: string[] = [];
-    if (!requirement.value.goal.trim()) reasons.push('请先明确学习目标。');
-    const metadata = requirement.intake;
-    if (!metadata) reasons.push('请先明确学习对象和范围；技术课程还需核实适用版本。');
-    else {
-      this.validateMetadata(space, metadata);
-      if (metadata.target.kind === 'technology' && !metadata.researchRef) reasons.push('请先整理这项技术的调研资料。');
-    }
+    if (!requirement.value.rows.some((row) => row.question.trim() && row.answer.trim())) reasons.push('请先整理学习需求。');
+    if (requirement.intake) this.validateMetadata(space, requirement.intake);
     if (checkQuestions && this.db.prepare("SELECT 1 FROM intake_questions WHERE space_id=? AND json_extract(value,'$.state')='pending'").get(space)) {
       reasons.push('请回答待确认问题，或修改需求后重新核对。');
     }

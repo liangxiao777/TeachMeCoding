@@ -105,9 +105,6 @@ export class TeachingRuntime {
       if (!w.requirement.confirmed || revision !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
       if (input.kind === 'lesson') {
         this.learning.intake.assertReady(space, { ...w.requirement, intake: w.route.intake }, false);
-        if (JSON.stringify(w.route.intake?.target) !== JSON.stringify(w.requirement.intake?.target)) {
-          throw new BusinessError(422, '学习对象已改变，请先确认调整后的路线再生成课件。');
-        }
       }
       if (input.kind !== 'lesson' && !u.lesson) throw new BusinessError(422, '请先生成课件。');
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, unit, input.kind)) throw new BusinessError(409, '当前单元已有相同生成任务。');

@@ -61,7 +61,7 @@ export class Learning {
     return this.db.transaction(() => {
       const id = randomUUID();
       this.db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(id, v.name, Date.now());
-      this.db.prepare('INSERT INTO requirements(space_id,value) VALUES (?,?)').run(id, JSON.stringify({ goal: '', background: '', outcome: '', schedule: '' }));
+      this.db.prepare('INSERT INTO requirements(space_id,value) VALUES (?,?)').run(id, JSON.stringify({ rows: [] }));
       this.db.prepare('INSERT INTO routes(space_id) VALUES (?)').run(id);
       for (const scope of ['intake', 'route']) {
         this.db.prepare('INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,?,?)').run(id, randomUUID(), scope, scope === 'intake' ? '学习需求' : '学习路线');
@@ -81,8 +81,7 @@ export class Learning {
     return this.db.transaction(() => {
       const current = this.space(space).requirement;
       if (current.revision !== v.revision) throw conflict();
-      const changedScope = v.value.goal !== current.value.goal || v.value.outcome !== current.value.outcome;
-      const intake = v.intake === undefined ? changedScope ? null : current.intake : v.intake;
+      const intake = v.intake === undefined ? current.intake : v.intake;
       if (intake) this.intake.validateMetadata(space, intake);
       if (v.confirmed) this.intake.assertReady(space, { ...v, intake });
       this.db.prepare('UPDATE requirements SET value=?,intake=?,confirmed=?,revision=revision+1 WHERE space_id=? AND revision=?')
@@ -98,7 +97,7 @@ export class Learning {
       const intake = workspace.requirement.intake;
       if (!intake?.researchRef || intake.researchRef.id !== ref.id || intake.researchRef.revision !== ref.revision) throw conflict();
       if (previous.content === value.content) return { document: previous, workspace };
-      const document = this.intake.prepareResearch(this.intake.nextResearch(space, ref), null, previous.target, value);
+      const document = this.intake.prepareResearch(this.intake.nextResearch(space, ref), null, value);
       this.intake.saveResearch(space, document);
       this.saveRequirement(space, { ...workspace.requirement, confirmed: false,
         intake: { ...intake, researchRef: { id: document.id, revision: document.revision } } });

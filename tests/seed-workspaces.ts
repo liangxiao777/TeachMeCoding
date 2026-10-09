@@ -10,7 +10,7 @@ export function seedWorkspaces(root: string) {
   const db = openDatabase(join(root, 'app.db')); const learning = new Learning(db);
   try {
     const space = learning.create({ name: '存储验收 Rust', goal: '写一个自己的命令行工具' });
-    learning.saveRequirement(space.id, { ...space.requirement, value: { ...space.requirement.value, goal: '写一个自己的命令行工具' }, intake: conceptIntake, confirmed: true });
+    learning.saveRequirement(space.id, { ...space.requirement, value: { rows: [{ question: '想完成什么？', answer: '写一个自己的命令行工具' }] }, intake: conceptIntake, confirmed: true });
     const units = ['所有权与借用', '错误处理'].map((title) => ({ id: randomUUID(), title, summary: '持久化验收材料，不来自模型', goals: ['保存学习记录'] }));
     const content = { note: '验收数据：两个独立单元。', stages: [{ id: randomUUID(), title: '语言基础', units }] };
     const route = space.sessions.find((s) => s.scope === 'route')!.id;

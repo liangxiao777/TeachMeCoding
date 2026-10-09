@@ -1,12 +1,14 @@
 'use client'
 
 import { Hash } from 'lucide-react'
+import { useMemo } from 'react'
 import { ProjectTree } from '@/components/workbench/project-tree'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { findUnit, relativeTime } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
+import { lessonHeadings } from '@/lib/lesson-markdown'
 import { cn } from '@/lib/utils'
 
 function RailEmpty({ children }: { children: React.ReactNode }) {
@@ -25,7 +27,9 @@ export function LeftRail() {
   const { viewRecord, lesson: getLesson, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
   const lesson = unit && unit.contentState === 'ready' ? getLesson(unit) : null
-  const headings = lesson?.blocks.flatMap((b) => (b.type === 'h2' ? [b] : [])) ?? []
+  const content = lesson?.content, blocks = content === undefined ? lesson?.blocks : undefined
+  const headings = useMemo(() => content !== undefined ? lessonHeadings(content)
+    : blocks?.flatMap((b) => (b.type === 'h2' ? [b] : [])) ?? [], [content, blocks])
   const records = [...space.records].reverse()
 
   return (
