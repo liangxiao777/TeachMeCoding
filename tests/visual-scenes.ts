@@ -21,6 +21,11 @@ export async function visualScenes(page: Page, source: 'preview' | 'prototype', 
   }
   async function shot(name: string) {
     await page.evaluate(() => document.fonts.ready);
+    if (source === 'preview') {
+      const editor = page.locator('.cm-content'), snippet = page.locator('.lesson-prose pre').first();
+      if (await editor.count()) await expect.poll(() => editor.evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBeGreaterThan(2);
+      if (await snippet.count()) await expect(snippet).toHaveClass(/shiki/);
+    }
     await page.mouse.move(1439, 999);
     await capture(name);
   }

@@ -12,9 +12,11 @@ import {
   SquareTerminal,
   Target,
 } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { bundledLanguages, createHighlighter, type BundledLanguage, type ThemedToken } from 'shiki'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createHighlighterCore } from 'shiki/core'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+import { bundledLanguages, type BundledLanguage } from 'shiki/langs'
+import { bundledThemes } from 'shiki/themes'
 import type { ExtraProps } from 'streamdown'
 import { Generating, InlineText, RichText, StatusPill } from '@/components/shared'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -27,26 +29,27 @@ import { useApp, useSpace } from '@/app/context'
 import { lessonAllowedTags, lessonHeadingId, lessonRemarkPlugins } from '@/lib/lesson-markdown'
 
 const scrollMemory = new Map<string, number>()
-let lessonHighlighter: ReturnType<typeof createHighlighter> | undefined
+const lessonHighlighter = createHighlighterCore({
+  themes: [bundledThemes['github-dark']], langs: [], engine: createJavaScriptRegexEngine(),
+})
 
 function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> }) {
   const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
-  const [highlighted, setHighlighted] = useState<{ code: string; language: string; tokens: ThemedToken[][] } | null>(null)
+  const [highlighted, setHighlighted] = useState<{ code: string; language: string; html: string } | null>(null)
   useEffect(() => {
-    let cancelled = false
-    const lang = Object.hasOwn(bundledLanguages, block.language) ? block.language as BundledLanguage : 'text'
-    // Native regex highlighting also works under the production CSP, without
-    // permitting WebAssembly compilation or unsafe script evaluation.
-    lessonHighlighter ??= createHighlighter({ langs: [], themes: ['github-dark'], engine: createJavaScriptRegexEngine() })
-    void lessonHighlighter.then(async (highlighter) => {
-      if (lang !== 'text') await highlighter.loadLanguage(lang)
-      const { tokens } = highlighter.codeToTokens(block.code, { lang, theme: 'github-dark' })
-      if (!cancelled) setHighlighted({ code: block.code, language: block.language, tokens })
-    }).catch(() => { /* A failed highlighter does not hide the original code. */ })
-    return () => { cancelled = true }
+    let active = true
+    const language = block.language.toLowerCase() as BundledLanguage
+    lessonHighlighter.then(async (highlighter) => {
+      const lang = Object.hasOwn(bundledLanguages, language) ? language : 'text'
+      if (lang !== 'text') await highlighter.loadLanguage(bundledLanguages[lang])
+      return highlighter.codeToHtml(block.code, { lang, theme: 'github-dark' })
+    })
+      .then((html) => { if (active) setHighlighted({ code: block.code, language: block.language, html }) })
+      .catch(() => { /* Preserve the raw snippet if highlighting cannot load. */ })
+    return () => { active = false }
   }, [block.code, block.language])
-  const tokens = highlighted?.code === block.code && highlighted.language === block.language ? highlighted.tokens : null
+  const html = highlighted?.code === block.code && highlighted.language === block.language ? highlighted.html : null
   return (
     <figure className="flex flex-col overflow-hidden rounded-xl bg-ide text-ide-foreground shadow-sm ring-1 ring-foreground/10">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
@@ -78,11 +81,8 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
           </Button>
         </div>
       </div>
-      <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{tokens ? tokens.map((line, index) => (
-        <Fragment key={index}>{line.map((token, i) => <span key={i} style={{ color: token.color }}>{token.content}</span>)}
-          {index < tokens.length - 1 ? '\n' : null}
-        </Fragment>
-      )) : block.code}</pre>
+      {html ? <div className="[&_pre]:overflow-x-auto [&_pre]:!bg-transparent [&_pre]:p-4 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: html }} /> : <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{block.code}</pre>}
       {block.caption && (
         <figcaption className="border-t border-white/10 px-4 py-2 text-xs leading-relaxed opacity-70">{block.caption}</figcaption>
       )}

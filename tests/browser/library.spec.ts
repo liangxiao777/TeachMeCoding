@@ -126,7 +126,7 @@ test('library round trips retain unsaved editor, composer, fullscreen and the sa
     await expect(editor).toBeHidden();
     await expect(page).toHaveURL(/\/library\?space=.*tab=unit/);
     await page.getByRole('region', { name: '资料库', exact: true }).getByRole('button', { name: '返回学习', exact: true }).click();
-    await expect(editor).toHaveValue('// unsaved library navigation');
+    await expect(editor).toHaveText('// unsaved library navigation', { useInnerText: true });
     await expect(composer).toHaveValue('尚未发送的资料问题');
     await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
     await expect(page).toHaveURL(url);

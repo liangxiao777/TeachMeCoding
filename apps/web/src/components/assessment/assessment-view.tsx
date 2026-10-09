@@ -179,7 +179,7 @@ export function AssessmentView() {
                       运行
                     </Button>
                   </div>
-                  <CodeEditor className="h-64" label={spec ? `编辑 ${spec.q2.file}` : '代码答案草稿'} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
+                  <CodeEditor className="h-64" label={spec ? `编辑 ${spec.q2.file}` : '代码答案草稿'} filename={spec?.q2.file} language={spec?.execution?.language ?? (space.kind === 'pytorch' ? 'python' : 'rust')} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
                   <div className="min-h-16 border-t px-3 py-2 font-mono text-xs leading-5" aria-live="polite">
                     {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{execution ? '固定代码的执行结果见下方。' : canRun ? '运行后在这里查看输出' : '代码运行暂不可用，不会执行模拟运行。'}</p>}
                   </div>

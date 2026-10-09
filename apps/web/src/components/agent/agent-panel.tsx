@@ -340,7 +340,7 @@ export function AgentPanel() {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: reducedMotion || space.view !== 'route' ? 0 : uiMotion.panel }}
-      className="flex w-96 shrink-0 flex-col border-l bg-sidebar"
+      className="flex h-full min-w-0 flex-1 flex-col border-l bg-sidebar"
     >
       <div className="flex h-12 shrink-0 items-center gap-1 border-b px-2">
         <div className="min-w-0 flex-1">

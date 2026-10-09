@@ -1,7 +1,8 @@
 'use client'
 
-import { Activity, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion, MotionConfig, useReducedMotion } from 'motion/react'
+import { Activity, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { AnimatePresence, MotionConfig, useReducedMotion } from 'motion/react'
+import { usePanelRef } from 'react-resizable-panels'
 import { AgentPanel } from '@/components/agent/agent-panel'
 import { AssessmentView } from '@/components/assessment/assessment-view'
 import { ResultView } from '@/components/assessment/result-view'
@@ -13,37 +14,71 @@ import { SpaceList } from '@/components/space-list'
 import { TopBar } from '@/components/top-bar'
 import { Workbench } from '@/components/workbench/workbench'
 import { Button } from '@/components/ui/button'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useApp } from '@/app/context'
 import { uiMotion, uiMotionVariables } from '@/lib/motion'
 
+const agentWidths = new Map<string, number>()
+
 function SpaceBody() {
   const { current } = useApp()
   const reducedMotion = useReducedMotion()
+  const group = useRef<HTMLDivElement>(null)
+  const agent = usePanelRef()
+  const agentWidth = useRef(agentWidths.get(current?.id ?? '') ?? 384)
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => agent.current?.resize(`${current?.agentOpen ? agentWidth.current : 0}px`))
+    return () => cancelAnimationFrame(frame)
+  }, [current?.agentOpen, current?.view, agent])
   if (!current) return null
   if (current.view === 'onboarding' || current.view === 'planning') return <Onboarding />
+  const transition = { transition: `flex-grow ${reducedMotion || current.view !== 'route' ? 0 : uiMotion.panel}s var(--ui-motion-ease)` }
 
   return (
     <div className={`flex h-dvh min-w-[1100px] flex-col ${current.ideFullscreen && current.view === 'unit' ? 'dark bg-background text-foreground' : ''}`}>
       <TopBar />
-      <div className="flex min-h-0 flex-1">
-        <main className="flex min-w-0 flex-1 flex-col">
-          {current.view === 'route' && <RouteView />}
-          {current.view === 'unit' && <Workbench />}
-          {current.view === 'assessment' && <AssessmentView />}
-          {current.view === 'result' && <ResultView />}
-        </main>
-        <motion.div
-          initial={false}
-          animate={{ width: current.agentOpen ? '24rem' : '0rem' }}
-          transition={{ duration: reducedMotion || current.view !== 'route' ? 0 : uiMotion.panel }}
-          className="flex min-h-0 shrink-0 overflow-hidden"
+      <ResizablePanelGroup
+        orientation="horizontal"
+        elementRef={group}
+        style={transition}
+        className="min-h-0 flex-1 [&>[data-panel]]:[transition:inherit] [&:has(>[data-separator=active])>[data-panel]]:transition-none! [&:has(>[data-separator]:focus-visible)>[data-panel]]:transition-none!"
+        onLayoutChanged={(layout, meta) => {
+          if (meta.isUserInteraction && current.agentOpen) {
+            // Keyboard callbacks can run before the DOM reflects the new width.
+            agentWidth.current = group.current!.clientWidth * layout.agent! / 100
+            agentWidths.set(current.id, agentWidth.current)
+          }
+        }}
+      >
+        <ResizablePanel id="learning" minSize="640px">
+          <main className="flex h-full min-h-0 min-w-0 flex-col">
+            {current.view === 'route' && <RouteView />}
+            {current.view === 'unit' && <Workbench />}
+            {current.view === 'assessment' && <AssessmentView />}
+            {current.view === 'result' && <ResultView />}
+          </main>
+        </ResizablePanel>
+        <ResizableHandle
+          aria-label="调整聊天面板宽度"
+          disabled={!current.agentOpen}
+          className={current.agentOpen ? 'z-10 w-0! after:w-2 hover:after:bg-primary/15 data-[separator=active]:after:bg-primary/25' : 'hidden'}
+        />
+        <ResizablePanel
+          id="agent"
+          panelRef={agent}
+          defaultSize="384px"
+          minSize={current.agentOpen ? '320px' : 0}
+          maxSize={current.agentOpen ? '50%' : 0}
+          groupResizeBehavior="preserve-pixel-size"
         >
-          <AnimatePresence initial={false}>
-            {current.agentOpen && <AgentPanel />}
-          </AnimatePresence>
-        </motion.div>
-      </div>
+          <div className="flex h-full min-h-0 overflow-hidden">
+            <AnimatePresence initial={false}>
+              {current.agentOpen && <AgentPanel />}
+            </AnimatePresence>
+          </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   )
 }
