@@ -206,9 +206,10 @@ function Chat() {
   }
   return (
     <div className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-1 flex-col lg:h-auto lg:min-h-0">
-      {persistence && <div className="flex h-12 shrink-0 items-center border-b"><SessionMenu /></div>}
+      {persistence && <div className="flex h-12 shrink-0 items-center border-b px-4 sm:px-6"><SessionMenu /></div>}
       <Conversation key={session?.id ?? space.id} className="min-h-0" initial="instant" resize="instant" aria-label="学习需求会话">
-        <ConversationContent className="gap-6 px-0 py-8">
+        <ConversationContent className="gap-6 px-4 py-8 sm:px-6"
+          scrollClassName="[scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {(!persistence || messages.length === 0) && <Message from="assistant">
             <MessageContent>
               {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
@@ -232,10 +233,10 @@ function Chat() {
             </div>
           )}
         </ConversationContent>
-        <ConversationScrollButton aria-label="滚动到最新消息" />
+        <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label="滚动到最新消息" />
       </Conversation>
 
-      <div className="flex flex-col gap-3 pb-6">
+      <div className="flex shrink-0 flex-col gap-3 px-4 pt-4 pb-6 sm:px-6">
         <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send(text, true)}>
             <label htmlFor="ob-input" className="sr-only">
               回复 Agent
@@ -312,7 +313,7 @@ export function Onboarding() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
       <header className="shrink-0 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
           <Button variant="ghost" size="sm" onClick={goSpaces}>
             <ArrowLeft data-icon="inline-start" />
             全部学习空间
@@ -335,9 +336,9 @@ export function Onboarding() {
           <ThemeToggle />
         </div>
       </header>
-      <div className="mx-auto grid min-h-0 w-full max-w-6xl flex-1 grid-cols-1 gap-6 overflow-y-auto px-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-10 lg:overflow-visible lg:px-6">
+      <div className="mx-auto grid min-h-0 w-full max-w-7xl flex-1 grid-cols-1 gap-6 overflow-y-auto px-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-10 lg:overflow-visible lg:px-6">
         <Chat />
-        <aside className="flex min-w-0 flex-col pb-8 lg:-mx-8 lg:overflow-y-auto lg:px-8 lg:py-8">
+        <aside className="flex min-w-0 flex-col pb-8 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] lg:-mx-8 lg:overflow-y-auto lg:px-8 lg:py-8">
           <div className="relative isolate shrink-0">
             <div aria-hidden className="pointer-events-none absolute -inset-x-8 -inset-y-16 -z-10 bg-radial from-foreground/8 via-foreground/3 to-transparent to-70%" />
             <RequirementCard />

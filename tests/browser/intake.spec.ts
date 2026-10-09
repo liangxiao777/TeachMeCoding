@@ -172,6 +172,16 @@ test('options/custom answers survive a lost receipt, preserve the composer, and 
   await history.getByRole('button', { name: '下一个', exact: true }).click();
   await expect(history.getByText('已选：离线命令行工具', { exact: true })).toHaveCount(0);
   await expect(history.getByText('其他（自定义）：希望对比中文、英文与损坏记录 <保留 & 原文>', { exact: true })).toBeVisible();
+  const layout = await history.evaluate((card) => {
+    const conversation = card.closest('[role="log"]')!.getBoundingClientRect();
+    const question = card.getBoundingClientRect();
+    const composer = document.getElementById('ob-input')!.closest('form')!.getBoundingClientRect();
+    return { questionWidth: question.width, scrollSpacing: conversation.right - question.right,
+      composerSpacing: composer.top - conversation.bottom };
+  });
+  expect(layout.questionWidth).toBeGreaterThanOrEqual(700);
+  expect(layout.scrollSpacing).toBeGreaterThanOrEqual(24);
+  expect(layout.composerSpacing).toBeGreaterThanOrEqual(16);
   await shot(page, info, 'answered');
   const ref = saved.requirement.intake!.researchRef!;
   expect(ref.revision).toBe(1);
