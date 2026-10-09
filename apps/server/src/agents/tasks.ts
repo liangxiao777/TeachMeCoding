@@ -9,10 +9,13 @@ export const baseline = (input: FrozenContext) => ({ requirement: input.requirem
 export function createTask(learning: Learning, input: FrozenContext): ScenarioRun {
   if (input.scenario === 'assessment') {
     let artifact: ReturnType<typeof assessmentArtifactSchema.parse> | undefined;
-    return { tools: [{ name: 'submit_assessment', label: '生成测评题目', description: 'Submit public questions separately from private grading rubric. Never expose private answers in public fields.',
-      parameters: Type.Unsafe<ReturnType<typeof assessmentArtifactSchema.parse>>(JSON.parse(JSON.stringify(assessmentArtifactSchema.toJSONSchema()))),
+    return { tools: [{ name: 'submit_assessment', label: '生成测评题目', description: 'Submit public questions separately from private grading rubric. Never expose private answers in public fields. Omitted starter defaults to an empty string; omitted q2Kind defaults to code. Code questions require public.execution with a supported language and public test cases; reasoning questions do not.',
+      parameters: Type.Unsafe<ReturnType<typeof assessmentArtifactSchema.parse>>(JSON.parse(JSON.stringify(assessmentArtifactSchema.toJSONSchema({ io: 'input' })))),
       async execute(_id, args) {
-        artifact = assessmentArtifactSchema.parse(args);
+        const submitted = assessmentArtifactSchema.parse(args);
+        if (submitted.public.q2Kind === 'code' && !submitted.public.execution) throw new BusinessError(422,
+          '代码题必须提供 public.execution（支持的 language 和公开 cases）。请补充执行方案；纯分析题请将 q2Kind 设为 reasoning，无需执行方案。');
+        artifact = submitted;
         return { content: [{ type: 'text', text: '题目和私有标准已暂存。' }], details: {} };
       },
     }], commit() {
@@ -22,8 +25,8 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
   }
   if (input.scenario === 'evaluation') {
     let artifact: ReturnType<typeof evaluationArtifactSchema.parse> | undefined;
-    return { tools: [{ name: 'submit_evaluation', label: '评估固定作答', description: 'Evaluate the immutable submitted answers against the private rubric. Static reasoning and fixtures never prove executed code correctness.',
-      parameters: Type.Unsafe<ReturnType<typeof evaluationArtifactSchema.parse>>(JSON.parse(JSON.stringify(evaluationArtifactSchema.toJSONSchema()))),
+    return { tools: [{ name: 'submit_evaluation', label: '评估固定作答', description: 'Evaluate the immutable submitted answers against the private rubric. Omitted mastered, concerns, evidence and toVerify arrays default to empty arrays. Static reasoning and fixtures never prove executed code correctness.',
+      parameters: Type.Unsafe<ReturnType<typeof evaluationArtifactSchema.parse>>(JSON.parse(JSON.stringify(evaluationArtifactSchema.toJSONSchema({ io: 'input' })))),
       async execute(_id, args) {
         artifact = evaluationArtifactSchema.parse(args);
         return { content: [{ type: 'text', text: '评估已暂存。' }], details: {} };

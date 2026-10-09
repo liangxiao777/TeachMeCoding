@@ -218,13 +218,16 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByText('学习结论 · 待采纳', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
   await expect(page.getByText('解释命令行参数来自哪里', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '运行', exact: true })).toBeEnabled();
   await page.getByLabel('你的回答', { exact: true }).fill('固定提交：由程序的调用者传入');
   await page.getByRole('button', { name: '载入起始代码', exact: true }).click();
   await expect(page.getByLabel('编辑 代码答案', { exact: true })).toHaveValue('import sys\n');
   await page.getByLabel('编辑 代码答案', { exact: true }).fill('print(2)');
+  const submitted = page.waitForRequest((request) => request.method() === 'POST' && /\/units\/[^/]+\/tasks$/.test(request.url())
+    && request.postDataJSON().kind === 'evaluation');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('正在评估固定提交；你可以继续编辑新草稿。代码不会执行。', { exact: true })).toBeVisible();
+  expect((await submitted).postDataJSON().execute).toBe(true);
+  await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
   // Hold the terminal refresh at an older saved revision while the user saves a new draft.
   let captured = false, release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -241,18 +244,54 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
     await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
     await page.screenshot({ path: `.amp/in/artifacts/teaching-evaluating-${info.project.name}.png`, animations: 'disabled' });
   } finally { release(); }
-  await expect(page.getByText('本次代码检查未完成', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('有 1 项检查的输出与题目要求不一致。', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('固定提交：由程序的调用者传入', { exact: true })).toBeVisible();
   await expect(page.getByText('本次做对的地方', { exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 1200 });
-  await page.screenshot({ path: `.amp/in/artifacts/teaching-unverified-${info.project.name}.png`, animations: 'disabled' });
+  await page.screenshot({ path: `.amp/in/artifacts/teaching-code-mismatch-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
   await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
   await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
   await expect(page.getByText('单元测评 · 第 2 次', { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue('评估期间的新草稿');
+});
+
+test('long Markdown questions and omitted grading arrays remain usable after save and reload', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
+  await create(page, `轻量测评验收 ${info.project.name}`);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '长题干验收', exact: true })).toBeVisible();
+  await expect(page.getByText('解释空输入的处理', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '载入起始代码', exact: true })).toHaveCount(0);
+  const readUnit = () => page.evaluate(async () => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const query = new URL(location.href).searchParams;
+    return (await fetch(`/api/spaces/${query.get('space')}/units/${query.get('unit')}`, { headers: { 'X-TMC-Token': token } })).json();
+  });
+  const unit = await readUnit();
+  expect(unit.assessment.q1.length).toBeGreaterThan(200);
+  expect(unit.assessment.q1).toMatch(/^  ## 长题干验收\n/);
+  expect(unit.assessment.starter).toBe(''); expect(unit.assessment.execution).toBeUndefined();
+  await page.screenshot({ path: `.amp/in/artifacts/minor-assessment-long-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByLabel('你的回答', { exact: true }).fill('由调用者传入。');
+  await page.getByLabel('分析题回答', { exact: true }).fill('零个输入和两个输入不同。');
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('请补充不同输入下的解释。', { exact: true })).toBeVisible({ timeout: 15000 });
+  const record = (await readUnit()).records[0];
+  expect(record.result).toBe('needs_work'); expect(record.valid).toBe(true);
+  expect(record.verification).toBe('non-execution');
+  for (const key of ['mastered', 'concerns', 'evidence', 'toVerify']) expect(record[key]).toEqual([]);
+  await page.reload();
+  await expect(page.getByText('请补充不同输入下的解释。', { exact: true })).toBeVisible();
+  await expect(page.getByText('补充反馈', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/minor-assessment-minimal-result-${info.project.name}.png`, animations: 'disabled' });
+  expect(errors).toEqual([]);
 });
 
 test('stream survives page reload and session switching; stop and model failure remain visible', async ({ page }, info) => {

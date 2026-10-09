@@ -47,9 +47,9 @@ export const generationInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.enum(['lesson', 'assessment']), revision: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal('evaluation'), revision: z.number().int().nonnegative(), specRevision: z.number().int().positive(), q1: text, q2: text, execute: z.boolean().optional() }).strict(),
 ]);
-export const assessmentSpecSchema = z.object({ q1: title, q2: text, starter: text, q2Kind: z.enum(['code', 'reasoning']).default('code'), execution: codePlanSchema.optional() }).strict();
+export const assessmentSpecSchema = z.object({ q1: text.min(1).refine((value) => value.trim().length > 0, 'Assessment question must not be blank.'), q2: text, starter: text.default(''), q2Kind: z.enum(['code', 'reasoning']).default('code'), execution: codePlanSchema.optional() }).strict();
 export const assessmentResultSchema = z.object({ result: z.enum(['pass', 'needs_work', 'unverified']), summary: text,
-  mastered: z.array(text).max(100), concerns: z.array(text).max(100), evidence: z.array(text).max(100), toVerify: z.array(text).max(100),
+  mastered: z.array(text).max(100).default([]), concerns: z.array(text).max(100).default([]), evidence: z.array(text).max(100).default([]), toVerify: z.array(text).max(100).default([]),
 }).strict();
 
 export type Quote = z.infer<typeof quoteSchema>;

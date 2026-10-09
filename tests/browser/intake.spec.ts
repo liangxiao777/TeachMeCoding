@@ -45,6 +45,40 @@ async function researched(page: Page, name: string) {
   return { ...opened, saved, ref, dossier };
 }
 
+test('tool errors before or after a valid draft do not fail intake and remain visible after reload', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
+  for (const order of ['先失败', '后失败']) {
+    await page.goto('/');
+    await page.getByLabel('你想学什么', { exact: true }).fill(`工具错误验收 ${order} ${info.project.name}`);
+    await page.getByRole('button', { name: '开始', exact: true }).click();
+    await expect(page.getByText('补充抓取未完成；需求草稿已整理，请核对。', { exact: true })).toBeVisible();
+    const id = new URL(page.url()).searchParams.get('space')!;
+    await expect.poll(async () => (await business<Workspace>(page, `/spaces/${id}`)).value.runs[0]?.state).toBe('succeeded');
+    const saved = (await business<Workspace>(page, `/spaces/${id}`)).value;
+    expect(saved.requirement.value.rows).toEqual([{ question: '想学习什么？', answer: '理解文件读取与错误处理' }]);
+    expect(saved.requirement.revision).toBe(1); expect(saved.requirement.confirmed).toBe(false);
+    await page.reload();
+    await expect(page.getByText('补充抓取未完成；需求草稿已整理，请核对。', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
+    const group = page.getByTestId('tool-call-group');
+    await expect(group).toContainText('2 次调用');
+    await expect(group).toContainText('1 次成功');
+    await expect(group.getByTestId('tool-call-issues')).toContainText('1 次失败');
+    await group.getByRole('button', { name: '工具调用', exact: true }).click();
+    const failed = group.getByTestId('tool-call').filter({ hasText: 'web_fetch' });
+    await failed.getByRole('button').click();
+    await expect(failed.locator('pre')).toContainText('http://127.0.0.1/private');
+    const session = saved.sessions.find((s) => s.scope === 'intake')!.id;
+    const detail = (await business<SessionDetail>(page, `/spaces/${id}/sessions/${session}`)).value;
+    expect(detail.messages.at(-1)?.status).toBe('done');
+    expect(detail.messages.at(-1)?.parts?.filter((part) => part.type === 'tool').map((part) => part.status))
+      .toEqual(order === '先失败' ? ['error', 'done'] : ['done', 'error']);
+    await shot(page, info, order === '先失败' ? 'tool-error-before' : 'tool-error-after');
+  }
+  expect(errors).toEqual([]);
+});
+
 test('options/custom answers survive a lost receipt, preserve the composer, and hand a pinned dossier to planning', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   const { id, session } = await open(page, `答案重试 ${info.project.name}`);

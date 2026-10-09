@@ -20,7 +20,6 @@ export function createRouteTools(current: RouteContent | null): { tools: AgentTo
       description: 'Submit the complete initial learning route in one call. Nest units inside stages; array order is learning order. Include a concise summary of what each unit covers and goals describing what the learner will be able to do when useful. Summary, goals and the planning rationale note are optional. Do not provide IDs or position numbers; the host creates identities and associations. This only stages the route; successful completion saves and displays it.',
       parameters: Type.Unsafe(JSON.parse(JSON.stringify(routeSubmissionSchema.toJSONSchema()))),
       async execute(_id, args) {
-        submitted = undefined;
         const content = routeSubmissionSchema.parse(args);
         submitted = { note: content.note ?? '', stages: content.stages.map((stage) => ({
           id: randomUUID(), title: stage.title, units: stage.units.map((unit) => ({
@@ -112,7 +111,6 @@ export function createRouteTools(current: RouteContent | null): { tools: AgentTo
       }),
     tool('submit_route_proposal', '提交路线调整', 'Submit the assembled adjustment for user confirmation, without repeating the whole route. The planning rationale note is optional. Every stage must contain a unit. Actual content or order changes after submission require resubmission; unchanged updates do not.',
       z.object({ note: routeContentSchema.shape.note.optional() }).strict(), (args) => {
-        submitted = undefined;
         submitted = routeContentSchema.parse({ ...draft, note: args.note ?? '' });
         return { status: 'staged', stages: submitted.stages.length, units: submitted.stages.reduce((n, stage) => n + stage.units.length, 0),
           next: 'Successful completion stages an adjustment for user confirmation.' };

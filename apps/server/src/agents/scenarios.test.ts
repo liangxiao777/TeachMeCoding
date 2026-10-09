@@ -66,7 +66,7 @@ test('opening submission rolls back creation on failure and preserves the messag
   } finally { await runtime.close(); await offline.close(); db.close(); }
 });
 
-test('invalid, truncated and late intake artifacts preserve valid drafts and newer confirmations', async () => {
+test('rejected intake submissions preserve saved drafts, while truncation and version conflicts still prevent publication', async () => {
   for (const variant of ['invalid', 'truncated', 'late'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db);
     const created = learning.create({ name: variant, goal: 'initial request' });
@@ -83,7 +83,7 @@ test('invalid, truncated and late intake artifacts preserve valid drafts and new
     try {
       const { run } = runtime.submit(space.id, session, randomUUID(), { text: 'update', quote: null, draftRevision: 0 });
       await runtime.idle(run.id);
-      assert.equal(runtime.get(space.id, run.id).state, 'failed', variant);
+      assert.equal(runtime.get(space.id, run.id).state, variant === 'invalid' ? 'succeeded' : 'failed', variant);
       const saved = learning.space(space.id).requirement;
       assert.equal(saved.value.rows[0]!.answer, 'keep goal');
       assert.equal(saved.confirmed, variant === 'late');

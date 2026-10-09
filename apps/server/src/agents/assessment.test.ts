@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, type JsonObject } from '@earendil-works/pi-ai';
 import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { Assessments } from '../modules/assessments.js';
@@ -10,6 +10,7 @@ import { populated, reply, response, syntheticSource } from './test-support.js';
 
 const spec = { public: { q1: '解释参数的来源', q2: '读取参数并显示数量', starter: '', q2Kind: 'code' as const },
   rubric: { q1: { answer: 'PRIVATE-RUBRIC-ONE', criteria: ['明确调用者'] }, q2: { answer: 'PRIVATE-RUBRIC-TWO', criteria: ['排除程序名'] } } };
+const execution = { language: 'javascript' as const, cases: [{ args: ['red', 'blue'], expected: '2' }, { args: [], expected: '0' }] };
 const grade = { result: 'pass', summary: '已说明参数来源', mastered: ['参数读取'], concerns: [], evidence: ['回答提到调用者'], toVerify: [] };
 function fixture() {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
@@ -19,6 +20,7 @@ function fixture() {
 
 test('private rubric is separated from public unit, tutor context and task event text; stale generation preserves versions', async () => {
   const { db, l, space, unit } = fixture(); let late = false, tutor = false;
+  const generated = { ...spec, public: { ...spec.public, execution } };
   const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     if (tutor) {
       const value = JSON.stringify(context);
@@ -27,11 +29,11 @@ test('private rubric is separated from public unit, tutor context and task event
       return response(reply([{ type: 'text', text: '先想一想调用者传入什么。' }]));
     }
     if (context.messages.at(-1)?.role !== 'toolResult') {
-      const tool = { type: 'toolCall' as const, id: 'questions', name: 'submit_assessment', arguments: spec };
+      const tool = { type: 'toolCall' as const, id: 'questions', name: 'submit_assessment', arguments: generated };
       const partial = reply([tool], 'toolUse'), stream = createAssistantMessageEventStream();
       stream.push({ type: 'start', partial: reply([], 'pending') });
       stream.push({ type: 'toolcall_start', contentIndex: 0, partial });
-      stream.push({ type: 'toolcall_delta', contentIndex: 0, delta: JSON.stringify(spec), partial });
+      stream.push({ type: 'toolcall_delta', contentIndex: 0, delta: JSON.stringify(generated), partial });
       stream.push({ type: 'toolcall_end', contentIndex: 0, toolCall: tool, partial });
       stream.push({ type: 'done', reason: 'toolUse', message: partial });
       return stream;
@@ -51,7 +53,7 @@ test('private rubric is separated from public unit, tutor context and task event
     assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-SIGNATURE/);
     const publicTools = runtime.events(space.id, run.id).events.flatMap((e) => e.data.type === 'tool' ? [e.data] : []);
     assert.ok(publicTools.every((t) => t.inputDelta === undefined));
-    assert.deepEqual(publicTools.find((t) => t.phase === 'ready')?.input, { public: spec.public });
+    assert.deepEqual(publicTools.find((t) => t.phase === 'ready')?.input, { public: generated.public });
     assert.deepEqual(runtime.events(space.id, run.id).events.flatMap((e) => e.data.type === 'reasoning' ? [e.data.phase] : []), ['start', 'end']);
     assert.match(JSON.stringify(db.prepare('SELECT rubric FROM assessment_versions').all()), /PRIVATE-RUBRIC/);
     tutor = true;
@@ -62,6 +64,115 @@ test('private rubric is separated from public unit, tutor context and task event
     const stale = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 1 });
     await runtime.idle(stale.id); assert.equal(runtime.get(space.id, stale.id).state, 'failed');
     assert.equal(l.unit(space.id, unit).assessment?.revision, 1);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('Pi accepts long Markdown questions and omitted assessment defaults in newly saved public specs', async () => {
+  const { db, l, space, unit } = fixture();
+  const prefix = '  ## 解释参数\r\n\n```js\n  console.log(process.argv)\n```\n\n';
+  const q1 = prefix + '文'.repeat(100_000 - prefix.length - 2) + ' \n';
+  let submission: JsonObject = { public: { q1, q2: '说明零个参数与两个参数的区别', q2Kind: 'reasoning' }, rubric: spec.rubric };
+  const feedback: boolean[] = [];
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
+    const last = context.messages.at(-1);
+    if (last?.role === 'toolResult') {
+      feedback.push(last.isError);
+      return response(reply([]));
+    }
+    return response(reply([{ type: 'toolCall', id: 'questions', name: 'submit_assessment', arguments: submission }], 'toolUse'));
+  } });
+  try {
+    const reasoning = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 0 });
+    await runtime.idle(reasoning.id);
+    assert.equal(runtime.get(space.id, reasoning.id).state, 'succeeded');
+    assert.deepEqual(l.unit(space.id, unit).assessment, { ...submission.public as JsonObject, starter: '', revision: 1 });
+    assert.equal(l.unit(space.id, unit).assessment!.q1, q1);
+    assert.equal(q1.length, 100_000);
+    assert.equal(l.unit(space.id, unit).assessment!.execution, undefined);
+    submission = { public: { q1: spec.public.q1, q2: spec.public.q2, execution }, rubric: spec.rubric };
+    const code = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 1 });
+    await runtime.idle(code.id);
+    assert.equal(runtime.get(space.id, code.id).state, 'succeeded');
+    assert.deepEqual(l.unit(space.id, unit).assessment, { ...submission.public as JsonObject, starter: '', q2Kind: 'code', revision: 2 });
+    assert.deepEqual(feedback, [false, false]);
+    assert.doesNotMatch(JSON.stringify(l.unit(space.id, unit)), /PRIVATE-RUBRIC/);
+    for (const run of [reasoning, code]) assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('Pi feeds invalid assessment submissions back without replacing a successful same-run artifact', async () => {
+  const { db, l, space, unit } = fixture();
+  const valid = { ...spec, public: { ...spec.public, starter: '  // 起始代码\r\n', execution } };
+  const planless = { public: { q1: '不能覆盖原题', q2: spec.public.q2 }, rubric: spec.rubric };
+  const submissions: JsonObject[] = [valid, planless, ...[
+    { q1: {} }, { q1: ' \r\n\t ' }, { q1: 'x'.repeat(100_001) }, { q2: [] }, { starter: {} }, { q2Kind: [] }, { execution: [] },
+  ].map((publicFields) => ({ ...valid, public: { ...valid.public, ...publicFields } }))];
+  const feedback: { failed: boolean; text: string }[] = [];
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
+    const last = context.messages.at(-1);
+    if (last?.role === 'toolResult') feedback.push({ failed: last.isError, text: JSON.stringify(last.content) });
+    const index = context.messages.filter((m) => m.role === 'toolResult').length;
+    return response(index < submissions.length
+      ? reply([{ type: 'toolCall', id: `questions-${index}`, name: 'submit_assessment', arguments: submissions[index]! }], 'toolUse')
+      : reply([]));
+  } });
+  try {
+    const run = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 0 });
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
+    assert.deepEqual(feedback.map((f) => f.failed), submissions.map((_, i) => i > 0));
+    assert.match(feedback[1]!.text, /public\.execution/);
+    assert.match(feedback[1]!.text, /reasoning/);
+    assert.deepEqual(l.unit(space.id, unit).assessment, { ...valid.public, revision: 1 });
+    assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
+    submissions.splice(0, submissions.length, planless); feedback.length = 0;
+    const rejected = runtime.generate(space.id, unit, randomUUID(), { kind: 'assessment', revision: 1 });
+    await runtime.idle(rejected.id);
+    assert.equal(runtime.get(space.id, rejected.id).state, 'failed');
+    assert.equal(feedback[0]!.failed, true);
+    assert.deepEqual(l.unit(space.id, unit).assessment, { ...valid.public, revision: 1 });
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('Pi accepts partial or omitted grade arrays, preserves supplied arrays and rejects invalid array types', async () => {
+  const { db, l, space, unit, a, sources } = fixture();
+  a.saveSpec(space.id, unit, { ...spec, public: { ...spec.public, q2Kind: 'reasoning' } }, sources, 0);
+  const cases: Record<string, string[]>[] = [{}, { mastered: ['保留掌握项'], evidence: ['保留依据'] }, { concerns: ['保留关注点'], toVerify: ['保留待验证项'] }];
+  let submissions: JsonObject[] = [];
+  const feedback: boolean[] = [];
+  const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
+    const last = context.messages.at(-1);
+    if (last?.role === 'toolResult') feedback.push(last.isError);
+    const index = context.messages.filter((m) => m.role === 'toolResult').length;
+    return response(index < submissions.length
+      ? reply([{ type: 'toolCall', id: `grade-${index}`, name: 'submit_evaluation', arguments: submissions[index]! }], 'toolUse')
+      : reply([]));
+  } });
+  try {
+    for (const arrays of cases) {
+      const proposed = { result: 'needs_work', summary: '继续练习边界', ...arrays };
+      submissions = [proposed, ...['mastered', 'concerns', 'evidence', 'toVerify'].map((key) => ({ ...grade, [key]: {} })),
+        { ...grade, evidence: [{}] }];
+      feedback.length = 0;
+      const run = runtime.generate(space.id, unit, randomUUID(), { kind: 'evaluation', revision: 0, specRevision: 1, q1: '调用者', q2: '两个字符串' });
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
+      assert.deepEqual(feedback, [false, true, true, true, true, true]);
+      const saved = l.unit(space.id, unit).records[0]!;
+      assert.equal(saved.result, 'needs_work'); assert.equal(saved.summary, proposed.summary);
+      assert.equal(saved.verification, 'non-execution'); assert.equal(saved.valid, true);
+      for (const key of ['mastered', 'concerns', 'evidence', 'toVerify'] as const) assert.deepEqual(saved[key], arrays[key] ?? []);
+      assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
+    }
+    a.saveSpec(space.id, unit, spec, sources, 1);
+    submissions = [{ result: 'pass', summary: '静态分析不能证明运行通过' }]; feedback.length = 0;
+    const code = runtime.generate(space.id, unit, randomUUID(), { kind: 'evaluation', revision: 0, specRevision: 2, q1: '调用者', q2: 'console.log(2)' });
+    await runtime.idle(code.id);
+    assert.equal(runtime.get(space.id, code.id).state, 'succeeded'); assert.deepEqual(feedback, [false]);
+    const saved = l.unit(space.id, unit).records[0]!;
+    assert.equal(saved.result, 'unverified'); assert.equal(saved.verification, 'execution-unverified'); assert.equal(saved.valid, false);
+    for (const key of ['mastered', 'concerns', 'evidence', 'toVerify'] as const) assert.deepEqual(saved[key], []);
+    assert.notEqual(l.unit(space.id, unit).status, 'passed');
   } finally { await runtime.close(); db.close(); }
 });
 

@@ -298,7 +298,7 @@ export class TeachingRuntime {
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
     let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
-    let failure = '', toolFailed = false, request = 0, nativeSeq = 0;
+    let failure = '', request = 0, nativeSeq = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const fixed = frozen.evaluation;
@@ -378,9 +378,6 @@ export class TeachingRuntime {
         }
         if (!active(this.get(space, id))) return;
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
-        // Pi returns tool errors to the model so it can correct them. A later
-        // successful call can recover; the scenario still validates its artifact.
-        if (event.type === 'tool_execution_end') toolFailed = event.isError;
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
           if (displayModelText && update.type === 'text_delta') {
@@ -421,10 +418,10 @@ export class TeachingRuntime {
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
-      if (toolFailed) throw new BusinessError(422, '工具调用或结构化产物无效，未保存生成产物。');
       if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
         last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
           : '模型响应未正常完成，未保存生成产物。');
+      // Pi feeds tool errors back to the model; the scenario validates publishable artifacts.
       this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();

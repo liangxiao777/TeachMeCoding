@@ -37,6 +37,8 @@ test('one initial submission preserves nested order and repeated titles, supplie
   ]);
   const ids = submitted.stages.flatMap((stage) => [stage.id, ...stage.units.map((unit) => unit.id)]);
   assert.equal(new Set(ids).size, 5); assert.ok(ids.every((id) => idSchema.safeParse(id).success));
+  await assert.rejects(call('submit_route', { stages: [{ title: '  ', units: [{ title: 'Rejected replacement' }] }] }), /title/);
+  assert.deepEqual(draft.proposal(), submitted, 'Failed parsing must not replace a successful submission');
 });
 
 test('route adjustment tools generate IDs, preserve order, reject incomplete drafts and require resubmission after edits', async () => {
@@ -153,29 +155,30 @@ test('a complete multi-stage initial route needs one submission and commits only
   } finally { await runtime.close(); db.close(); }
 });
 
-test('a rejected initial submission can be corrected, but an invalid replacement cannot publish the older route', async () => {
-  for (const invalidReplacement of [false, true]) {
+test('initial submissions can be corrected and failed replacements preserve the last successful route', async () => {
+  for (const invalidReplacement of [null, 'arguments', 'content'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db), space = learning.create({ name: 'Repair', goal: 'synthetic' });
     let requests = 0;
     const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
       const steps: Pick<ToolCall, 'name' | 'arguments'>[] = [
         { name: 'submit_route', arguments: { stages: [{ title: 'Basics', units: [] }] } },
         { name: 'submit_route', arguments: { stages: [{ title: 'Basics', units: [{ title: 'Repaired' }] }] } },
-        ...(invalidReplacement ? [{ name: 'submit_route', arguments: { stages: [] } }] : []),
       ];
+      if (invalidReplacement) steps.push({ name: 'submit_route', arguments: invalidReplacement === 'arguments' ? { stages: [] }
+        : { stages: [{ title: '  ', units: [{ title: 'Rejected replacement' }] }] } });
       const step = steps[requests++];
       return response(step ? reply([{ type: 'toolCall', id: `repair-${requests}`, ...step }], 'toolUse') : reply([]));
     } });
     try {
       const { run } = runtime.plan(space.id, randomUUID(), { ...space.requirement, value: { rows: [{ question: 'Plan what?', answer: 'Repair a tool call' }] }, intake: conceptIntake, confirmed: true });
       await runtime.idle(run.id);
-      assert.equal(runtime.get(space.id, run.id).state, invalidReplacement ? 'failed' : 'succeeded');
-      if (invalidReplacement) assert.equal(learning.space(space.id).route.content, null);
-      else assert.equal(learning.space(space.id).route.content!.stages[0]!.units[0]!.title, 'Repaired');
+      assert.equal(runtime.get(space.id, run.id).state, 'succeeded', invalidReplacement ?? 'corrected');
+      assert.equal(learning.space(space.id).route.content!.stages[0]!.units[0]!.title, 'Repaired');
       const tools = learning.session(space.id, run.sessionId!).messages.at(-1)!.parts!.filter((p) => p.type === 'tool');
       assert.equal(tools[0]!.status, 'error');
       assert.deepEqual(tools[0]!.input, { stages: [{ title: 'Basics', units: [] }] });
       assert.equal(tools[1]!.status, 'done');
+      if (invalidReplacement) assert.equal(tools[2]!.status, 'error');
     } finally { await runtime.close(); db.close(); }
   }
 });

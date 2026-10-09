@@ -13,6 +13,17 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
   const all = JSON.stringify(context);
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
   const roadmap = has('submit_route') || has('submit_route_proposal');
+  if (has('submit_requirement_draft') && text.includes('工具错误验收')) {
+    if (last?.role === 'toolResult') {
+      if (!context.messages.some((m) => m.role === 'toolResult' && m.toolName === 'web_fetch' && m.isError)) throw new Error('Expected a failed fetch result');
+      return response(reply([{ type: 'text', text: '补充抓取未完成；需求草稿已整理，请核对。' }]));
+    }
+    const draft = { type: 'toolCall' as const, id: 'error-fixture-draft', name: 'submit_requirement_draft', arguments: {
+      rows: [{ question: '想学习什么？', answer: '理解文件读取与错误处理' }],
+    } };
+    const fetch = { type: 'toolCall' as const, id: 'error-fixture-fetch', name: 'web_fetch', arguments: { url: 'http://127.0.0.1/private' } };
+    return response(reply(text.includes('先失败') ? [fetch, draft] : [draft, fetch], 'toolUse'));
+  }
   if (has('ask_user_question') && all.includes('自适应问答验收')) {
     const current = context.messages.slice(context.messages.findLastIndex((m) => m.role === 'user') + 1);
     const results = current.filter((m) => m.role === 'toolResult');
@@ -114,9 +125,17 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     }], 'toolUse'));
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }
+    if (has('submit_assessment') && all.includes('轻量测评验收')) return response(reply([{ type: 'toolCall', id: 'minimal-assessment', name: 'submit_assessment', arguments: {
+      public: { q1: '  ## 长题干验收\n\n' + '请说明启动时传入的参数来自哪里，以及不同输入为什么会影响程序输出。'.repeat(10)
+        + '\n\n- 区分输入和程序名\n- 解释空输入的处理\n', q2: '比较零个参数与两个参数的情况。', q2Kind: 'reasoning' },
+      rubric: { q1: { answer: 'PRIVATE-RUBRIC', criteria: ['解释调用者'] }, q2: { answer: 'PRIVATE-CODE', criteria: ['说明边界'] } },
+    } }], 'toolUse'));
+    if (has('submit_evaluation') && all.includes('长题干验收')) return response(reply([{ type: 'toolCall', id: 'minimal-grade', name: 'submit_evaluation', arguments: {
+      result: 'needs_work', summary: '请补充不同输入下的解释。',
+    } }], 'toolUse'));
     if (has('submit_assessment')) return response(reply([{ type: 'toolCall', id: 'assessment-call', name: 'submit_assessment', arguments: {
       public: { q1: '解释命令行参数来自哪里', q2: all.includes('纯推理') ? '说明零个参数与两个参数的区别' : '读取并输出参数个数', starter: all.includes('真实代码测评') ? '// 输出参数个数\n' : 'import sys\n', q2Kind: all.includes('纯推理') ? 'reasoning' : 'code',
-        ...(all.includes('真实代码测评') ? { execution: { language: 'javascript', cases: [{ args: ['red', 'blue'], expected: '2' }, { args: [], expected: '0' }] } } : {}) },
+        ...(!all.includes('纯推理') ? { execution: { language: all.includes('真实代码测评') ? 'javascript' : 'python', cases: [{ args: ['red', 'blue'], expected: '2' }, { args: [], expected: '0' }] } } : {}) },
       rubric: { q1: { answer: 'PRIVATE-RUBRIC', criteria: ['调用者'] }, q2: { answer: 'PRIVATE-CODE', criteria: ['正确计数'] } },
     } }], 'toolUse'));
     // Intentionally proposes pass even for wrong code: browser tests must exercise the host's override.
@@ -138,7 +157,7 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     } }], 'toolUse'));
     if (!roadmap && !text.includes('慢速')) return response(reply([{ type: 'toolCall', id: 'draft-call', name: 'submit_requirement_draft', arguments: {
       rows: [
-        { question: '想学习什么？', answer: text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具' },
+        { question: '想学习什么？', answer: text.includes('轻量测评验收') ? '轻量测评验收' : text.includes('纯推理') ? '纯推理' : text.includes('真实代码测评') ? '真实代码测评' : '制作命令行工具' },
         { question: '已有经验？', answer: 'Python 自动化经验' },
         { question: '希望完成什么？', answer: '完成一个可用的工具' },
         { question: '时间安排？', answer: '每周 3 小时，共 6 周' },
