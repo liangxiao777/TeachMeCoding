@@ -67,6 +67,68 @@ test('syntax highlighting follows filenames without changing code, indentation o
   expect(await plain.innerText()).toBe(source);
 });
 
+test('chat border resizes within bounds and retains width, code and drafts through collapse and fullscreen', async ({ page }, info) => {
+  await page.goto('/preview?scene=unit');
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  const border = page.getByRole('separator', { name: '调整聊天面板宽度', exact: true });
+  const width = async () => (await agent.boundingBox())!.width;
+  const dragTo = async (x: number) => {
+    const bounds = (await border.boundingBox())!;
+    await page.mouse.move(bounds.x, bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, bounds.y + bounds.height / 2, { steps: 8 });
+    await page.mouse.up();
+  };
+  const editor = page.getByRole('textbox', { name: '编辑 move_demo.rs', exact: true });
+  const draft = page.getByRole('textbox', { name: '向 Agent 提问', exact: true });
+  const terminal = page.getByRole('textbox', { name: '终端命令', exact: true });
+  const code = 'fn main() {\n    println!("keep code while resizing");\n}';
+  await editor.fill(code);
+  await draft.fill('拖动后保留这条未发送的问题');
+  await terminal.fill('ls examples');
+  await expect.poll(width).toBe(384);
+  await page.screenshot({ path: `.amp/in/artifacts/chat-default-${info.project.name}.png`, animations: 'disabled' });
+  await dragTo(876);
+  await expect.poll(width).toBeCloseTo(564, 0);
+  await page.mouse.move(1439, 999);
+  await page.screenshot({ path: `.amp/in/artifacts/chat-expanded-light-${info.project.name}.png`, animations: 'disabled' });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.screenshot({ path: `.amp/in/artifacts/chat-expanded-dark-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
+  await expect(agent).toHaveCount(0);
+  await expect(border).toBeHidden();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await expect.poll(width).toBeCloseTo(564, 0);
+  await expect(draft).toHaveValue('拖动后保留这条未发送的问题');
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await expect.poll(width).toBeCloseTo(564, 0);
+  await page.screenshot({ path: `.amp/in/artifacts/chat-expanded-fullscreen-${info.project.name}.png`, animations: 'disabled' });
+  await dragTo(10);
+  await expect.poll(width).toBeCloseTo(720, 0);
+  await dragTo(1439);
+  await expect.poll(width).toBeCloseTo(320, 0);
+  await border.press('ArrowLeft');
+  await expect.poll(width).toBeGreaterThan(325);
+  const keyboardWidth = await width();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await expect(agent).toHaveCount(0);
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await expect.poll(width).toBeCloseTo(keyboardWidth, 0);
+  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await expect.poll(width).toBeCloseTo(keyboardWidth, 0);
+  await expect(editor).toHaveText(code, { useInnerText: true });
+  await expect(draft).toHaveValue('拖动后保留这条未发送的问题');
+  await expect(terminal).toHaveValue('ls examples');
+  await page.setViewportSize({ width: 1100, height: 1000 });
+  await expect.poll(width).toBeCloseTo(Math.min(keyboardWidth, 460), 0);
+  await dragTo(10);
+  await expect.poll(width).toBeCloseTo(460, 0);
+  expect((await page.getByRole('main').boundingBox())!.width).toBeGreaterThanOrEqual(640);
+});
+
 test('normal and fullscreen IDE preserve editor, terminal, quote and layout; Return and Escape collapse IDE', async ({ page }, info) => {
   await page.goto('/preview?scene=unit');
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();

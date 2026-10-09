@@ -44,8 +44,8 @@ for (const theme of ['light', 'dark'] as const) {
     expect(frames.some((f) => f.width > 1 && f.width < 383 && f.retained && f.inert)).toBe(true);
     expect(frames.some((f) => f.opacity > 0 && f.opacity < 1)).toBe(true);
     expect(frames.at(-1)).toMatchObject({ width: 0, retained: false });
-    // The aside is gone now; locate the stable dock through the main's sibling.
-    const stableDock = page.getByRole('main').locator('..').locator(':scope > div');
+    // The aside is gone now; the resizable panel remains mounted.
+    const stableDock = page.locator('#agent');
     const reversal = await stableDock.evaluate(async (el) => {
       const toggle = document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]')!;
       toggle.click();
@@ -67,8 +67,15 @@ for (const theme of ['light', 'dark'] as const) {
     expect(reversal.sameInput).toBe(true);
     await expect(stableDock).toHaveCSS('width', '384px');
     await expect(page.getByRole('textbox', { name: '向 Agent 提问', exact: true })).toHaveValue('不要丢掉这条未发送的问题');
+    await page.getByRole('separator', { name: '调整聊天面板宽度', exact: true }).press('ArrowLeft');
+    await expect.poll(async () => (await stableDock.boundingBox())!.width).toBeGreaterThan(389);
+    const resizedWidth = (await stableDock.boundingBox())!.width;
     await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Agent', exact: true })).toBeFocused();
+    await expect(stableDock).toHaveCSS('width', '0px');
+    await page.getByRole('button', { name: 'Agent', exact: true }).click();
+    await expect.poll(async () => (await stableDock.boundingBox())!.width).toBeCloseTo(resizedWidth, 0);
+    await expect(page.getByRole('textbox', { name: '向 Agent 提问', exact: true })).toHaveValue('不要丢掉这条未发送的问题');
   });
 
   test(`motion: settings keeps the learning surface during entry and preserves drafts on return (${theme})`, async ({ page }) => {

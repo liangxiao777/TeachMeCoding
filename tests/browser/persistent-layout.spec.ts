@@ -102,6 +102,10 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await expect(terminalInput).toBeEnabled();
   await capture(page, info, 'ide-normal');
 
+  const chat = page.getByRole('complementary', { name: 'Agent', exact: true });
+  await page.getByRole('separator', { name: '调整聊天面板宽度', exact: true }).press('ArrowLeft');
+  await expect.poll(async () => (await box(chat)).width).toBeGreaterThan(389);
+  const chatWidth = (await box(chat)).width;
   const initialHeight = (await box(ide)).height;
   await page.getByRole('separator', { name: '调整 IDE 高度' }).press('ArrowUp');
   await expect.poll(async () => (await box(ide)).height).toBeGreaterThan(initialHeight + 5);
@@ -116,7 +120,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   const agent = await box(page.getByRole('complementary', { name: 'Agent', exact: true }));
   expect(fullscreenTerminal.y).toBeGreaterThan(fullscreenEditor.y + fullscreenEditor.height);
   expect(agent.x).toBeGreaterThan(fullscreenEditor.x + fullscreenEditor.width - 2);
-  expect(agent.width).toBe(384);
+  expect(agent.width).toBeCloseTo(chatWidth, 0);
   await capture(page, info, 'ide-fullscreen');
   await page.getByRole('button', { name: '查看课件', exact: true }).click();
   const drawer = page.getByRole('dialog');
@@ -147,4 +151,5 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await expect(page.getByLabel('会话草稿状态', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存会话', exact: true })).toHaveCount(0);
   await expect.poll(async () => (await box(ide)).height).toBeCloseTo(normalHeight, 0);
+  await expect.poll(async () => (await box(chat)).width).toBeCloseTo(chatWidth, 0);
 });
