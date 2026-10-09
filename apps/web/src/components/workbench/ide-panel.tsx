@@ -295,6 +295,7 @@ export function IdePanel() {
               key={file.id}
               className="flex-1"
               label={`编辑 ${file.name}`}
+              filename={file.name}
               value={file.content}
               position={positions.current.get(file.id)}
               onChange={(v) => updateFile(file.id, v)}

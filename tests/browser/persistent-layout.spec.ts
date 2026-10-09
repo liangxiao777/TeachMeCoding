@@ -109,7 +109,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await code.fill('// unsaved local edit');
   await draft.fill('保留本单元草稿');
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
-  await expect(code).toHaveValue('// unsaved local edit');
+  await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');
   const fullscreenEditor = await box(code);
   const fullscreenTerminal = await box(terminalPanel);
@@ -128,7 +128,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await expect(drawer).toHaveCount(0);
   await expect(ide).toBeVisible();
   await expect(page.getByRole('button', { name: '返回学习', exact: true })).toBeVisible();
-  await expect(code).toHaveValue('// unsaved local edit');
+  await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');
   await page.keyboard.press('Escape');
   await expect(ide).toBeHidden();
@@ -141,7 +141,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await expect(page.getByRole('textbox', { name: '回复 Agent', exact: true })).toHaveValue('');
   await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
   await spaceCard(page, '存储验收 Rust').getByRole('button', { name: '继续学习', exact: true }).click();
-  await expect(code).toHaveValue('// unsaved local edit');
+  await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');
   await expect(ide.getByRole('status').filter({ hasText: /^未保存$/ })).toBeVisible();
   await expect(page.getByLabel('会话草稿状态', { exact: true })).toHaveCount(0);

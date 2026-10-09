@@ -329,7 +329,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await editor.fill('// unsaved settings navigation');
   await composer.fill('保留本单元未发送的问题');
   await page.getByRole('button', { name: /切换到.*色主题/ }).click();
-  await expect(editor).toHaveValue('// unsaved settings navigation');
+  await expect(editor).toHaveText('// unsaved settings navigation', { useInnerText: true });
   await expect(composer).toHaveValue('保留本单元未发送的问题');
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
   await expect(editor).toBeHidden();
@@ -338,7 +338,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await expect(settingsPage.getByRole('tabpanel', { name: 'Skills', exact: true }).getByRole('button', { name: '导入本地目录', exact: true })).toBeVisible();
   await settingsPage.getByRole('button', { name: /切换到.*色主题/ }).click();
   await settingsPage.getByRole('button', { name: '返回', exact: true }).click();
-  await expect(editor).toHaveValue('// unsaved settings navigation');
+  await expect(editor).toHaveText('// unsaved settings navigation', { useInnerText: true });
   await expect(composer).toHaveValue('保留本单元未发送的问题');
   await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
   await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
@@ -346,7 +346,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await expect(page.getByRole('button', { name: /切换到.*色主题/ })).toHaveCount(1);
   await page.getByRole('button', { name: /切换到.*色主题/ }).click();
-  await expect(editor).toHaveValue('// unsaved settings navigation');
+  await expect(editor).toHaveText('// unsaved settings navigation', { useInnerText: true });
   await expect(composer).toHaveValue('保留本单元未发送的问题');
   await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
   expect({ socketCount, closed }).toEqual({ socketCount: 1, closed: 0 });

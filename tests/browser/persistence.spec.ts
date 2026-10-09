@@ -203,7 +203,7 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await saveAssessment(page);
   await page.reload();
   await expect(visible(page, '你的回答')).toHaveValue('单元二解释');
-  await expect(visible(page, '编辑 代码答案')).toHaveValue('// 单元二代码');
+  await expect(visible(page, '编辑 代码答案')).toHaveText('// 单元二代码', { useInnerText: true });
   await page.getByRole('button', { name: '返回单元（答案会保留）', exact: true }).click();
   await goRoute(page);
   await enterUnit(page, '所有权与借用');
@@ -212,7 +212,7 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await visible(page, '向 Agent 提问').fill('借用的问题');
   await page.getByRole('button', { name: /^(开始单元测评|继续测评)$/ }).click();
   await expect(visible(page, '你的回答')).toHaveValue('单元一解释');
-  await expect(visible(page, '编辑 代码答案')).toHaveValue('// 单元一代码');
+  await expect(visible(page, '编辑 代码答案')).toHaveText('// 单元一代码', { useInnerText: true });
   await shot(page, info, 'assessment');
   await page.getByRole('button', { name: '返回单元（答案会保留）', exact: true }).click();
   const materials = page.getByRole('complementary', { name: '单元材料', exact: true });
@@ -280,13 +280,13 @@ test('disk editing preserves local changes on failure, compares external content
   writeFileSync(join(data.root, 'projects', data.spaceId, 'src/main.rs'), 'external edit 42');
   await page.getByRole('button', { name: '保存文件', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: '外部修改' })).toBeVisible();
-  await expect(visible(page, '编辑 main.rs')).toHaveValue('local editing survives');
+  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
   await shot(page, info, 'file-conflict');
   await page.getByRole('button', { name: '读取磁盘版本', exact: true }).click();
   const comparison = page.getByRole('region', { name: '磁盘版本比较', exact: true });
   await expect(comparison.getByText('external edit 42', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
-  await expect(visible(page, '编辑 main.rs')).toHaveValue('local editing survives');
+  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
   await expect(comparison.getByText('external edit 42', { exact: true })).toBeVisible();
   await shot(page, info, 'file-comparison');
   await page.getByRole('button', { name: '保留编辑，基于此版本继续' }).click();
@@ -301,7 +301,7 @@ test('disk editing preserves local changes on failure, compares external content
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
   await page.getByRole('button', { name: '关闭 src/main.rs' }).click();
   await tree.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
-  await expect(visible(page, '编辑 main.rs')).toHaveValue('local editing survives');
+  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
   await tree.getByRole('treeitem', { name: 'main.rs', exact: true }).press('F2');
   await visible(page, '重命名').fill('renamed.rs');
   await visible(page, '重命名').press('Enter');
@@ -310,7 +310,7 @@ test('disk editing preserves local changes on failure, compares external content
   await page.reload();
   await tree.getByRole('treeitem', { name: 'src', exact: true }).press('ArrowRight');
   await tree.getByRole('treeitem', { name: 'renamed.rs', exact: true }).click();
-  await expect(visible(page, '编辑 renamed.rs')).toHaveValue('local editing survives');
+  await expect(visible(page, '编辑 renamed.rs')).toHaveText('local editing survives', { useInnerText: true });
   await page.getByRole('button', { name: '询问这个文件', exact: true }).click();
   await expectTemporaryComposer(page);
   await expect(composer(page)).toContainText('src/renamed.rs');
@@ -368,12 +368,12 @@ test('original lesson quotation and bring-to-IDE actions retain real data throug
   await expectTemporaryComposer(page);
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   const code = 'fn main() { println!("example"); }';
-  await expect(visible(page, '编辑 example.rs')).toHaveValue(code);
+  await expect(visible(page, '编辑 example.rs')).toHaveText(code, { useInnerText: true });
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example.rs'), 'utf8')).toBe('');
   await page.getByRole('button', { name: '保存文件', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
-  await expect(visible(page, '编辑 example-1.rs')).toHaveValue(code);
+  await expect(visible(page, '编辑 example-1.rs')).toHaveText(code, { useInnerText: true });
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example.rs'), 'utf8')).toBe(code);
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example-1.rs'), 'utf8')).toBe('');
 });
@@ -390,7 +390,7 @@ test('stored Markdown sections and assessment prompts render headings, tables an
     const response = await route.fetch(), detail = await response.json() as UnitDetail;
     await route.fulfill({ json: { ...detail, lesson: { title: '错误处理', content: '', intro: '学习配置，不把正文当标题。', blocks: [
       { type: 'h2', id: 'compiler-options', text: rawHeading },
-      { type: 'callout', title: '检查结果', text: '保留换行。\n\n```text\nline one\n  line two\n```' },
+      { type: 'callout', title: '检查结果', text: '保留换行。\n\n```unknown-language\nline one\n  line two\n```' },
       { type: 'p', text: '### 补充说明\n\n这段正文也支持 Markdown。' },
       { type: 'h2', id: 'review', text: '复习' },
     ] }, assessment: { ...detail.assessment, q1: '解释 `tsc`。\n\n- 编译\n- 执行', q2: assessment, starter: '' } } });
@@ -403,8 +403,10 @@ test('stored Markdown sections and assessment prompts render headings, tables an
   await expect(article.getByRole('heading', { name: '补充说明', exact: true })).toHaveCount(1);
   await expect(article.locator('table tbody tr')).toHaveCount(2);
   await expect(article.locator('table')).toContainText('ES2022');
+  await expect.poll(() => article.locator('pre').first().evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBeGreaterThan(2);
   expect(await article.locator('pre').first().textContent()).toBe(code);
   await expect(article.locator('pre').nth(1)).toHaveText('line one\n  line two');
+  await expect.poll(() => article.locator('pre').nth(1).evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBe(1);
   await expect(article.locator('ol > li')).toHaveText(['检查类型', '编译运行']);
   const toc = page.getByRole('complementary', { name: '单元材料' });
   await expect(toc.getByRole('link')).toHaveText(['编译配置', '复习']);
@@ -421,8 +423,11 @@ test('stored Markdown sections and assessment prompts render headings, tables an
     const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
     return (await fetch(`/api/spaces/${space}/units/${unit}`, { headers: { 'X-TMC-Token': token } })).json();
   }, { space: data.spaceId, unit })).lesson.blocks[0].text).toBe(rawHeading);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await article.getByRole('button', { name: '复制', exact: true }).first().click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(code);
   await article.getByRole('button', { name: '带入 IDE', exact: true }).first().click();
-  await expect(visible(page, '编辑 example.ts')).toHaveValue(code);
+  await expect(visible(page, '编辑 example.ts')).toHaveText(code, { useInnerText: true });
   await page.goto(`/?space=${data.spaceId}&tab=assessment&unit=${unit}`);
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
   const questions = page.locator('[data-slot="card-description"]');

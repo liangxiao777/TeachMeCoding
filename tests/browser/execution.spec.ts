@@ -76,7 +76,7 @@ test('terminal executes saved files only, discovers external files and preserves
   await send('printf "changed by terminal" > run.sh');
   await expect.poll(() => readFileSync(join(root, 'run.sh'), 'utf8')).toBe('changed by terminal');
   await page.getByRole('button', { name: '刷新目录', exact: true }).click();
-  await expect(editor).toHaveValue('changed by terminal');
+  await expect(editor).toHaveText('changed by terminal', { useInnerText: true });
   await expect(page.getByRole('treeitem', { name: 'result.txt', exact: true })).toBeVisible();
   await editor.fill('new unsaved draft');
   writeFileSync(join(root, 'run.sh'), 'external conflicting version');
@@ -85,7 +85,7 @@ test('terminal executes saved files only, discovers external files and preserves
   await send('touch must-not-run');
   expect(existsSync(join(root, 'must-not-run'))).toBe(false);
   await page.getByRole('button', { name: '刷新目录', exact: true }).click();
-  await expect(editor).toHaveValue('new unsaved draft');
+  await expect(editor).toHaveText('new unsaved draft', { useInnerText: true });
   await page.getByRole('button', { name: '读取磁盘版本', exact: true }).click();
   await page.getByRole('button', { name: '放弃编辑，采用磁盘内容', exact: true }).click();
   await send('tmc_nonexistent_toolchain_83');

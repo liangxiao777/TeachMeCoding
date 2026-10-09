@@ -10,19 +10,19 @@ test('nested tree keeps same-name files, closed content, rename validation and i
   const editor = page.getByLabel('编辑 parser.rs', { exact: true });
   await editor.fill('// source parser only\npub fn parse() {}');
   await tree.locator('[title="tests/parser.rs"]').click();
-  await expect(editor).toHaveValue(/#\[test\]/);
+  await expect(editor).toHaveText(/#\[test\]/, { useInnerText: true });
   await expect(page.getByRole('tab', { name: /parser.rs/ })).toHaveCount(2);
   await page.getByRole('button', { name: '关闭 src/utils/parser.rs', exact: true }).click();
   await expect(tree.locator('[title="src/utils/parser.rs"]')).toBeVisible();
   await tree.locator('[title="src/utils/parser.rs"]').click();
-  await expect(editor).toHaveValue('// source parser only\npub fn parse() {}');
+  await expect(editor).toHaveText('// source parser only\npub fn parse() {}', { useInnerText: true });
   await tree.locator('[title="src/utils/parser.rs"]').press('F2');
   await page.getByRole('textbox', { name: '重命名', exact: true }).fill('mod.rs');
   await page.getByRole('textbox', { name: '重命名', exact: true }).press('Enter');
   await expect(page.getByText('此目录中已存在同名文件或文件夹', { exact: true })).toBeVisible();
   await page.getByRole('textbox', { name: '重命名', exact: true }).fill('tokens.rs');
   await page.getByRole('textbox', { name: '重命名', exact: true }).press('Enter');
-  await expect(page.getByLabel('编辑 tokens.rs', { exact: true })).toHaveValue('// source parser only\npub fn parse() {}');
+  await expect(page.getByLabel('编辑 tokens.rs', { exact: true })).toHaveText('// source parser only\npub fn parse() {}', { useInnerText: true });
   await page.getByRole('button', { name: '新建文件夹', exact: true }).click();
   await page.getByRole('textbox', { name: '文件夹名称', exact: true }).fill('nested');
   await page.getByRole('textbox', { name: '文件夹名称', exact: true }).press('Enter');
@@ -30,7 +30,41 @@ test('nested tree keeps same-name files, closed content, rename validation and i
   await page.getByRole('textbox', { name: '文件名称', exact: true }).fill('tokens.rs');
   await page.getByRole('textbox', { name: '文件名称', exact: true }).press('Enter');
   await expect(tree.locator('[title="src/utils/nested/tokens.rs"]')).toHaveAttribute('aria-level', '4');
-  await expect(page.getByLabel('编辑 tokens.rs', { exact: true })).toHaveValue('fn main() {\n    \n}');
+  await expect(page.getByLabel('编辑 tokens.rs', { exact: true })).toHaveText('fn main() {\n    \n}', { useInnerText: true });
+});
+
+test('syntax highlighting follows filenames without changing code, indentation or selected-code quotes', async ({ page }) => {
+  await page.goto('/preview?scene=unit');
+  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: '编辑 move_demo.rs', exact: true });
+  const colors = () => editor.evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size);
+  await expect.poll(colors).toBeGreaterThan(2);
+  await editor.fill('let value = "hello";\nlet other = 37;');
+  await editor.press('ControlOrMeta+Home');
+  await editor.press('Tab');
+  expect(await editor.innerText()).toBe('    let value = "hello";\nlet other = 37;');
+  await editor.press('Home');
+  await editor.press('Shift+End');
+  await page.getByRole('button', { name: '询问选中代码', exact: true }).click();
+  const quote = page.getByRole('complementary', { name: 'Agent', exact: true }).locator('form');
+  await expect(quote).toContainText('选中代码');
+  await expect(quote).toContainText('let value = "hello";');
+  await expect(quote).not.toContainText('let other');
+
+  await page.getByRole('button', { name: '新建文件', exact: true }).click();
+  await page.getByRole('textbox', { name: '文件名称', exact: true }).fill('syntax.ts');
+  await page.getByRole('textbox', { name: '文件名称', exact: true }).press('Enter');
+  const typescript = page.getByRole('textbox', { name: '编辑 syntax.ts', exact: true });
+  const source = 'const count: number = 7;\nconsole.log("你好");';
+  await typescript.fill(source);
+  await expect.poll(() => typescript.evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBeGreaterThan(2);
+  expect(await typescript.innerText()).toBe(source);
+  await page.getByRole('treeitem', { name: 'syntax.ts', exact: true }).press('F2');
+  await page.getByRole('textbox', { name: '重命名', exact: true }).fill('syntax.unknown');
+  await page.getByRole('textbox', { name: '重命名', exact: true }).press('Enter');
+  const plain = page.getByRole('textbox', { name: '编辑 syntax.unknown', exact: true });
+  await expect.poll(() => plain.evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBe(1);
+  expect(await plain.innerText()).toBe(source);
 });
 
 test('normal and fullscreen IDE preserve editor, terminal, quote and layout; Return and Escape collapse IDE', async ({ page }, info) => {
@@ -58,7 +92,7 @@ test('normal and fullscreen IDE preserve editor, terminal, quote and layout; Ret
   const height = (await ide.boundingBox())!.height;
   await page.screenshot({ path: `.amp/in/artifacts/ide-normal-${info.project.name}.png`, animations: 'disabled' });
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
-  await expect(editor).toHaveValue(code);
+  await expect(editor).toHaveText(code, { useInnerText: true });
   await expect(command).toHaveValue('ls examples');
   await expect(page.getByLabel('向 Agent 提问', { exact: true })).toHaveValue('保留工作台草稿');
   await expect(page.getByRole('heading', { name: '所有权与借用', exact: true })).toHaveCount(0);
@@ -74,7 +108,7 @@ test('normal and fullscreen IDE preserve editor, terminal, quote and layout; Ret
   await expect(page.getByRole('button', { name: 'IDE 与终端', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await expect(ide).toHaveCount(0);
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
-  await expect(editor).toHaveValue(code);
+  await expect(editor).toHaveText(code, { useInnerText: true });
   await expect(command).toHaveValue('ls examples');
   await expect.poll(async () => (await ide.boundingBox())!.height).toBeCloseTo(height, 0);
   await page.getByRole('button', { name: '询问这个文件', exact: true }).click();

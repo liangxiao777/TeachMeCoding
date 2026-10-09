@@ -218,7 +218,7 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await expect(page.getByRole('button', { name: '运行', exact: true })).toBeDisabled();
   await page.getByLabel('你的回答', { exact: true }).fill('固定提交：由程序的调用者传入');
   await page.getByRole('button', { name: '载入起始代码', exact: true }).click();
-  await expect(page.getByLabel('编辑 代码答案', { exact: true })).toHaveValue('import sys\n');
+  await expect(page.getByLabel('编辑 代码答案', { exact: true })).toHaveText('import sys\n', { useInnerText: true });
   await page.getByLabel('编辑 代码答案', { exact: true }).fill('print(2)');
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
   await expect(page.getByText('正在评估固定提交；你可以继续编辑新草稿。代码不会执行。', { exact: true })).toBeVisible();
@@ -527,7 +527,7 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(groups.last().getByTestId('tool-call-count')).toHaveText('1 次调用');
   await expect(groups.last().getByRole('button', { name: '工具调用', exact: true })).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
-  await expect(page.getByLabel('编辑 agent_example.py', { exact: true })).toHaveValue('print("hello")');
+  await expect(page.getByLabel('编辑 agent_example.py', { exact: true })).toHaveText('print("hello")', { useInnerText: true });
   await page.getByRole('button', { name: '保存文件', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
   const code = await page.evaluate(async () => {
@@ -742,7 +742,7 @@ test('local proposals require confirmation, recover pending cards and return rea
   await last.getByRole('button', { name: '确认执行', exact: true }).click();
   await expect(last).toContainText('成功');
   await page.getByRole('treeitem', { name: 'proposal.sh', exact: true }).click();
-  await expect(page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true })).toHaveValue('printf "CONFIRMED_47\\n"\n');
+  await expect(page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true })).toHaveText('printf "CONFIRMED_47\\n"\n', { useInnerText: true });
   await ask('本机提案命令');
   await expect(last).toContainText('待确认');
   await page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true }).fill('new buffer');
@@ -758,7 +758,7 @@ test('local proposals require confirmation, recover pending cards and return rea
   await expect(last).toContainText('成功');
   await expect(last).toContainText('CONFIRMED_47');
   await page.getByRole('treeitem', { name: 'confirmations', exact: true }).click();
-  await expect(page.getByLabel('编辑 confirmations', { exact: true }).filter({ visible: true })).toHaveValue('once\n');
+  await expect(page.getByLabel('编辑 confirmations', { exact: true }).filter({ visible: true })).toHaveText('once\n', { useInnerText: true });
   await last.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `.amp/in/artifacts/action-command-result-${info.project.name}.png` });
   await ask('本机提案等待');
@@ -848,7 +848,7 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
   await expect(page.getByText('console.log(2)', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
-  await expect(code).toHaveValue(correct);
+  await expect(code).toHaveText(correct, { useInnerText: true });
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
   await expect(page.getByText('正在运行并评估固定提交；你可以继续编辑新草稿。', { exact: true })).toBeVisible();
   await code.fill('// 第三份新草稿，不属于已提交代码');
@@ -876,9 +876,9 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   expect(evidence.at(-1).results.map((r: { result: { stdout: string } }) => r.result.stdout)).toEqual(['2\n', '0\n']);
   await page.getByRole('button', { name: '返回单元', exact: true }).click();
   await page.getByRole('button', { name: '继续测评', exact: true }).click();
-  await expect(code).toHaveValue('// 第三份新草稿，不属于已提交代码');
+  await expect(code).toHaveText('// 第三份新草稿，不属于已提交代码', { useInnerText: true });
   await expect(page.getByText('以下输出属于较早的固定代码；当前新草稿尚未运行。', { exact: true })).toBeVisible();
   await page.reload();
-  await expect(code).toHaveValue('// 第三份新草稿，不属于已提交代码');
+  await expect(code).toHaveText('// 第三份新草稿，不属于已提交代码', { useInnerText: true });
   await expect(page.getByText(/不是沙箱，拥有服务账号权限/)).toBeVisible();
 });

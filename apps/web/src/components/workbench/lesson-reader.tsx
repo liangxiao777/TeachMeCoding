@@ -13,6 +13,10 @@ import {
   Target,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createHighlighterCore } from 'shiki/core'
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+import { bundledLanguages, type BundledLanguage } from 'shiki/langs'
+import { bundledThemes } from 'shiki/themes'
 import { Generating, InlineText, RichText, StatusPill } from '@/components/shared'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -23,10 +27,27 @@ import type { LessonBlock } from '@/app/types'
 import { useApp, useSpace } from '@/app/context'
 
 const scrollMemory = new Map<string, number>()
+const lessonHighlighter = createHighlighterCore({
+  themes: [bundledThemes['github-dark']], langs: [], engine: createJavaScriptRegexEngine(),
+})
 
 function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> }) {
   const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
+  const [highlighted, setHighlighted] = useState<{ code: string; language: string; html: string } | null>(null)
+  useEffect(() => {
+    let active = true
+    const language = block.language.toLowerCase() as BundledLanguage
+    lessonHighlighter.then(async (highlighter) => {
+      const lang = Object.hasOwn(bundledLanguages, language) ? language : 'text'
+      if (lang !== 'text') await highlighter.loadLanguage(bundledLanguages[lang])
+      return highlighter.codeToHtml(block.code, { lang, theme: 'github-dark' })
+    })
+      .then((html) => { if (active) setHighlighted({ code: block.code, language: block.language, html }) })
+      .catch(() => { /* Preserve the raw snippet if highlighting cannot load. */ })
+    return () => { active = false }
+  }, [block.code, block.language])
+  const html = highlighted?.code === block.code && highlighted.language === block.language ? highlighted.html : null
   return (
     <figure className="flex flex-col overflow-hidden rounded-xl bg-ide text-ide-foreground shadow-sm ring-1 ring-foreground/10">
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
@@ -58,7 +79,8 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
           </Button>
         </div>
       </div>
-      <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{block.code}</pre>
+      {html ? <div className="[&_pre]:overflow-x-auto [&_pre]:!bg-transparent [&_pre]:p-4 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:leading-relaxed"
+        dangerouslySetInnerHTML={{ __html: html }} /> : <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed">{block.code}</pre>}
       {block.caption && (
         <figcaption className="border-t border-white/10 px-4 py-2 text-xs leading-relaxed opacity-70">{block.caption}</figcaption>
       )}
