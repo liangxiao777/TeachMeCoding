@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
+import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { applyAgentEvent, type AgentDisplayPart, type AgentEventData } from '@teach-me-coding/contracts';
 import { Learning } from '../modules/learning.js';
@@ -215,6 +219,8 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
   let payload: Record<string, unknown> | undefined;
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (model, context, options) => {
     assert.equal(options?.reasoning, 'high');
+    assert.equal(options?.timeoutMs, 300_000);
+    assert.equal(options?.maxRetryDelayMs, undefined, 'Use Pi provider defaults, not the former one-second cap');
     return adapter(model, context, { ...options, apiKey: 'synthetic-private-key', onPayload(value) {
       payload = value as Record<string, unknown>;
       throw new Error('Deterministic stop before network transport');
@@ -231,6 +237,8 @@ test('teaching runtime sends high reasoning and the exact model/key through the 
     assert.ok(!JSON.stringify(payload).includes('synthetic-private-key'));
     const manifest = db.prepare('SELECT value FROM context_manifests').get() as { value: string };
     assert.equal(JSON.parse(manifest.value).budget.reasoning, 'high');
+    assert.deepEqual(JSON.parse(manifest.value).modelExecution.retry, { enabled: true, maxRetries: 3, baseDelayMs: 2000 });
+    assert.equal(JSON.parse(manifest.value).budget.milliseconds, undefined);
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -408,8 +416,111 @@ test('legacy display events reduce immutably in order and terminal states do not
     [{ type: 'tool', id: 'legacy:legacy-tool:1', name: 'read', status: 'error' }]);
 });
 
+test('transient failures resume completed tools once and stay out of subsequent session context', async () => {
+  const { db, learning, a, sa } = setup();
+  let requests = 0, executions = 0, commits = 0;
+  const runtime = new TeachingRuntime(learning, syntheticSource, {
+    retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 },
+    scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({}),
+      async execute() { executions++; return { content: [{ type: 'text', text: 'COMPLETE-TOOL-BODY' }], details: {} }; } }], commit() { commits++; } }),
+    stream: (_m, context) => {
+      requests++;
+      if (requests === 1) return response(reply([{ type: 'toolCall', id: 'completed-call', name: 'read', arguments: {} }], 'toolUse'));
+      if (requests === 2) return response({ ...reply([
+        { type: 'text', text: 'FAILED-ATTEMPT-TEXT' },
+        { type: 'toolCall', id: 'failed-call', name: 'read', arguments: {} },
+      ], 'error'), errorMessage: '502 Connection error PRIVATE-DIAGNOSTICS' });
+      assert.doesNotMatch(JSON.stringify(context), /FAILED-ATTEMPT-TEXT|failed-call|PRIVATE-DIAGNOSTICS/);
+      const completed = context.messages.filter((m) => m.role === 'toolResult');
+      assert.equal(completed.length, 1);
+      assert.equal(completed[0]?.toolCallId, 'completed-call');
+      if (requests === 3) assert.deepEqual(completed[0]?.content, [{ type: 'text', text: 'COMPLETE-TOOL-BODY' }]);
+      else assert.match(JSON.stringify(completed[0]), /tool body omitted/);
+      return response(reply([{ type: 'text', text: 'Recovered answer.' }]));
+    },
+  });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('read and recover'));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+    assert.equal(requests, 3); assert.equal(executions, 1); assert.equal(commits, 1);
+    const raw = JSON.stringify(db.prepare('SELECT value FROM agent_messages WHERE run_id=?').all(run.id));
+    assert.match(raw, /FAILED-ATTEMPT-TEXT|failed-call/);
+    assert.doesNotMatch(raw, /PRIVATE-DIAGNOSTICS|COMPLETE-TOOL-BODY/);
+    assert.equal(db.prepare('SELECT * FROM context_manifests WHERE run_id=?').all(run.id).length, 3);
+    const session = learning.session(a.id, sa);
+    const next = runtime.submit(a.id, sa, randomUUID(), message('continue', session.draft.revision));
+    await runtime.idle(next.run.id);
+    assert.equal(runtime.get(a.id, next.run.id).state, 'succeeded');
+    assert.equal(requests, 4); assert.equal(executions, 1); assert.equal(commits, 2);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('transient retry budgets reset after a successful assistant tool turn, including thrown transport failures', async () => {
+  const { db, learning, a, sa } = setup();
+  let requests = 0, executions = 0, commits = 0;
+  const runtime = new TeachingRuntime(learning, syntheticSource, {
+    retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 },
+    scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({}),
+      async execute() { executions++; return { content: [], details: {} }; } }], commit() { commits++; } }),
+    stream: () => {
+      requests++;
+      if (requests === 4) return response(reply([{ type: 'toolCall', id: 'recovered-call', name: 'read', arguments: {} }], 'toolUse'));
+      if (requests === 8) return response(reply([{ type: 'text', text: 'Finished.' }]));
+      if (requests === 2 || requests === 6) throw new Error('503 Network error');
+      return response({ ...reply([], 'error'), errorMessage: '502 Connection error' });
+    },
+  });
+  try {
+    const { run } = runtime.submit(a.id, sa, randomUUID(), message('recover both turns'));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded');
+    assert.equal(requests, 8); assert.equal(executions, 1); assert.equal(commits, 1);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('exhausted retries, authentication, billing, context overflow and final text truncation never publish', async () => {
+  for (const error of ['503 Service unavailable', '401 Invalid API key', '429 insufficient_quota billing', '503 maximum context length exceeded', 'length']) {
+    const { db, learning, a, sa } = setup();
+    let requests = 0, commits = 0;
+    const runtime = new TeachingRuntime(learning, syntheticSource, {
+      retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 },
+      scenario: () => ({ tools: [], commit() { commits++; } }),
+      stream: () => { requests++; return response({ ...reply([{ type: 'text', text: 'Incomplete.' }], error === 'length' ? 'length' : 'error'), errorMessage: error }); },
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(error));
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(a.id, run.id).state, 'failed');
+      assert.equal(commits, 0); assert.equal(requests, error === '503 Service unavailable' ? 4 : 1);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('stop and shutdown interrupt retry backoff without another request or commit', async () => {
+  for (const cause of ['stop', 'shutdown']) {
+    const { db, learning, a, sa } = setup();
+    let requests = 0, commits = 0;
+    const runtime = new TeachingRuntime(learning, syntheticSource, {
+      retry: { enabled: true, maxRetries: 3, baseDelayMs: 60_000 },
+      scenario: () => ({ tools: [], commit() { commits++; } }),
+      stream: () => { requests++; return response({ ...reply([], 'error'), errorMessage: '503 Service unavailable' }); },
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(cause));
+      await new Promise((r) => setImmediate(r));
+      assert.equal(runtime.get(a.id, run.id).state, 'running');
+      if (cause === 'stop') runtime.stop(a.id, run.id);
+      else await runtime.close();
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
+      assert.equal(requests, 1); assert.equal(commits, 0);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
 test('real Pi adapter streams tool arguments, replays them exactly, and never executes a failed stream', async () => {
-  for (const mode of ['success', 'failure', 'cancel', 'length'] as const) {
+  for (const mode of ['success', 'failure', 'retry', 'cancel', 'length'] as const) {
     const { db, learning, a, sa } = setup();
     const adapter = providerStream();
     let requests = 0, executions = 0, commits = 0, chunks = 0;
@@ -418,6 +529,7 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
     const chunk = (delta: unknown, finish_reason: string | null = null) => ({ id: 'gen-synthetic-stream', object: 'chat.completion.chunk', created: 1,
       model: teachingModel.id, choices: [{ index: 0, delta, finish_reason }] });
     const runtime = new TeachingRuntime(learning, syntheticSource, {
+      retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 },
       scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'Synthetic only', parameters: Type.Object({ marker: Type.String() }),
         async execute() { executions++; return { content: [{ type: 'text', text: 'tool result' }], details: {} }; } }], commit() { commits++; } }),
       stream: (model, context, options) => adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
@@ -444,7 +556,7 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
         { type: 'tool', id: `${run.id}:1:tool-input:1`, name: 'read', status: 'generating', inputText: '{"marker":"VISIBLE-ARGUMENT"}' },
       ]);
       assert.equal(executions, 0, 'Even complete-looking JSON is not permission to execute before normal stream termination');
-      if (mode === 'failure') wire.enqueue(encode({ error: { code: 502, message: 'PRIVATE-PROVIDER-ERROR', metadata: { raw: 'PRIVATE-ERROR-BODY' } } }));
+      if (mode === 'failure' || mode === 'retry') wire.enqueue(encode({ error: { code: 502, message: mode === 'retry' ? '503 PRIVATE-PROVIDER-ERROR' : 'PRIVATE-PROVIDER-ERROR', metadata: { raw: 'PRIVATE-ERROR-BODY' } } }));
       else if (mode === 'cancel') runtime.stop(a.id, run.id);
       else wire.enqueue(encode(chunk({}, mode === 'length' ? 'length' : 'tool_calls')));
       wire.close();
@@ -456,10 +568,10 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
       assert.ok(toolEvents.every((e) => !('inputCharacters' in e)));
       assert.equal(new Set(toolEvents.map((e) => e.callId)).size, 1);
       assert.equal(executions, mode === 'success' ? 1 : 0);
-      assert.equal(commits, mode === 'success' ? 1 : 0);
-      assert.equal(requests, mode === 'success' ? 2 : 1, 'No automatic retry on a failed stream');
-      assert.equal(runtime.get(a.id, run.id).state, mode === 'success' ? 'succeeded' : mode === 'cancel' ? 'interrupted' : 'failed');
-      if (mode === 'length') assert.match(runtime.get(a.id, run.id).error!, /截断/);
+      const completed = mode === 'success' || mode === 'retry' || mode === 'length';
+      assert.equal(commits, completed ? 1 : 0, mode);
+      assert.equal(requests, completed ? 2 : 1, 'Only Pi-classified transient errors and truncated tool feedback may resume');
+      assert.equal(runtime.get(a.id, run.id).state, mode === 'cancel' ? 'interrupted' : completed ? 'succeeded' : 'failed');
       const hydrated = learning.session(a.id, sa).messages.at(-1)!;
       assert.deepEqual(hydrated.parts, events.reduce<AgentDisplayPart[]>(applyAgentEvent, []));
       const tool = hydrated.parts?.find((p) => p.type === 'tool');
@@ -478,7 +590,7 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
       assert.ok(manifest.transport.lastEventAt >= manifest.transport.startedAt);
       assert.ok(manifest.transport.elapsedMs >= 0);
       if (mode === 'length') assert.equal(manifest.transport.rawStopReason, 'length');
-      if (mode === 'failure') {
+      if (mode === 'failure' || mode === 'retry') {
         assert.equal(manifest.actualUsage, null);
         assert.match(manifest.transport.errorFingerprint, /^[a-f0-9]{64}$/);
       }
@@ -487,6 +599,77 @@ test('real Pi adapter streams tool arguments, replays them exactly, and never ex
       try { wire?.close(); } catch { /* Already closed by the fixture or adapter. */ }
       await runtime.close(); db.close();
     }
+  }
+});
+
+test('real HTTP stalls time out while continuously streaming bodies outlive the request timeout and remain cancellable', async () => {
+  const globalFetch = globalThis.fetch;
+  for (const mode of ['headers', 'idle', 'active', 'cancel'] as const) {
+    const { db, learning, a, sa } = setup();
+    let requests = 0, commits = 0, streamed!: () => void;
+    const ready = new Promise<void>((resolve) => { streamed = resolve; });
+    const server = createServer((req, res) => {
+      requests++; req.resume();
+      if (mode === 'headers') return;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      const chunk = (text: string, finish_reason: string | null = null) => `data: ${JSON.stringify({ id: 'synthetic-http',
+        choices: [{ index: 0, delta: { content: text }, finish_reason }] })}\n\n`;
+      res.write(chunk('0|'));
+      if (mode !== 'active') return;
+      let index = 1;
+      const timer = setInterval(() => {
+        res.write(chunk(`${index++}|`));
+        if (index === 40) { clearInterval(timer); res.end(chunk('', 'stop')); }
+      }, 30);
+      res.once('close', () => clearInterval(timer));
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    const model = { ...teachingModel, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` };
+    const source: ModelSource = { current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
+    const adapter = providerStream();
+    const runtime = new TeachingRuntime(learning, source, {
+      httpIdleTimeoutMs: 100, retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
+      scenario: () => ({ tools: [], commit() { commits++; } }),
+      stream: (model, context, options) => adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
+        onProviderStreamEvent: (...args) => { options?.onProviderStreamEvent?.(...args); streamed(); } }),
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(mode));
+      if (mode === 'cancel') { await ready; runtime.stop(a.id, run.id); }
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(a.id, run.id).state, mode === 'active' ? 'succeeded' : mode === 'cancel' ? 'interrupted' : 'failed', mode);
+      assert.equal(requests, 1); assert.equal(commits, mode === 'active' ? 1 : 0);
+      if (mode === 'active') assert.equal(learning.session(a.id, sa).messages.at(-1)?.text, Array.from({ length: 40 }, (_, i) => `${i}|`).join(''));
+      const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests').get() as { value: string }).value);
+      assert.equal(manifest.modelExecution.httpIdleTimeoutMs, 100); assert.equal(manifest.modelExecution.timeoutMs, 100);
+      assert.equal(manifest.transport.httpStatus, mode === 'headers' ? null : 200);
+      assert.equal(globalThis.fetch, globalFetch);
+    } finally { await runtime.close(); db.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
+  }
+});
+
+test('Google and native SDK transports are not given an unsupported scoped fetch', async () => {
+  const models = builtinModels(), adapter = providerStream(models);
+  for (const provider of ['google', 'google-vertex', 'amazon-bedrock']) {
+    const { db, learning, a, sa } = setup();
+    const model = models.getModels(provider)[0]!;
+    const selection: ModelSelection = { provider, model: model.id, thinkingLevel: 'off' };
+    const source: ModelSource = { current: () => ({ selection, model }), resolve: () => model };
+    let providerError: string | undefined;
+    const runtime = new TeachingRuntime(learning, source, { scenario: () => ({ tools: [], commit() {} }), stream: async (model, context, options) => {
+      const stream = await adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
+        onPayload() { throw new Error('Stopped before network transport'); } });
+      providerError = (await stream.result()).errorMessage;
+      return stream;
+    } });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message(provider));
+      await runtime.idle(run.id);
+      assert.equal(providerError, 'Stopped before network transport', 'Native adapters must reach payload construction, not reject fetch injection');
+      assert.equal(runtime.get(a.id, run.id).state, 'failed');
+      const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests').get() as { value: string }).value);
+      assert.equal(manifest.modelExecution.httpIdleTimeoutMs, null, 'Do not claim scoped HTTP protection on native SDK paths');
+    } finally { await runtime.close(); db.close(); }
   }
 });
 

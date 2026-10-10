@@ -31,9 +31,8 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '10';
+export const compilerVersion = '11';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
-export const budget = { milliseconds: 300_000 };
 
 export function xmlText(text: string) {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udfff]/gu, '�')
@@ -74,13 +73,16 @@ export function compileRequest(input: FrozenContext, history: HistoryGroup[], cu
     { role: 'system', content: prompt, toolsAdded: tools, timestamp: 0 },
     { role: 'user', content: xml, timestamp: 0 },
   ];
-  // System messages are rebuilt once. Never allow a saved system/tool patch to win.
-  const active = current.filter((m) => m.role !== 'system');
-  const previous = history.map((group) => ({ ...group, messages: group.messages.filter((m) => m.role !== 'system') }));
+  // Rebuild system/tool declarations once. Failed attempts remain in raw history,
+  // but not in this request or later requests from a successfully recovered run.
+  const project = (messages: Message[]) => messages.filter((m) => m.role !== 'system' &&
+    !(m.role === 'assistant' && (m.stopReason === 'error' || m.stopReason === 'aborted')));
+  const active = project(current);
+  const previous = history.map((group) => ({ ...group, messages: project(group.messages) }));
   return { messages: structuredClone([...prefix, ...previous.flatMap((g) => g.messages), ...active]),
     manifest: { schemaVersion: contextVersion, compilerVersion, promptHash: hash(prompt), contextHash: hash(xml),
       sources, selectedHistory: previous.map((g) => ({ id: g.id, hash: hash(g.messages) })),
-      budget: { reasoning: input.model?.thinkingLevel ?? null, milliseconds: budget.milliseconds },
+      budget: { reasoning: input.model?.thinkingLevel ?? null },
       retention: 'tool bodies omitted; explicit references retained' },
   };
 }

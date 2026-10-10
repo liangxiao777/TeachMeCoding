@@ -1,11 +1,15 @@
-import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Model, type Models } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Model, type Models, type RetryPolicy } from '@earendil-works/pi-ai';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 
+// pi-coding-agent 1.0.0 defaults, without its session/settings host.
+export const defaultHttpIdleTimeoutMs = 300_000;
+export const defaultRetryPolicy: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 2000 };
+
 /**
- * pi-ai's unified request path: auth resolution and per-API reasoning mapping.
- * streamSimple sets an output ceiling from the model maximum and the estimated
- * remaining context; that is an accepted trade-off for provider-neutral reasoning.
+ * Follow pi-coding-agent's ordinary simple-stream path: Models resolves auth,
+ * while provider implementations map reasoning and derive the output ceiling.
+ * The host adds no maxTokens override or cumulative token budget.
  */
 export function providerStream(models: Models = builtinModels()): StreamFn {
   return (model, context, options) => models.streamSimple(model, context, options);

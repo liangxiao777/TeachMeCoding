@@ -99,6 +99,36 @@ test('tool errors reach the model and remain visible without discarding a valid 
   }
 });
 
+test('truncated lesson calls can be reissued and a later transient failure preserves only the complete staged lesson', async () => {
+  const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
+  const complete = { title: 'Complete lesson', content: '## Arguments\n\nA complete explanation with a final example.\n' };
+  let requests = 0;
+  const runtime = new TeachingRuntime(l, syntheticSource, { retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 }, stream: (_m, context) => {
+    requests++;
+    assert.equal(l.unit(space.id, unit).lesson, null, 'Do not publish a staged or truncated result early');
+    if (requests === 1) return response(reply([{ type: 'toolCall', id: 'truncated', name: 'submit_lesson',
+      arguments: { title: 'Incomplete lesson', content: 'TRUNCATED-BODY' } }], 'length'));
+    if (requests === 2) {
+      const rejected = context.messages.at(-1);
+      assert.ok(rejected?.role === 'toolResult' && rejected.isError);
+      assert.match(JSON.stringify(rejected.content), /not executed[\s\S]*Re-issue/);
+      return response(reply([{ type: 'toolCall', id: 'complete', name: 'submit_lesson', arguments: complete }], 'toolUse'));
+    }
+    if (requests === 3) return response({ ...reply([], 'error'), errorMessage: '503 Service unavailable' });
+    return response(reply([{ type: 'text', text: 'Ready.' }]));
+  } });
+  try {
+    const task = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 0 });
+    await runtime.idle(task.id);
+    assert.equal(runtime.get(space.id, task.id).state, 'succeeded'); assert.equal(requests, 4);
+    const lesson = l.unit(space.id, unit).lesson!;
+    assert.equal(lesson.revision, 1); assert.equal(lesson.title, complete.title); assert.equal(lesson.content, complete.content);
+    const parts = runtime.events(space.id, task.id).events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
+    assert.deepEqual(parts.filter((p) => p.type === 'tool').map((p) => p.status), ['error', 'done']);
+    assert.equal(db.prepare('SELECT * FROM lesson_versions').all().length, 1);
+  } finally { await runtime.close(); db.close(); }
+});
+
 test('independent lesson tasks are idempotent, preserve old versions and reject late writes', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
   const legacy = { title: 'legacy', content: '', intro: 'original intro', blocks: [

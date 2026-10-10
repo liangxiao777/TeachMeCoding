@@ -74,29 +74,37 @@ test('Pi reports unavailable write/execute and cross-scene tools without grantin
   } finally { await runtime.close(); db.close(); }
 });
 
-test('endless valid tools and a stalled provider time out without a commit', async () => {
-  for (const mode of ['loop', 'timeout'] as const) {
+test('model streams and active tools have no whole-run deadline; explicit stopping still prevents commit', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const mode of ['tool', 'stream'] as const) {
     const db = openDatabase(':memory:'), l = new Learning(db), space = l.create({ name: mode, goal: 'test' });
-    let requests = 0, committed = 0;
-    const runtime = new TeachingRuntime(l, syntheticSource, { milliseconds: 100,
-      scenario: () => ({ tools: [{ name: 'ping', label: 'ping', description: 'no effect', parameters: Type.Object({}), async execute() { return { content: [], details: {} }; } }], commit() { committed++; } }),
-      stream: async (_m, _c, options) => {
+    let requests = 0, committed = 0, entered!: () => void, release!: () => void;
+    let signal: AbortSignal | undefined;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = new TeachingRuntime(l, syntheticSource, {
+      scenario: () => ({ tools: [{ name: 'ping', label: 'ping', description: 'no effect', parameters: Type.Object({}),
+        async execute(_id, _args, current) { signal = current; entered(); await held; return { content: [], details: {} }; } }], commit() { committed++; } }),
+      stream: (_m, _c, options) => {
         requests++;
-        if (mode === 'loop') {
-          await new Promise((resolve) => setImmediate(resolve));
-          return response(reply([{ type: 'toolCall', id: `call-${requests}`, name: 'ping', arguments: {} }], 'toolUse'));
-        }
+        if (mode === 'tool') return response(reply([{ type: 'toolCall', id: 'ping-call', name: 'ping', arguments: {} }], 'toolUse'));
+        signal = options?.signal;
         const stream = createAssistantMessageEventStream();
-        options?.signal?.addEventListener('abort', () => stream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }), { once: true });
+        signal?.addEventListener('abort', () => stream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }), { once: true });
+        entered();
         return stream;
       },
     });
     try {
       const { run } = runtime.submit(space.id, space.sessions[0]!.id, randomUUID(), { text: 'test', quote: null, draftRevision: 0 });
-      await runtime.idle(run.id); const final = runtime.get(space.id, run.id);
-      assert.equal(final.state, 'failed'); assert.equal(committed, 0);
-      assert.ok(requests >= 1); assert.match(final.error!, /超时/);
-    } finally { await runtime.close(); db.close(); }
+      await ready;
+      t.mock.timers.tick(600_000);
+      assert.equal(signal?.aborted, false);
+      assert.equal(runtime.get(space.id, run.id).state, 'running');
+      runtime.stop(space.id, run.id); release(); await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, 'interrupted');
+      assert.equal(signal?.aborted, true); assert.equal(committed, 0); assert.equal(requests, 1);
+    } finally { release(); await runtime.close(); db.close(); }
   }
 });
 

@@ -1,13 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
-import { normalizeContext, type Message } from '@earendil-works/pi-ai';
+import { isContextOverflow, isRetryableAssistantError, normalizeContext, retryDelayMs, type Message, type RetryPolicy } from '@earendil-works/pi-ai';
 import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
-import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
-import { failureStream, providerStream } from './model.js';
+import { compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
+import { defaultHttpIdleTimeoutMs, defaultRetryPolicy, failureStream, providerStream } from './model.js';
+import { createModelTransport } from './model-transport.js';
 import { createScenario } from './scenarios.js';
 import { baseline, createTask } from './tasks.js';
 import { previousLessonReferences } from './lesson-tools.js';
@@ -28,7 +30,8 @@ export interface ScenarioRun {
 interface RuntimeOptions {
   stream?: StreamFn;
   scenario?: (input: FrozenContext) => ScenarioRun;
-  milliseconds?: number;
+  httpIdleTimeoutMs?: number;
+  retry?: RetryPolicy;
   debugDirectory?: string;
   projectDirectory?: (space: string) => string;
   actions?: Actions;
@@ -44,8 +47,14 @@ export class TeachingRuntime {
   private live = new Map<string, { space: string; agent?: Agent; controller: AbortController; done: Promise<void> }>();
   private closing = false;
   private stream: StreamFn;
+  private httpIdleTimeoutMs: number;
+  private retryPolicy: RetryPolicy;
+  private modelTransport: ReturnType<typeof createModelTransport>;
   constructor(readonly learning: Learning, private models: ModelSource | null, private options: RuntimeOptions = {}) {
     this.stream = options.stream ?? models?.stream ?? providerStream();
+    this.httpIdleTimeoutMs = options.httpIdleTimeoutMs ?? defaultHttpIdleTimeoutMs;
+    this.retryPolicy = { ...(options.retry ?? defaultRetryPolicy) };
+    this.modelTransport = createModelTransport(this.httpIdleTimeoutMs);
   }
   get available() { return this.models !== null && this.models.current() !== null; }
   get actions() { return this.options.actions; }
@@ -266,6 +275,7 @@ export class TeachingRuntime {
       this.stopExecution(entry.space, id);
     }
     await Promise.all([...this.live.values()].map((entry) => entry.done));
+    await this.modelTransport.close();
   }
   private finish(space: string, id: string, state: AgentRun['state'], error: string | null) {
     const tables = this.tables(space, id);
@@ -311,8 +321,7 @@ export class TeachingRuntime {
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
     let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
-    let failure = '', request = 0, nativeSeq = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failure = '', request = 0, nativeSeq = 0, retryAttempt = 0;
     try {
       const fixed = frozen.evaluation;
       if (fixed?.submission.evidence.kind === 'local') {
@@ -330,7 +339,7 @@ export class TeachingRuntime {
       if (!active(this.get(space, id))) return;
       const agent = new Agent({
         initialState: { model: choice.model, tools: prepared.tools, thinkingLevel: choice.selection.thinkingLevel },
-        sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', maxRetryDelayMs: 1000,
+        sessionId: frozen.sessionId ?? id, toolExecution: 'sequential',
         beforeToolCall: async () => {
           if (failure) return { block: true, reason: failure, terminate: true };
           if (!active(this.get(space, id))) {
@@ -340,13 +349,17 @@ export class TeachingRuntime {
           return undefined;
         },
         streamFn: async (model, context, options) => {
+          let compiled: ReturnType<typeof compileRequest>;
+          const timeoutMs = options?.timeoutMs ?? (this.httpIdleTimeoutMs === 0 ? 2147483647 : this.httpIdleTimeoutMs);
+          const modelFetch = this.modelTransport.fetchFor(model.api);
           try {
             request++;
             if (!active(this.get(space, id))) return failureStream(model, '运行已停止。', true);
-            const compiled = compileRequest(frozen, history, context.messages, prepared.declarations, skills?.prompt);
+            compiled = compileRequest(frozen, history, context.messages, prepared.declarations, skills?.prompt);
             const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
               model: choice.model.id, provider: choice.model.provider, thinkingLevel: choice.selection.thinkingLevel,
               modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
+              modelExecution: { httpIdleTimeoutMs: modelFetch ? this.httpIdleTimeoutMs : null, timeoutMs, retry: this.retryPolicy, maxRetryDelayMs: options?.maxRetryDelayMs },
               extensions: { skills: skills?.digest ?? null, mcpTools: prepared.inventory.filter((tool) => tool.source === 'mcp').map((tool) => tool.name) },
               toolInventory: prepared.inventory, toolSources, actualUsage: null };
             this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
@@ -355,14 +368,21 @@ export class TeachingRuntime {
               writeFileSync(join(this.options.debugDirectory, `${id}-${request}.json`), JSON.stringify({ manifest, messages: compiled.messages }), { mode: 0o600, flag: 'wx' });
             }
             transport = { startedAt: Date.now(), httpStatus: null, eventCount: 0, lastEventAt: null };
+          } catch (error) {
+            failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
+            return failureStream(model, failure);
+          }
+          try {
             return await this.stream(model, normalizeContext({ messages: compiled.messages }), {
-              ...options,
+              ...options, timeoutMs, fetch: options?.fetch ?? modelFetch,
               onResponse: (response) => { transport.httpStatus = response.status; },
               onProviderStreamEvent: () => { transport.eventCount++; transport.lastEventAt = Date.now(); },
             });
           } catch (error) {
-            failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
-            return failureStream(model, failure);
+            // Transport throws follow the same retry path as native error responses.
+            // The raw reason is fingerprinted, never exposed in retained messages/UI.
+            return failureStream(model, error instanceof Error ? error.message : String(error),
+              entry.controller.signal.aborted || options?.signal?.aborted);
           }
         },
       });
@@ -370,7 +390,6 @@ export class TeachingRuntime {
       // batch without another request or an invented assistant failure message.
       agent.finishTurn = (_turn, signal) => failure || signal?.aborted ? { action: 'end' } : undefined;
       entry.agent = agent;
-      timer = setTimeout(() => { failure = '模型运行超时，请重试或缩小任务。'; agent.abort(); }, this.options.milliseconds ?? budget.milliseconds);
       this.learning.db.prepare(`UPDATE ${tables.work} SET state='running' WHERE space_id=? AND id=?`).run(space, id);
       this.emit(space, id, { type: 'state', state: 'running', error: null });
       agent.subscribe((event) => {
@@ -378,7 +397,7 @@ export class TeachingRuntime {
           const m = event.message;
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
-            if (m.stopReason === 'length') failure = '模型输出被截断，未保存生成产物。';
+            if (m.stopReason !== 'error') retryAttempt = 0;
             // Keep enough transport evidence for diagnosis without retaining provider
             // error bodies, headers, credentials, or an invented zero-token usage.
             const diagnostic = { ...transport, elapsedMs: transport ? Date.now() - transport.startedAt : null,
@@ -427,6 +446,17 @@ export class TeachingRuntime {
       await agent.prompt({ role: 'user', content: frozen.references.length ? [
         { type: 'text', text: skills?.text ?? text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },
       ] : skills?.text ?? text, timestamp: Date.now() });
+      while (!failure && active(this.get(space, id)) && !entry.controller.signal.aborted) {
+        const last = agent.state.messages.at(-1);
+        if (!this.retryPolicy.enabled || retryAttempt >= this.retryPolicy.maxRetries || last?.role !== 'assistant' ||
+          isContextOverflow(last, choice.model.contextWindow) || !isRetryableAssistantError(last)) break;
+        // Like AgentSession, omit only the failed assistant from model context;
+        // preserve raw evidence, completed tool results and staged business artifacts.
+        agent.state.messages = agent.state.messages.slice(0, -1);
+        await delay(retryDelayMs(this.retryPolicy, ++retryAttempt), undefined, { signal: entry.controller.signal });
+        if (!active(this.get(space, id))) return;
+        await agent.continue();
+      }
       const last = agent.state.messages.at(-1);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
@@ -438,7 +468,6 @@ export class TeachingRuntime {
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
     } finally {
-      if (timer) clearTimeout(timer);
       this.options.library?.release(id);
       if (this.get(space, id).state !== 'succeeded') this.learning.db.transaction(() => sealToolCalls(this.learning.db,
         frozen.sessionId ? 'agent_messages' : 'task_messages', space, id))();
