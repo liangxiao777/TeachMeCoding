@@ -224,7 +224,7 @@ test('route input hands off to Agent, preserves independent drafts, and waits fo
   await routeInput.press('Enter');
   await expect(agent).toBeVisible();
   await expect(routeInput).toHaveCount(0);
-  await expect(page.locator('textarea:visible')).toHaveCount(1);
+  await expect(page.getByRole('textbox')).toHaveCount(1);
   await expect(page.getByLabel('向 Agent 提问', { exact: true })).toHaveValue('保留在 Agent 中的草稿');
   await expect(agent.getByRole('button', { name: '确认调整路线' })).toBeVisible({ timeout: 12000 });
   const proposedUnit = page.getByRole('main').locator('[data-slot="card-title"]').filter({ hasText: '练习项目：单词计数器' });

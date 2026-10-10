@@ -9,7 +9,8 @@ import type { ModelSource } from '../models/service.js';
 import { budget, compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
 import { failureStream, providerStream } from './model.js';
 import { createScenario } from './scenarios.js';
-import { createTask } from './tasks.js';
+import { baseline, createTask } from './tasks.js';
+import { previousLessonReferences } from './lesson-tools.js';
 import { Assessments } from '../modules/assessments.js';
 import type { Actions } from '../modules/actions.js';
 import type { Executions } from '../modules/executions.js';
@@ -80,6 +81,7 @@ export class TeachingRuntime {
     const s = this.learning.session(space, session), w = this.learning.space(space);
     if (s.scope !== 'intake' && !w.requirement.confirmed) throw new BusinessError(422, '请先确认学习需求。');
     if (s.scope === 'route') this.learning.intake.assertReady(space, w.requirement);
+    if (s.unitId) this.learning.assertUnitUnlocked(space, s.unitId);
     const ref = (s.scope === 'unit' ? w.route.intake : w.requirement.intake)?.researchRef;
     return structuredClone({ spaceId: space, sessionId: session, unitId: s.unitId,
       model: this.models?.current()?.selection,
@@ -103,6 +105,7 @@ export class TeachingRuntime {
     if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
     const id = this.learning.once(key, `task:${space}:${unit}`, input, () => {
       const w = this.learning.space(space), u = this.learning.unit(space, unit);
+      this.learning.assertUnitUnlocked(space, unit);
       const revision = input.kind === 'lesson' ? u.lesson?.revision ?? 0 : input.kind === 'assessment' ? u.assessment?.revision ?? 0 : u.draft.revision;
       if (!w.requirement.confirmed || revision !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
       if (input.kind === 'lesson') {
@@ -116,6 +119,7 @@ export class TeachingRuntime {
         lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
         research: w.route.intake?.researchRef ? this.learning.intake.research(space, w.route.intake.researchRef) : null,
         assessmentRevision: u.assessment?.revision ?? 0,
+        ...(input.kind === 'lesson' ? { lessonRefs: this.learning.lessonReferences(space) } : {}),
         ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
       if (input.kind === 'evaluation' && input.execute) {
         if (!this.executions) throw new BusinessError(503, '本机执行不可用。');
@@ -136,8 +140,15 @@ export class TeachingRuntime {
     if (previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的独立任务。');
     if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
     const id = this.learning.once(key, `retry-task:${space}:${previousId}`, null, () => {
+      this.learning.assertUnitUnlocked(space, previous.unitId!);
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, previous.unitId, previous.kind)) throw new BusinessError(409, '当前单元已有相同任务。');
       const old = this.learning.db.prepare('SELECT input FROM task_runs WHERE space_id=? AND id=?').get(space, previousId) as { input: string };
+      if (previous.kind === 'lesson') {
+        const frozen = JSON.parse(old.input) as FrozenContext;
+        const refs = previousLessonReferences(frozen);
+        this.learning.checkBaseline(space, previous.unitId!, baseline(frozen));
+        this.learning.checkLessonReferences(space, refs);
+      }
       const id = randomUUID();
       this.learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,?,'pending')").run(space, id, previous.unitId, previous.kind);
       this.learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, old.input, Date.now());

@@ -383,6 +383,76 @@ test('a lost opening response retries one space, message and automatically start
   expect(submittedRuns).toBe(0);
 });
 
+test('unit access follows published courseware and lesson generation reads earlier material on demand', async ({ page }, info) => {
+  const goal = `顺序课件 ${info.project.name}`;
+  await page.emulateMedia({ colorScheme: 'light' });
+  await create(page, goal);
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
+  const initial = await workspace(page, goal), [first, second] = initial.route.content.stages[0].units;
+  const row = (title: string) => page.locator('li').filter({ has: page.locator('[data-slot="card-title"]').filter({ hasText: title }) });
+  const secondRow = row('错误与输出');
+  await expect(secondRow.getByRole('button', { name: '未解锁', exact: true })).toBeDisabled();
+  await expect(secondRow).toContainText('前序单元的课件全部保存后解锁，无需测评通过');
+  const denied = await page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const response = await fetch(`/api/spaces/${space}/units/${unit}/tasks`, { method: 'POST',
+      headers: { 'X-TMC-Token': token, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ kind: 'lesson', revision: 0 }) });
+    return { status: response.status, body: await response.json() };
+  }, { space: initial.id, unit: second.id });
+  expect(denied.status).toBe(422); expect(denied.body.error).toContain('尚未解锁');
+  for (const tab of ['unit', 'assessment', 'result']) {
+    await page.goto(`/?space=${initial.id}&unit=${second.id}&tab=${tab}`);
+    await expect(page.getByRole('heading', { name: goal, exact: true })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: '已返回学习路线' })).toBeVisible();
+    await expect(secondRow.getByRole('button', { name: '未解锁', exact: true })).toBeDisabled();
+  }
+  expect((await workspace(page, goal)).tasks).toHaveLength(0);
+  // Capture the normal route without the direct-link error banner.
+  await page.goto(`/?space=${initial.id}&tab=route`);
+  const stage = page.locator('section').filter({ has: page.getByRole('heading', { name: /工具基础/ }) });
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator('html')).toHaveClass(new RegExp(theme));
+    await stage.screenshot({ path: `.amp/in/artifacts/unit-order-locked-${theme}-${info.project.name}.png`, animations: 'disabled' });
+  }
+  await row('参数与输入').getByRole('button', { name: '进入', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '学习路线', exact: true }).click();
+  await expect(secondRow.getByRole('button', { name: '进入', exact: true })).toBeEnabled();
+  const afterFirst = await workspace(page, goal);
+  expect(afterFirst.tasks.filter((task: { kind: string }) => task.kind === 'lesson')).toHaveLength(1);
+  expect(afterFirst.tasks[0].state).toBe('succeeded');
+  expect(afterFirst.sessions.filter((session: { unitId: string }) => session.unitId === second.id)).toHaveLength(0);
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    await expect(page.locator('html')).toHaveClass(new RegExp(theme));
+    await stage.screenshot({ path: `.amp/in/artifacts/unit-order-unlocked-${theme}-${info.project.name}.png`, animations: 'disabled' });
+  }
+  await secondRow.getByRole('button', { name: '进入', exact: true }).click();
+  await expect(page.locator('.lesson-prose')).toContainText('承接前一单元介绍的命令行参数');
+  const evidence = await page.evaluate(async ({ space, first, second }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token };
+    const work = await (await fetch(`/api/spaces/${space}`, { headers })).json();
+    const task = work.tasks.find((task: { unitId: string; kind: string }) => task.unitId === second && task.kind === 'lesson');
+    return {
+      first: await (await fetch(`/api/spaces/${space}/units/${first}`, { headers })).json(),
+      events: await (await fetch(`/api/spaces/${space}/runs/${task.id}/events`, { headers })).json(),
+    };
+  }, { space: initial.id, first: first.id, second: second.id });
+  expect(evidence.first.records).toHaveLength(0); expect(evidence.first.assessment).toBeNull();
+  expect(evidence.events.run.state).toBe('succeeded');
+  const reads = evidence.events.events.filter((event: RunEvent) => event.data.type === 'tool' && event.data.phase === 'end')
+    .map((event: RunEvent) => event.data.type === 'tool' ? [event.data.name, event.data.failed] : []);
+  expect(reads).toContainEqual(['read_learning_route', false]);
+  expect(reads).toContainEqual(['read_previous_lesson', false]);
+  await page.reload();
+  await expect(page.locator('.lesson-prose')).toContainText('承接前一单元介绍的命令行参数');
+});
+
 test('empty requirements are editable and late intake cannot replace saved or unsaved manual edits', async ({ page }, info) => {
   test.setTimeout(45000);
   for (const saveEarly of [false, true]) {

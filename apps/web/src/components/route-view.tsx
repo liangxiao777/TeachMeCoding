@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowRight, Lightbulb, Route, Sparkles, Trophy } from 'lucide-react'
+import { ArrowRight, Lightbulb, Lock, Route, Sparkles, Trophy } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { StatusIcon, StatusPill, isComposing } from '@/components/shared'
@@ -10,13 +10,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
 import { Progress } from '@/components/ui/progress'
-import { allUnits, findUnit } from '@/app/selectors'
+import { allUnits, availableUnitIds, findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 import { uiMotion } from '@/lib/motion'
 import type { Unit } from '@/app/types'
 
-function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string; isCurrent: boolean; isLast: boolean }) {
+function UnitRow({ unit, index, isCurrent, isLast, locked }: { unit: Unit; index: string; isCurrent: boolean; isLast: boolean; locked: boolean }) {
   const { enterUnit, capabilities } = useApp()
   const finished = unit.status === 'passed' || unit.status === 'skipped'
   const verb = finished ? '复习' : unit.status === 'not_started' ? '进入' : '继续'
@@ -33,6 +33,7 @@ function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string
           'mb-4 flex-1 transition-shadow',
           isCurrent ? 'shadow-md ring-2 ring-primary/60' : 'hover:shadow-sm',
           unit.status === 'skipped' && 'opacity-70',
+          locked && 'bg-muted/30',
         )}
       >
         <CardHeader>
@@ -44,9 +45,9 @@ function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string
           </CardTitle>
           <CardDescription className="leading-relaxed">{unit.summary}</CardDescription>
           <CardAction>
-            <Button variant={isCurrent ? 'default' : 'outline'} size="sm" onClick={() => enterUnit(unit.id)}>
-              {verb}
-              <ArrowRight data-icon="inline-end" />
+            <Button variant={isCurrent ? 'default' : 'outline'} size="sm" disabled={locked} onClick={() => enterUnit(unit.id)}>
+              {locked ? '未解锁' : verb}
+              {locked ? <Lock data-icon="inline-end" /> : <ArrowRight data-icon="inline-end" />}
             </Button>
           </CardAction>
         </CardHeader>
@@ -66,7 +67,12 @@ function UnitRow({ unit, index, isCurrent, isLast }: { unit: Unit; index: string
               <AlertDescription className="text-accent-foreground">上次测评建议：{unit.lastAdvice[0]}</AlertDescription>
             </Alert>
           )}
-          {unit.contentState !== 'ready' && unit.status !== 'skipped' && (
+          {locked ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Lock className="size-3" aria-hidden />
+              前序单元的课件全部保存后解锁，无需测评通过
+            </p>
+          ) : unit.contentState !== 'ready' && unit.status !== 'skipped' && (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Sparkles className="size-3" aria-hidden />
               {capabilities.agent ? '进入后为你生成课件' : '尚无课件 · Agent 暂不可用'}
@@ -116,8 +122,10 @@ export function RouteView() {
     }
   }
   const units = allUnits(space)
+  const available = availableUnitIds(space)
   const done = units.filter((u) => u.status === 'passed' || u.status === 'skipped').length
-  const current = findUnit(space, space.currentUnitId)
+  const selectedUnit = findUnit(space, space.currentUnitId)
+  const current = selectedUnit && available.has(selectedUnit.id) ? selectedUnit : units.find((unit) => available.has(unit.id))
   const req = space.requirement
 
   return (
@@ -236,8 +244,9 @@ export function RouteView() {
                   key={u.id}
                   unit={u}
                   index={`${si + 1}.${ui + 1}`}
-                  isCurrent={u.id === space.currentUnitId && !space.completed}
+                  isCurrent={u.id === current?.id && !space.completed}
                   isLast={ui === stage.units.length - 1}
+                  locked={!available.has(u.id)}
                 />
               ))}
             </ol>

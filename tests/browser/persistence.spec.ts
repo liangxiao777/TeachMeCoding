@@ -518,7 +518,7 @@ test('Markdown lessons derive directories and offer code, callouts and optional 
   await article.getByRole('button', { name: '复制', exact: true }).first().click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
   await article.getByRole('button', { name: '带入 IDE', exact: true }).first().click();
-  await expect(visible(page, '编辑 move demo.rs')).toHaveValue(code);
+  await expect(visible(page, '编辑 move demo.rs')).toHaveText(code, { useInnerText: true });
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'move demo.rs'), 'utf8')).toBe('');
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await page.getByRole('button', { name: '查看课件', exact: true }).click();

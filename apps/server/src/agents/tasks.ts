@@ -4,6 +4,7 @@ import { BusinessError, type Learning } from '../modules/learning.js';
 import type { FrozenContext } from './context.js';
 import type { ScenarioRun } from './runtime.js';
 import { assessmentArtifactSchema, Assessments, evaluationArtifactSchema } from '../modules/assessments.js';
+import { createLessonReadTools, previousLessonReferences } from './lesson-tools.js';
 
 export const baseline = (input: FrozenContext) => ({ requirement: input.requirement.revision, route: input.route!.revision, lesson: input.lesson?.revision ?? 0 });
 export function createTask(learning: Learning, input: FrozenContext): ScenarioRun {
@@ -37,7 +38,7 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
     } };
   }
   let lesson: ReturnType<typeof lessonSubmissionSchema.parse> | undefined;
-  return { tools: [{ name: 'submit_lesson', label: '生成课件', description: 'Submit the complete lesson as a title and Markdown content. Write explanations, headings, examples and exercises naturally; do not supply block or heading IDs. Code fences may include file=demo.py. Optional > [!TIP] / > [!WARNING] callouts and ::::practice containers with :::hint / :::solution enrich teaching; none are mandatory. Does not run code or mark assessments passed.',
+  return { tools: [...createLessonReadTools(learning, input), { name: 'submit_lesson', label: '生成课件', description: 'Submit the complete lesson as a title and Markdown content. Write explanations, headings, examples and exercises naturally; do not supply block or heading IDs. Code fences may include file=demo.py. Optional > [!TIP] / > [!WARNING] callouts and ::::practice containers with :::hint / :::solution enrich teaching; none are mandatory. Does not run code or mark assessments passed.',
     parameters: Type.Unsafe<ReturnType<typeof lessonSubmissionSchema.parse>>(JSON.parse(JSON.stringify(lessonSubmissionSchema.toJSONSchema()))),
     async execute(_id, args) {
       lesson = lessonSubmissionSchema.parse(args);
@@ -45,6 +46,8 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
     },
   }], commit() {
     if (!lesson) throw new BusinessError(422, '模型没有提交有效课件；旧课件保持不变。');
+    learning.assertUnitUnlocked(input.spaceId, input.unitId!);
+    learning.checkLessonReferences(input.spaceId, previousLessonReferences(input));
     learning.saveLesson(input.spaceId, input.unitId!, lesson, baseline(input));
   } };
 }

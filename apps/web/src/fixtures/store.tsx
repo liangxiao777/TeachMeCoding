@@ -8,6 +8,7 @@ import { getLesson } from './lessons'
 import { runCommandFor, runFile } from './code-runner'
 import { activeSession, ensureSession, selectSession, sessionUnitId } from './sessions'
 import { addProjectEntry, closeProjectFile, entryPath, openProjectFile, projectChildren, renameProjectEntry, resolveProjectPath } from './project-files'
+import { availableUnitIds, canAccessView } from '@/app/selectors'
 import {
   RUST_ROUTE_NOTE,
   detectKind,
@@ -79,17 +80,19 @@ function useStoreImpl(initialState: () => AppState) {
     const getSpace = (id: string) => stateRef.current.spaces.find((s) => s.id === id)
 
     const generateUnit = (spaceId: string, unitId: string) => {
-      mapSpace(spaceId, (s) => withUnit(s, unitId, (u) => ({ ...u, contentState: 'generating' })))
+      const space = getSpace(spaceId)
+      if (!space || !availableUnitIds(space).has(unitId)) return
+      mapSpace(spaceId, (s) => withUnit(s, unitId, (u) => ({ ...u, hasLesson: u.hasLesson ?? u.contentState === 'ready', contentState: 'generating' })))
       setTimeout(() => {
         const fail = stateRef.current.controls.failNextGeneration
         if (fail) setState((st) => ({ ...st, controls: { ...st.controls, failNextGeneration: false } }))
-        mapSpace(spaceId, (s) => withUnit(s, unitId, (u) => ({ ...u, contentState: fail ? 'failed' : 'ready' })))
+        mapSpace(spaceId, (s) => withUnit(s, unitId, (u) => ({ ...u, hasLesson: u.hasLesson || !fail, contentState: fail ? 'failed' : 'ready' })))
       }, 2600)
     }
 
     const enterUnit = (unitId: string) => {
       const s = cur()
-      if (!s) return
+      if (!s || !availableUnitIds(s).has(unitId)) return
       const u = findUnit(s, unitId)
       if (!u) return
       mapCur((sp) => {
@@ -293,7 +296,8 @@ function useStoreImpl(initialState: () => AppState) {
         }, 2600)
       },
 
-      setView: (view: SpaceView) => mapCur((s) => ({ ...s, view, ideFullscreen: false })),
+      setView: (view: SpaceView) => mapCur((s) => canAccessView(s, view, s.currentUnitId)
+        ? { ...s, view, ideFullscreen: false } : s),
       enterUnit,
       retryGeneration: (unitId: string) => {
         const id = curId()

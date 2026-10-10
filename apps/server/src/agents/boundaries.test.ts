@@ -17,10 +17,10 @@ import { XMLValidator } from 'fast-xml-parser';
 test('real scene and task tool sets never include side effects, cross-scene artifacts or private rubric queries', () => {
   const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l);
   const input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
-    scenario: 'intake', requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, references: [] };
+    scenario: 'intake', requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, lessonRefs: [], references: [] };
   try {
     const expected = { intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'], roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
-      lesson: ['submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
+      lesson: ['read_learning_route', 'read_previous_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
       const frozen = { ...input, scenario };
       const tools = ['intake', 'roadmap', 'tutor'].includes(scenario) ? createScenario(l, frozen, randomUUID(), '/synthetic/cwd').tools : createTask(l, frozen).tools;
@@ -35,15 +35,16 @@ test('lesson submission validates bounded text without enforcing Markdown layout
   const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning);
   const unit = units[0]!;
   const task = createTask(learning, { spaceId: space.id, sessionId: null, unitId: unit.id, scenario: 'lesson',
-    requirement: space.requirement, route: space.route, unit, lesson: null, references: [] });
+    requirement: space.requirement, route: space.route, unit, lesson: null, lessonRefs: [], references: [] });
+  const submit = task.tools.find((tool) => tool.name === 'submit_lesson')!;
   try {
     for (const content of [undefined, 123, '', '  \r\n ', 'x'.repeat(100_001)]) {
-      await assert.rejects(task.tools[0]!.execute('bad', { title: '编译配置', content }), /content/);
+      await assert.rejects(submit.execute('bad', { title: '编译配置', content }), /content/);
       assert.throws(() => task.commit(), /没有提交有效课件/);
       assert.equal(learning.unit(space.id, unit.id).lesson, null);
     }
     const valid = { title: '编译配置', content: '  理解编译与运行。\n\n## 编译配置\r\n\n正文\n\n| 配置 | 值 |\n| --- | --- |\n| strict | true |\n\n:::unknown\n标记不完整也可以保存。\n' };
-    await task.tools[0]!.execute('corrected', valid);
+    await submit.execute('corrected', valid);
     task.commit();
     assert.equal(learning.unit(space.id, unit.id).lesson!.content, valid.content);
   } finally { db.close(); }

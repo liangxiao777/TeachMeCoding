@@ -196,6 +196,7 @@ const now = () => Date.now()
 export function rustInProgressSpace(): Space {
   const stages = rustStages()
   stages[0]!.units[0]!.status = 'skipped'
+  stages[0]!.units[0]!.contentState = 'ready'
   stages[0]!.units[1]!.status = 'learning'
   stages[0]!.units[1]!.contentState = 'ready'
   const files: CodeFile[] = [

@@ -3,7 +3,7 @@ import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contrac
 import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { access, api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel, RequirementDraft } from './context'
-import { activeSession, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
+import { activeSession, availableUnitIds, canAccessView, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
 import { useUnsavedWarning } from './request-state'
 import type { AssessmentDraft, LessonBlock, Session, Space, SpaceView } from './types'
 import { LocalTerminal } from '@/lib/terminal'
@@ -99,6 +99,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const task = saved.tasks.filter((t) => t.unitId === unit.id && t.kind === 'lesson').at(-1)
     return { ...unit, status: details[unit.id]!.status, contentState: task && ['pending', 'running'].includes(task.state) ? 'generating' as const
       : task && ['failed', 'interrupted'].includes(task.state) ? 'failed' as const : details[unit.id]!.lesson ? 'ready' as const : 'none' as const,
+      hasLesson: !!details[unit.id]!.lesson,
       lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns }
   }) })) ?? []
   const selectedSessions: Record<string, string> = {}
@@ -111,7 +112,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
       routeNote: saved.route.content?.note ?? '', stages,
-      currentUnitId: units.find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')?.id ?? units[0]?.id ?? null,
+      currentUnitId: units.find((unit) => !unit.lesson)?.id ?? units.find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')?.id ?? units[0]?.id ?? null,
       // Older successful runs may have left an explicit proposal; keep it reachable.
       view: saved.route.content || latestPlan(saved)?.state === 'succeeded' ? 'route' : latestPlan(saved) ? 'planning' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
       ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
@@ -197,8 +198,13 @@ export function usePersistentModel(): AppModel {
         const tab = params.get('tab')
         const view = tab === 'requirement' ? 'onboarding' : entry.ui.view === 'planning' || tab === 'planning' ? entry.ui.view
           : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
-        const unitId = params.get('unit') ?? entry.ui.currentUnitId
-        entry.ui = { ...entry.ui, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: params.get('record') }
+        const recordId = params.get('record')
+        const unitId = (view === 'result' ? entry.ui.records.find((record) => record.id === recordId)?.unitId : null)
+          ?? params.get('unit') ?? entry.ui.currentUnitId
+        const blocked = !canAccessView(entry.ui, view, unitId)
+        if (blocked) setError('单元尚未解锁或不在当前路线中，已返回学习路线。')
+        entry.ui = { ...entry.ui, view: blocked ? 'route' : view, currentUnitId: blocked ? entry.ui.currentUnitId : unitId,
+          draft: !blocked && view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: blocked ? null : recordId }
         setCurrentId(id)
       }
       publish(); setReady(true)
@@ -232,11 +238,24 @@ export function usePersistentModel(): AppModel {
     || s.ui.files.some((file) => !!s.files[file.id] && file.content !== s.files[file.id]!.content))
   useUnsavedWarning(dirty)
   const navigate = (view: SpaceView, unitId = current?.currentUnitId ?? null) => {
-    if (!current) return
+    if (!current) return false
+    if (!canAccessView(cache.current[current.id]!.ui, view, unitId)) {
+      setError('单元尚未解锁，请先生成并保存全部前序课件。')
+      return false
+    }
     changeUi(current.id, (s) => ({ ...s, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? cache.current[s.id]!.drafts[unitId] ?? null : s.draft, ideFullscreen: false }))
+    return true
   }
+  const viewedUnitId = current ? sessionUnitId(current) : null
+  useEffect(() => {
+    if (ready && current && !canAccessView(current, current.view, viewedUnitId)) {
+      setError('路线顺序已改变，当前单元尚未解锁，已返回学习路线。')
+      changeUi(current.id, (s) => ({ ...s, view: 'route', draft: null, viewingRecordId: null, ideFullscreen: false }))
+    }
+  }, [ready, current?.id, current?.view, viewedUnitId, current?.stages])
   const editSession = (patch: SessionEdit) => {
     if (!current) return
+    if (sessionScope(current) === 'unit' && (!viewedUnitId || !availableUnitIds(current).has(viewedUnitId))) return
     const space = current.id, key = sessionKey(current)
     if (session) {
       changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((x) => x.id === session.id ? { ...x, ...patch } : x) }))
@@ -540,6 +559,7 @@ export function usePersistentModel(): AppModel {
   const generateLesson = (space: string, unit: string) => {
     const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
     void run(`lesson:${space}:${unit}`, async () => {
+      if (!availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision })
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] },
         ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit ? { ...u, contentState: 'generating' } : u) })) } }))
@@ -559,9 +579,16 @@ export function usePersistentModel(): AppModel {
   }
   const retryTask = (space: string, id: string) => {
     void run(`task-retry:${id}`, async () => {
+      const unit = cache.current[space]!.saved.tasks.find((task) => task.id === id)?.unitId
+      if (!unit || !availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
       const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
       await refreshBusiness(space); watchRun(space, task)
     })
+  }
+  const enterUnit = (id: string) => {
+    if (!navigate('unit', id) || !current) return
+    const entry = cache.current[current.id]!
+    if (capabilities.agent && !entry.units[id]?.lesson && !entry.saved.tasks.some((task) => task.unitId === id && task.kind === 'lesson')) generateLesson(current.id, id)
   }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
@@ -627,10 +654,7 @@ export function usePersistentModel(): AppModel {
       })
     },
     setView: navigate,
-    enterUnit: (id) => {
-      navigate('unit', id)
-      if (current && capabilities.agent && !selected?.units[id]?.lesson && !selected?.saved.tasks.some((t) => t.unitId === id && t.kind === 'lesson')) generateLesson(current.id, id)
-    },
+    enterUnit,
     retryGeneration: (id) => { if (current) generateLesson(current.id, id) },
     setComposerText: (text) => editSession({ composerText: text }),
     setRouteSuggestion: (text) => editSession({ routeSuggestion: text }),
@@ -714,7 +738,7 @@ export function usePersistentModel(): AppModel {
     connectEnv: () => { void localTerminal?.connect() },
     terminalCommand: (command) => { localTerminal?.send('input', { data: `${command}\r` }) },
     startAssessment: () => { if (!recordUnit || !current) return
-      navigate('assessment', recordUnit)
+      if (!navigate('assessment', recordUnit)) return
       if (capabilities.assessment && !selected?.units[recordUnit]?.assessment) assessmentTask(current.id, recordUnit, 'assessment')
     },
     updateDraft: (patch) => { if (!current?.draft) return; const unit = current.draft.unitId
@@ -729,8 +753,9 @@ export function usePersistentModel(): AppModel {
     },
     submitAssessment: () => { if (current?.draft) assessmentTask(current.id, current.draft.unitId, 'evaluation') },
     leaveAssessment: () => navigate('unit'),
-    viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!; changeUi(current.id, (s) => ({ ...s, viewingRecordId: id, currentUnitId: record.unitId, view: 'result', ideFullscreen: false })) },
-    goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) navigate('unit', next.id) } },
+    viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!
+      if (navigate('result', record.unitId)) changeUi(current.id, (s) => ({ ...s, viewingRecordId: id })) },
+    goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) enterUnit(next.id) } },
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,

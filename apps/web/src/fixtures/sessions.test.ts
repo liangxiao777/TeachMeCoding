@@ -3,7 +3,28 @@ import { test } from 'node:test'
 import { composeReply } from './agent-script'
 import { findUnit, newSession, pytorchSpace, rustInProgressSpace } from './demo-data'
 import { activeSession, ensureSession, selectSession, sessionUnitId } from './sessions'
+import { availableUnitIds, canAccessView } from '../app/selectors'
 import type { Space } from './types'
+
+test('unit access uses published lessons, not skipped status or regeneration state', () => {
+  const space = rustInProgressSpace(), first = space.stages[0]!.units[0]!
+  assert.deepEqual([...availableUnitIds(space)], ['basics', 'ownership', 'structs'])
+  first.contentState = 'none'
+  assert.equal(first.status, 'skipped')
+  assert.deepEqual([...availableUnitIds(space)], ['basics'])
+  for (const state of ['generating', 'failed'] as const) {
+    first.contentState = state
+    first.hasLesson = true
+    assert.deepEqual([...availableUnitIds(space)], ['basics', 'ownership', 'structs'])
+    first.hasLesson = false
+    assert.deepEqual([...availableUnitIds(space)], ['basics'])
+  }
+  assert.equal(canAccessView(space, 'unit', 'ownership'), false)
+  assert.equal(canAccessView(space, 'route', 'ownership'), true)
+  assert.equal(canAccessView(space, 'unit', null), true, 'Code from chat can open an IDE-only workspace without selecting a unit')
+  assert.equal(canAccessView(space, 'assessment', null), false)
+  assert.equal(canAccessView(space, 'result', null), false)
+})
 
 test('route and individual units restore separate sessions, drafts and quotes', () => {
   let space = rustInProgressSpace()

@@ -132,6 +132,18 @@ export interface UnitDetail {
   records: AssessmentRecord[];
   nextAttempt?: number;
 }
+
+// The first unpublished unit is accessible; every unit after it remains locked.
+// Published courseware, not assessment status or an active task, advances access.
+export function unlockedUnitIds(units: readonly { id: string }[], published: ReadonlySet<string>): Set<string> {
+  const available = new Set<string>();
+  for (const unit of units) {
+    available.add(unit.id);
+    if (!published.has(unit.id)) break;
+  }
+  return available;
+}
+
 export interface ProjectEntry { path: string; kind: 'file' | 'directory'; version: string }
 export interface ProjectFile { path: string; content: string; version: string }
 export const createEntrySchema = z.object({ path: z.string().min(1).max(1000), kind: z.enum(['file', 'directory']) }).strict();

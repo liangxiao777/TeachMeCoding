@@ -1,7 +1,18 @@
-import type { CodeFile, Session, Space, Unit } from './types'
+import { unlockedUnitIds } from '@teach-me-coding/contracts'
+import type { CodeFile, Session, Space, SpaceView, Unit } from './types'
 
 export const allUnits = (space: Space): Unit[] => space.stages.flatMap((stage) => stage.units)
 export const findUnit = (space: Space, id: string | null): Unit | undefined => allUnits(space).find((unit) => unit.id === id)
+export function availableUnitIds(space: Space): Set<string> {
+  const units = allUnits(space)
+  return unlockedUnitIds(units, new Set(units.filter((unit) => unit.hasLesson ?? unit.contentState === 'ready').map((unit) => unit.id)))
+}
+export function canAccessView(space: Space, view: SpaceView, unitId: string | null): boolean {
+  if (!['unit', 'assessment', 'result'].includes(view)) return true
+  // The workspace also hosts code from chat before any learning unit exists.
+  if (!unitId) return view === 'unit'
+  return availableUnitIds(space).has(unitId)
+}
 export function nextUnit(space: Space, id: string): Unit | undefined {
   const units = allUnits(space)
   return units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')

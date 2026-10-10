@@ -2,10 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema,
+  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, unlockedUnitIds,
   type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type ResearchRef, type ResearchSaveResult, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
+
+export interface LessonReference { unitId: string; revision: number }
 
 export class BusinessError extends Error {
   constructor(public status: 400 | 404 | 409 | 413 | 422 | 503, message: string) { super(message); }
@@ -194,6 +196,33 @@ export class Learning {
       draft: { unitId: id, revision: draft?.revision ?? 0, ...(draft ? JSON.parse(draft.answers) : { q1: '', q2: '' }) },
       records: evaluated,
     };
+  }
+  lessonReferences(space: string): LessonReference[] {
+    idSchema.parse(space);
+    return this.all('SELECT unit_id AS unitId,revision FROM lessons WHERE space_id=?', space);
+  }
+  assertUnitUnlocked(space: string, id: string) {
+    idSchema.parse(id);
+    const units = this.space(space).route.content?.stages.flatMap((stage) => stage.units) ?? [];
+    if (!units.some((unit) => unit.id === id)) throw new BusinessError(404, '单元不在当前学习路线中。');
+    const published = new Set(this.lessonReferences(space).map((ref) => ref.unitId));
+    if (!unlockedUnitIds(units, published).has(id)) {
+      const first = units.find((unit) => !published.has(unit.id))!;
+      throw new BusinessError(422, `单元尚未解锁，请先生成并保存「${first.title}」的课件。`);
+    }
+  }
+  lessonVersion(space: string, unit: string, revision: number) {
+    idSchema.parse(space); idSchema.parse(unit);
+    const row = this.db.prepare('SELECT content FROM lesson_versions WHERE space_id=? AND unit_id=? AND revision=?').get(space, unit, revision) as { content: string } | undefined;
+    if (!row) throw new BusinessError(409, '本次任务固定的课件版本无法读取，不会改用最新版。请重新生成课件。');
+    return { ...lessonSchema.parse(JSON.parse(row.content)), revision };
+  }
+  checkLessonReferences(space: string, refs: readonly LessonReference[]) {
+    const current = new Map(this.lessonReferences(space).map((ref) => [ref.unitId, ref.revision]));
+    if (refs.some((ref) => current.get(ref.unitId) !== ref.revision)) {
+      throw new BusinessError(409, '前序课件已改变，请按当前资料重新生成课件；本次结果未保存。');
+    }
+    for (const ref of refs) this.lessonVersion(space, ref.unitId, ref.revision);
   }
   saveAssessmentDraft(space: string, unit: string, input: unknown) {
     const { revision, ...answers } = assessmentDraftSchema.parse(input);

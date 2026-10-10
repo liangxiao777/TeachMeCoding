@@ -10,6 +10,7 @@ export interface Unit {
   goals: string[]
   status: UnitStatus
   contentState: ContentState
+  hasLesson?: boolean
   lessonKey: string
   lastAdvice?: string[]
 }

@@ -117,6 +117,30 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     })();
     return stream;
   }
+  if (has('submit_lesson') && !context.messages.some((m) => m.role === 'toolResult' && m.toolName === 'submit_lesson')) {
+    const call = (name: string, args: JsonObject) => response(reply([{ type: 'toolCall', id: name, name, arguments: args }], 'toolUse'));
+    const routeResult = context.messages.find((m) => m.role === 'toolResult' && m.toolName === 'read_learning_route');
+    if (!routeResult || routeResult.role !== 'toolResult') return call('read_learning_route', {});
+    if (routeResult.isError) throw new Error('Expected a readable frozen route');
+    const route = JSON.parse(routeResult.content.filter((part) => part.type === 'text').map((part) => part.text).join('')) as {
+      currentUnitId: string; stages: { units: { unitId: string; title: string; hasLesson: boolean }[] }[];
+    };
+    const units = route.stages.flatMap((stage) => stage.units), index = units.findIndex((unit) => unit.unitId === route.currentUnitId);
+    if (index < 0) throw new Error('Current unit missing from full route');
+    const previous = units.slice(0, index).findLast((unit) => unit.hasLesson);
+    const previousResult = context.messages.find((m) => m.role === 'toolResult' && m.toolName === 'read_previous_lesson');
+    if (previous && !previousResult) return call('read_previous_lesson', { unitId: previous.unitId });
+    if (previousResult?.role === 'toolResult' && previousResult.isError) throw new Error('Expected a readable previous lesson');
+    return call('submit_lesson', {
+      title: units[index]!.title, content: [
+        previous ? '承接前一单元介绍的命令行参数，继续理解输入的边界。' : '从一个小工具开始理解命令行参数。',
+        '## 参数从哪里来\n\n命令行参数是启动程序时由调用者提供的字符串。',
+        '```python file=args.py\nimport sys\nprint(sys.argv[1:])\n```',
+        '> [!TIP]\n> 本示例尚未在本机执行。可以带入 IDE 后自行尝试。',
+        '::::practice\n比较传入零个参数与两个参数时的差异。\n\n:::hint\n先观察 `sys.argv[1:]` 如何排除程序名。\n:::\n\n:::solution\n零个参数得到空列表，两个参数得到包含两个字符串的列表。\n:::\n::::',
+      ].join('\n\n'),
+    });
+  }
   if (last?.role !== 'toolResult') {
     if (has('propose_command') && text.includes('本机提案')) return response(reply([{ type: 'toolCall', id: 'local-proposal',
       name: text.includes('文件') ? 'propose_file_change' : 'propose_command',
@@ -142,15 +166,6 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     // Real-provider UX verification is separate; this fixture cannot prove evaluation quality.
     if (has('submit_evaluation')) return response(reply([{ type: 'toolCall', id: 'evaluation-call', name: 'submit_evaluation', arguments: {
       result: 'pass', summary: '本次提交符合题目要求。', mastered: [], concerns: [], evidence: ['解释题说明参数是在启动程序时传入的，不是程序自己产生的。'], toVerify: [],
-    } }], 'toolUse'));
-    if (has('submit_lesson')) return response(reply([{ type: 'toolCall', id: 'lesson-call', name: 'submit_lesson', arguments: {
-      title: '参数与输入', content: [
-        '从一个小工具开始理解命令行参数。',
-        '## 参数从哪里来\n\n命令行参数是启动程序时由调用者提供的字符串。',
-        '```python file=args.py\nimport sys\nprint(sys.argv[1:])\n```',
-        '> [!TIP]\n> 本示例尚未在本机执行。可以带入 IDE 后自行尝试。',
-        '::::practice\n比较传入零个参数与两个参数时的差异。\n\n:::hint\n先观察 `sys.argv[1:]` 如何排除程序名。\n:::\n\n:::solution\n零个参数得到空列表，两个参数得到包含两个字符串的列表。\n:::\n::::',
-      ].join('\n\n'),
     } }], 'toolUse'));
     if (has('submit_learning_conclusion')) return response(reply([{ type: 'toolCall', id: 'conclusion-call', name: 'submit_learning_conclusion', arguments: {
       text: '命令行参数来自启动程序的调用者，读取参数不等于验证参数。',

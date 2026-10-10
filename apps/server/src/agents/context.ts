@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
 import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, ModelSelection, QuestionRound, Quote, RequirementState, ResearchDossier, RouteContent, UnitDetail, Workspace } from '@teach-me-coding/contracts';
 import type { FixedAssessment } from '../modules/assessments.js';
+import type { LessonReference } from '../modules/learning.js';
 
 export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' | 'evaluation';
 export interface FrozenContext {
@@ -16,6 +17,8 @@ export interface FrozenContext {
   route: Workspace['route'] | null;
   unit: RouteContent['stages'][number]['units'][number] | null;
   lesson: UnitDetail['lesson'];
+  /** Published versions at task creation; bodies are read on demand, never from latest. */
+  lessonRefs?: LessonReference[];
   references: Quote[];
   conclusions?: LearningConclusion[];
   publicAssessment?: AssessmentSpec | null;
@@ -28,7 +31,7 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '9';
+export const compilerVersion = '10';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 export const budget = { milliseconds: 300_000 };
 
@@ -50,7 +53,7 @@ export function compileContext(input: FrozenContext) {
     { kind: 'requirement', id: input.spaceId, revision: input.requirement.revision, value: input.requirement },
     ...(input.research ? [{ kind: 'research-dossier', id: input.research.id, revision: input.research.revision, value: input.research }] : []),
     ...(input.questions ?? []).map((value) => ({ kind: 'intake-question', id: value.id, revision: hash(value), value })),
-    ...(input.route ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
+    ...(input.route && input.scenario !== 'lesson' ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
     ...(input.unit ? [{ kind: 'unit', id: input.unit.id, revision: input.route?.revision ?? 0, value: input.unit }] : []),
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
     ...(input.conclusions ?? []).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
