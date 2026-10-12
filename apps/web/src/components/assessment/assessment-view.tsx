@@ -3,6 +3,7 @@
 import { ArrowLeft, ClipboardCheck, Play, Save, Send } from 'lucide-react'
 import { Generating, RichText } from '@/components/shared'
 import { RunContent } from '@/components/agent/run-content'
+import { RunContext } from '@/components/agent/run-context'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -110,6 +111,7 @@ export function AssessmentView() {
             <span className="flex-1">{activeTask ? task.kind === 'evaluation'
               ? spec?.execution ? '正在运行并评估固定提交；你可以继续编辑新草稿。' : '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
               : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : spec?.execution ? '提交测评将执行固定代码，并绑定本次执行证据。' : '代码题仅作静态评估，不代表运行通过。'}</span>
+            <RunContext runId={task?.id} />
             {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>停止任务</Button> : <>
               {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>重试原任务</Button>}
               <Button size="sm" variant="outline" disabled={storageBusy} onClick={persistence.generateAssessment}>{spec ? '重新出题' : '生成题目'}</Button>

@@ -5,11 +5,12 @@ import { createAssistantMessageEventStream, normalizeContext, Type, type Assista
 import { createProviderAgent } from './provider.js';
 import { providerStream } from './model.js';
 import type { ModelSource } from '../models/service.js';
-import { teachingModel } from './test-support.js';
+import { syntheticSource, teachingModel } from './test-support.js';
 
 const selection = { provider: 'openrouter', model: 'exact/configured-id', thinkingLevel: 'high' as const };
 const exact = { ...teachingModel, id: selection.model, name: selection.model };
 const source: ModelSource = {
+  ...syntheticSource,
   current: () => ({ selection, model: exact }),
   resolve: (s) => s.provider === selection.provider && s.model === selection.model ? exact : undefined,
 };

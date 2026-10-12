@@ -7,10 +7,26 @@ let evaluationFailed = false;
 let planningFailed = false;
 const failedIntakeAnswers = new Set<string>();
 export const agentTransport: StreamFn = async (_model, context, options) => {
+  if (options?.maxTokens !== undefined) {
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    if (options.signal?.aborted) return response(reply([], 'aborted'));
+    return response({ ...reply([{ type: 'text', text: 'BROWSER-COMPACTION-CHECKPOINT: 已讨论学习目标，下一步继续核对练习。' }]), timestamp: Date.now(),
+      usage: { input: 23, output: 9, cacheRead: 5, cacheWrite: 0, totalTokens: 37, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0034 } } });
+  }
   const last = context.messages.at(-1);
   const user = [...context.messages].reverse().find((m) => m.role === 'user');
   const text = JSON.stringify(user?.content);
   const all = JSON.stringify(context);
+  if (text.includes('自动压缩验收')) {
+    const result = reply([{ type: 'text', text: '这一轮先讨论输入与边界。' + '比较空输入与两个输入，解释各自的结果。'.repeat(40) }]);
+    return response({ ...result, timestamp: Date.now(), usage: { ...result.usage,
+      input: _model.contextWindow - 16_384, totalTokens: _model.contextWindow - 16_377,
+      cost: { ...result.usage.cost, total: 0.0123 } } });
+  }
+  if (text.includes('压缩后继续')) {
+    if (!all.includes('BROWSER-COMPACTION-CHECKPOINT') || all.includes('自动压缩验收')) throw new Error('Compacted native context was not restored');
+    return response({ ...reply([{ type: 'text', text: '压缩后的对话已继续。' }]), timestamp: Date.now() });
+  }
   const has = (name: string) => context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === name));
   const roadmap = has('submit_route') || has('submit_route_proposal');
   if (has('submit_requirement_draft') && text.includes('工具错误验收')) {

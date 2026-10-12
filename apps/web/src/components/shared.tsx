@@ -108,6 +108,7 @@ export function Generating({
   note,
   className,
   parts,
+  context,
 }: {
   title: string
   steps: string[]
@@ -115,6 +116,7 @@ export function Generating({
   className?: string
   /** Omit only for the simulated preview; real work advances on durable events. */
   parts?: AgentDisplayPart[]
+  context?: ReactNode
 }) {
   const [simulated, setActive] = useState(0)
   const tool = parts?.findLast((p) => p.type === 'tool')
@@ -133,7 +135,8 @@ export function Generating({
         <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <Spinner />
         </span>
-        <p className="text-base font-semibold tracking-tight">{title}</p>
+        <p className="min-w-0 flex-1 text-base font-semibold tracking-tight">{title}</p>
+        {context}
       </div>
       <ChainOfThought defaultOpen>
         <ChainOfThoughtHeader>执行进度</ChainOfThoughtHeader>

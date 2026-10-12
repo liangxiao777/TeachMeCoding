@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getSystemMessageText } from '@earendil-works/pi-ai';
 import { XMLValidator } from 'fast-xml-parser';
 import { SkillService } from './skills.js';
 import { openDatabase } from '../storage/database.js';
@@ -54,11 +55,11 @@ test('the real teaching loop lists Skills, can read their body and preserves ori
   let calls = 0;
   const agents = new TeachingRuntime(learning, syntheticSource, { skills, projectDirectory: () => root, stream: (_model, context) => {
     const system = context.messages.find((m) => m.role === 'system'); assert.ok(system?.role === 'system');
-    assert.ok(typeof system.content === 'string');
-    assert.match(system.content, /available_skills/);
+    const prompt = getSystemMessageText(system);
+    assert.match(prompt, /available_skills/);
     assert.ok(system.toolsAdded?.some((t) => t.name === 'submit_requirement_draft'));
     assert.ok(system.toolsAdded?.some((t) => t.name === 'read'));
-    assert.equal(XMLValidator.validate(system.content), true);
+    assert.equal(XMLValidator.validate(`<system>${prompt}</system>`), true);
     if (++calls === 1) {
       assert.ok(!JSON.stringify(context.messages).includes('Explain the counter'));
       return response(reply([{ type: 'toolCall', id: 'read-skill', name: 'read', arguments: { path: join(path, 'SKILL.md') } }], 'toolUse'));

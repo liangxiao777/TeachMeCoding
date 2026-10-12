@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
-import { isContextOverflow, isRetryableAssistantError, normalizeContext, retryDelayMs, type Message, type RetryPolicy } from '@earendil-works/pi-ai';
-import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, saveRequirementSchema, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { type AssistantMessage, type RetryPolicy } from '@earendil-works/pi-ai';
+import { AgentSession, convertToLlm, createExtensionRuntime, SettingsManager, type CompactionSettings, type ResourceLoader } from '@earendil-works/pi-coding-agent';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
-import { compileRequest, retainedMessage, xmlText, type FrozenContext, type HistoryGroup } from './context.js';
+import { compileRequest, hash, retainedMessage, xmlText, type FrozenContext } from './context.js';
 import { defaultHttpIdleTimeoutMs, defaultRetryPolicy, failureStream, providerStream } from './model.js';
 import { createModelTransport } from './model-transport.js';
 import { createScenario } from './scenarios.js';
@@ -17,6 +17,7 @@ import { Assessments } from '../modules/assessments.js';
 import type { Actions } from '../modules/actions.js';
 import type { Executions } from '../modules/executions.js';
 import { sealToolCalls } from '../storage/agent-messages.js';
+import { restoreAgentSession } from '../storage/agent-sessions.js';
 import type { McpService } from '../extensions/mcp.js';
 import type { SkillService } from '../extensions/skills.js';
 import type { SearchService } from '../extensions/search.js';
@@ -32,6 +33,7 @@ interface RuntimeOptions {
   scenario?: (input: FrozenContext) => ScenarioRun;
   httpIdleTimeoutMs?: number;
   retry?: RetryPolicy;
+  compaction?: Partial<CompactionSettings>;
   debugDirectory?: string;
   projectDirectory?: (space: string) => string;
   actions?: Actions;
@@ -44,7 +46,7 @@ interface RuntimeOptions {
 }
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
 export class TeachingRuntime {
-  private live = new Map<string, { space: string; agent?: Agent; controller: AbortController; done: Promise<void> }>();
+  private live = new Map<string, { space: string; session?: AgentSession; controller: AbortController; done: Promise<void> }>();
   private closing = false;
   private stream: StreamFn;
   private httpIdleTimeoutMs: number;
@@ -69,10 +71,14 @@ export class TeachingRuntime {
     idSchema.parse(space); idSchema.parse(id);
     const tables = this.tables(space, id);
     const row = this.learning.db.prepare(`SELECT r.id,r.unit_id AS unitId,r.session_id AS sessionId,r.kind,r.state,
-      a.error,a.cancelled,a.created_at AS createdAt,json_extract(a.input,'$.evaluation.submission.id') AS resultId FROM ${tables.work} r JOIN ${tables.run} a ON a.space_id=r.space_id AND a.id=r.id
-      WHERE r.space_id=? AND r.id=?`).get(space, id) as (Omit<AgentRun, 'cancelled'> & { cancelled: number }) | undefined;
+      a.error,a.cancelled,a.created_at AS createdAt,json_extract(a.input,'$.evaluation.submission.id') AS resultId,
+      (SELECT json_extract(value,'$.context') FROM ${tables.events} WHERE space_id=r.space_id AND run_id=r.id
+        AND json_extract(value,'$.type')='context' ORDER BY seq DESC LIMIT 1) AS context
+      FROM ${tables.work} r JOIN ${tables.run} a ON a.space_id=r.space_id AND a.id=r.id
+      WHERE r.space_id=? AND r.id=?`).get(space, id) as (Omit<AgentRun, 'cancelled' | 'context'> & { cancelled: number; context: string | null }) | undefined;
     if (!row) throw new BusinessError(404, '运行不存在。');
-    return { ...row, cancelled: !!row.cancelled };
+    const { context, ...run } = row;
+    return { ...run, cancelled: !!row.cancelled, ...(context ? { context: JSON.parse(context) as AgentContext } : {}) };
   }
   events(space: string, id: string, after = 0): RunEvents {
     const run = this.get(space, id);
@@ -241,7 +247,7 @@ export class TeachingRuntime {
   }
   private launch(space: string, id: string, text: string) {
     if (this.get(space, id).state === 'pending' && !this.live.has(id)) {
-      const entry: { space: string; agent?: Agent; controller: AbortController; done: Promise<void> } = { space, controller: new AbortController(), done: Promise.resolve() };
+      const entry: { space: string; session?: AgentSession; controller: AbortController; done: Promise<void> } = { space, controller: new AbortController(), done: Promise.resolve() };
       this.live.set(id, entry);
       entry.done = Promise.resolve().then(() => this.execute(space, id, text, entry)).finally(() => { this.live.delete(id); });
     }
@@ -255,7 +261,7 @@ export class TeachingRuntime {
         this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
       })();
       this.live.get(id)?.controller.abort();
-      this.live.get(id)?.agent?.abort();
+      void this.live.get(id)?.session?.abort();
       this.stopExecution(space, id);
     }
     return this.get(space, id);
@@ -271,7 +277,7 @@ export class TeachingRuntime {
     for (const [id, entry] of this.live) {
       this.learning.db.transaction(() => this.finish(entry.space, id, 'interrupted', '服务关闭，运行已中断；未自动重放。'))();
       entry.controller.abort();
-      entry.agent?.abort();
+      void entry.session?.abort();
       this.stopExecution(entry.space, id);
     }
     await Promise.all([...this.live.values()].map((entry) => entry.done));
@@ -282,16 +288,12 @@ export class TeachingRuntime {
     const changed = this.learning.db.prepare(`UPDATE ${tables.work} SET state=? WHERE space_id=? AND id=? AND state IN ('pending','running')`).run(state, space, id);
     if (!changed.changes) return;
     this.learning.db.prepare(`UPDATE ${tables.run} SET error=? WHERE space_id=? AND id=?`).run(error, space, id);
+    const context = this.get(space, id).context;
+    if (context?.phase === 'compacting' && !['pending', 'running'].includes(state)) this.emit(space, id,
+      { type: 'context', context: { ...context, phase: state === 'failed' ? 'failed' : 'interrupted' } });
     this.emit(space, id, { type: 'state', state, error });
   }
-  private history(space: string, session: string, id: string): HistoryGroup[] {
-    const rows = this.learning.db.prepare(`SELECT r.id,m.value FROM runs r JOIN agent_messages m ON m.space_id=r.space_id AND m.run_id=r.id
-      WHERE r.space_id=? AND r.session_id=? AND r.id!=? AND r.state='succeeded' ORDER BY r.rowid,m.seq`).all(space, session, id) as { id: string; value: string }[];
-    const groups = new Map<string, HistoryGroup>();
-    for (const row of rows) { const g = groups.get(row.id) ?? { id: row.id, messages: [] }; g.messages.push(JSON.parse(row.value) as Message); groups.set(row.id, g); }
-    return [...groups.values()];
-  }
-  private async execute(space: string, id: string, text: string, entry: { agent?: Agent; controller: AbortController }) {
+  private async execute(space: string, id: string, text: string, entry: { session?: AgentSession; controller: AbortController }) {
     if (!active(this.get(space, id))) return;
     const tables = this.tables(space, id);
     const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
@@ -303,7 +305,6 @@ export class TeachingRuntime {
       return;
     }
     frozen.model = choice.selection;
-    const history = frozen.sessionId ? this.history(space, frozen.sessionId, id) : [];
     // Assessment/evaluation reasoning can contain private reference answers.
     // Publish real phase/tool activity, but never their unvalidated model prose.
     const displayModelText = frozen.scenario !== 'assessment' && frozen.scenario !== 'evaluation';
@@ -320,8 +321,12 @@ export class TeachingRuntime {
     };
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
-    let transport: { startedAt: number; httpStatus: number | null; eventCount: number; lastEventAt: number | null };
-    let failure = '', request = 0, nativeSeq = 0, retryAttempt = 0;
+    let failure = '', request = 0, nativeSeq = 0;
+    let completion: AssistantMessage | undefined;
+    let phase: AgentContext['phase'] = 'ready', compaction: AgentContext['compaction'];
+    let usage: AgentContext['usage'] = null;
+    let persistSession: (() => void) | undefined;
+    const responses: Promise<void>[] = [];
     try {
       const fixed = frozen.evaluation;
       if (fixed?.submission.evidence.kind === 'local') {
@@ -336,78 +341,134 @@ export class TeachingRuntime {
       const prepared = await prepareTools({ scenarioTools: scenario.tools,
         cwd: () => this.options.projectDirectory?.(space) ?? process.cwd(), hasSkills: !!skills?.skills.length,
         mcp: this.options.mcp, search: this.options.search, webFetch: this.options.webFetch, library: this.options.library, runId: id, signal: entry.controller.signal });
+      const modelRuntime = await this.models!.sessionRuntime(choice.model);
       if (!active(this.get(space, id))) return;
+      const cwd = this.options.projectDirectory?.(space) ?? process.cwd();
+      const saved = restoreAgentSession(this.learning.db, space, frozen.sessionId, id, cwd);
+      const compiled = compileRequest(frozen, saved.history, [], prepared.declarations, skills?.prompt);
+      for (const message of compiled.messages.slice(2)) saved.manager.appendMessage(message);
+      // The current frozen business baseline replaces the previous baseline, not
+      // the conversation. Compaction summaries remain historical, never authority.
+      for (const item of saved.manager.buildSessionProjection().entries) if (item.sourceEntry.type === 'custom_message' &&
+        item.sourceEntry.customType === 'teaching-context' && item.messages.length) saved.manager.appendContextEdit(item.sourceEntry.id, null);
+      const baselineMessage = compiled.messages[1];
+      if (baselineMessage?.role !== 'user') throw new Error('Missing teaching context');
+      saved.manager.appendCustomMessageEntry('teaching-context', baselineMessage.content, false);
+      const resourceLoader: ResourceLoader = {
+        getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+        getSkills: () => ({ skills: [], diagnostics: [] }), getPrompts: () => ({ prompts: [], diagnostics: [] }),
+        getThemes: () => ({ themes: [], diagnostics: [] }), getAgentsFiles: () => ({ agentsFiles: [] }),
+        getSystemPrompt: () => String(compiled.messages[0]!.content),
+        getSystemPromptSource: () => undefined, getAppendSystemPrompt: () => [], getAppendSystemPromptSources: () => [],
+        extendResources: () => {}, reload: async () => {},
+      };
+      persistSession = () => {
+        this.learning.db.prepare(`UPDATE ${tables.run} SET input=json_set(input,'$.sessionCheckpoint',json(?))
+          WHERE space_id=? AND id=?`).run(JSON.stringify(saved.checkpoint()), space, id);
+      };
       const agent = new Agent({
-        initialState: { model: choice.model, tools: prepared.tools, thinkingLevel: choice.selection.thinkingLevel },
+        initialState: { model: choice.model, messages: saved.manager.buildSessionContext().messages, thinkingLevel: choice.selection.thinkingLevel },
+        convertToLlm,
         sessionId: frozen.sessionId ?? id, toolExecution: 'sequential',
-        beforeToolCall: async () => {
-          if (failure) return { block: true, reason: failure, terminate: true };
-          if (!active(this.get(space, id))) {
-            failure = '运行已停止。';
-            return { block: true, reason: failure, terminate: true };
-          }
-          return undefined;
-        },
         streamFn: async (model, context, options) => {
-          let compiled: ReturnType<typeof compileRequest>;
           const timeoutMs = options?.timeoutMs ?? (this.httpIdleTimeoutMs === 0 ? 2147483647 : this.httpIdleTimeoutMs);
           const modelFetch = this.modelTransport.fetchFor(model.api);
+          const currentRequest = ++request;
+          const purpose = phase === 'compacting' ? 'compaction' : 'agent';
+          const transport = { startedAt: Date.now(), httpStatus: null as number | null, eventCount: 0, lastEventAt: null as number | null };
           try {
-            request++;
             if (!active(this.get(space, id))) return failureStream(model, '运行已停止。', true);
-            compiled = compileRequest(frozen, history, context.messages, prepared.declarations, skills?.prompt);
-            const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request,
+            // AgentSession owns the projection. Reinjecting raw history here would
+            // silently undo compaction; summary calls also need their own prompt.
+            const manifest = { ...compiled.manifest, runId: id, sessionId: frozen.sessionId, scenario: frozen.scenario, request: currentRequest, purpose,
+              projectionHash: hash(context.messages),
               model: choice.model.id, provider: choice.model.provider, thinkingLevel: choice.selection.thinkingLevel,
               modelMetadata: { contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost },
-              modelExecution: { httpIdleTimeoutMs: modelFetch ? this.httpIdleTimeoutMs : null, timeoutMs, retry: this.retryPolicy, maxRetryDelayMs: options?.maxRetryDelayMs },
+              modelExecution: { httpIdleTimeoutMs: modelFetch ? this.httpIdleTimeoutMs : null, timeoutMs, retry: this.retryPolicy,
+                compaction: entry.session?.settingsManager.getCompactionSettings(model), maxTokens: options?.maxTokens, maxRetryDelayMs: options?.maxRetryDelayMs },
               extensions: { skills: skills?.digest ?? null, mcpTools: prepared.inventory.filter((tool) => tool.source === 'mcp').map((tool) => tool.name) },
               toolInventory: prepared.inventory, toolSources, actualUsage: null };
             this.learning.db.prepare(`INSERT INTO ${tables.manifests} VALUES (?,?,?,?)`).run(space, id, request, JSON.stringify(manifest));
             if (this.options.debugDirectory) {
               mkdirSync(this.options.debugDirectory, { recursive: true, mode: 0o700 });
-              writeFileSync(join(this.options.debugDirectory, `${id}-${request}.json`), JSON.stringify({ manifest, messages: compiled.messages }), { mode: 0o600, flag: 'wx' });
+              writeFileSync(join(this.options.debugDirectory, `${id}-${currentRequest}.json`), JSON.stringify({ manifest, messages: context.messages }), { mode: 0o600, flag: 'wx' });
             }
-            transport = { startedAt: Date.now(), httpStatus: null, eventCount: 0, lastEventAt: null };
           } catch (error) {
             failure = error instanceof BusinessError ? error.message : '无法准备模型请求。';
             return failureStream(model, failure);
           }
+          let stream;
           try {
-            return await this.stream(model, normalizeContext({ messages: compiled.messages }), {
+            stream = await this.stream(model, context, {
               ...options, timeoutMs, fetch: options?.fetch ?? modelFetch,
-              onResponse: (response) => { transport.httpStatus = response.status; },
-              onProviderStreamEvent: () => { transport.eventCount++; transport.lastEventAt = Date.now(); },
+              onResponse: (response, ...rest) => { transport.httpStatus = response.status; options?.onResponse?.(response, ...rest); },
+              onProviderStreamEvent: (...args) => { transport.eventCount++; transport.lastEventAt = Date.now(); options?.onProviderStreamEvent?.(...args); },
             });
           } catch (error) {
             // Transport throws follow the same retry path as native error responses.
             // The raw reason is fingerprinted, never exposed in retained messages/UI.
-            return failureStream(model, error instanceof Error ? error.message : String(error),
+            stream = failureStream(model, error instanceof Error ? error.message : String(error),
               entry.controller.signal.aborted || options?.signal?.aborted);
           }
+          responses.push(stream.result().then((message) => {
+            const known = (message.stopReason !== 'error' && message.stopReason !== 'aborted') || message.usage.totalTokens > 0;
+            if (known) usage = { input: (usage?.input ?? 0) + message.usage.input, output: (usage?.output ?? 0) + message.usage.output,
+              cacheRead: (usage?.cacheRead ?? 0) + message.usage.cacheRead, cacheWrite: (usage?.cacheWrite ?? 0) + message.usage.cacheWrite,
+              cost: (usage?.cost ?? 0) + message.usage.cost.total };
+            const diagnostic = { ...transport, elapsedMs: Date.now() - transport.startedAt,
+              responseId: message.responseId ?? null, stopReason: message.stopReason, rawStopReason: message.rawStopReason ?? null,
+              errorFingerprint: message.errorMessage ? createHash('sha256').update(message.errorMessage).digest('hex') : null };
+            this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?),'$.transport',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
+              .run(JSON.stringify(known ? message.usage : null), JSON.stringify(diagnostic), space, id, currentRequest);
+          }));
+          return stream;
         },
       });
       // Abort is cooperative in Pi; finishTurn ends even a just-settled tool
       // batch without another request or an invented assistant failure message.
       agent.finishTurn = (_turn, signal) => failure || signal?.aborted ? { action: 'end' } : undefined;
-      entry.agent = agent;
+      const names = prepared.tools.map((tool) => tool.name);
+      const session = new AgentSession({ agent, sessionManager: saved.manager,
+        settingsManager: SettingsManager.inMemory({ retry: this.retryPolicy, compaction: this.options.compaction, httpIdleTimeoutMs: this.httpIdleTimeoutMs }),
+        cwd, resourceLoader, modelRuntime, initialActiveToolNames: names, allowedToolNames: names,
+        baseToolsOverride: Object.fromEntries(prepared.tools.map((tool) => [tool.name, tool])),
+      });
+      // Session installs its own tool hooks; retain the host's cancellation fence.
+      const beforeToolCall = agent.beforeToolCall;
+      agent.beforeToolCall = async (context, signal) => {
+        if (failure || !active(this.get(space, id))) return { block: true, reason: failure || '运行已停止。', terminate: true };
+        return beforeToolCall?.(context, signal);
+      };
+      entry.session = session;
+      const emitContext = () => {
+        if (!active(this.get(space, id))) return;
+        const current = session.getContextUsage();
+        this.emit(space, id, { type: 'context', context: { modelId: choice.model.id, provider: choice.model.provider,
+          contextWindow: current?.contextWindow ?? choice.model.contextWindow, tokens: current?.tokens ?? null, phase, compaction, usage } });
+      };
       this.learning.db.prepare(`UPDATE ${tables.work} SET state='running' WHERE space_id=? AND id=?`).run(space, id);
       this.emit(space, id, { type: 'state', state: 'running', error: null });
-      agent.subscribe((event) => {
+      emitContext();
+      session.subscribe((event) => {
         if (event.type === 'message_end' && (event.message.role === 'user' || event.message.role === 'assistant' || event.message.role === 'toolResult')) {
           const m = event.message;
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
-            if (m.stopReason !== 'error') retryAttempt = 0;
-            // Keep enough transport evidence for diagnosis without retaining provider
-            // error bodies, headers, credentials, or an invented zero-token usage.
-            const diagnostic = { ...transport, elapsedMs: transport ? Date.now() - transport.startedAt : null,
-              responseId: m.responseId ?? null, stopReason: m.stopReason, rawStopReason: m.rawStopReason ?? null,
-              errorFingerprint: m.errorMessage ? createHash('sha256').update(m.errorMessage).digest('hex') : null };
-            this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?),'$.transport',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
-              .run(JSON.stringify(m.stopReason === 'error' && m.usage.totalTokens === 0 ? null : m.usage), JSON.stringify(diagnostic), space, id, request);
+            completion = m;
+            phase = 'ready';
           }
         }
         if (!active(this.get(space, id))) return;
+        if (event.type === 'turn_end') emitContext();
+        if (event.type === 'compaction_start') {
+          phase = 'compacting';
+          compaction = { reason: event.reason === 'manual' ? 'threshold' : event.reason, tokensBefore: session.getContextUsage()?.tokens ?? null };
+          emitContext();
+        }
+        if (event.type === 'compaction_end') {
+          phase = event.aborted ? 'interrupted' : event.result ? 'compacted' : 'failed';
+          emitContext();
+        }
         if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
@@ -443,31 +504,21 @@ export class TeachingRuntime {
             ...(event.type === 'tool_execution_start' ? { input: publicInput(event.toolName, event.args) } : {}),
             phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
-      await agent.prompt({ role: 'user', content: frozen.references.length ? [
-        { type: 'text', text: skills?.text ?? text }, { type: 'text', text: `<references>${xmlText(JSON.stringify(frozen.references))}</references>` },
-      ] : skills?.text ?? text, timestamp: Date.now() });
-      while (!failure && active(this.get(space, id)) && !entry.controller.signal.aborted) {
-        const last = agent.state.messages.at(-1);
-        if (!this.retryPolicy.enabled || retryAttempt >= this.retryPolicy.maxRetries || last?.role !== 'assistant' ||
-          isContextOverflow(last, choice.model.contextWindow) || !isRetryableAssistantError(last)) break;
-        // Like AgentSession, omit only the failed assistant from model context;
-        // preserve raw evidence, completed tool results and staged business artifacts.
-        agent.state.messages = agent.state.messages.slice(0, -1);
-        await delay(retryDelayMs(this.retryPolicy, ++retryAttempt), undefined, { signal: entry.controller.signal });
-        if (!active(this.get(space, id))) return;
-        await agent.continue();
-      }
-      const last = agent.state.messages.at(-1);
+      await session.prompt(`${skills?.text ?? text}${frozen.references.length ? `\n<references>${xmlText(JSON.stringify(frozen.references))}</references>` : ''}`, { expandPromptTemplates: false });
+      await Promise.all(responses);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
-      if (last?.role !== 'assistant' || last.stopReason !== 'stop') throw new BusinessError(422,
-        last?.role === 'assistant' && last.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
+      if (completion?.stopReason !== 'stop') throw new BusinessError(422,
+        completion?.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
           : '模型响应未正常完成，未保存生成产物。');
       // Pi feeds tool errors back to the model; the scenario validates publishable artifacts.
-      this.learning.db.transaction(() => { scenario.commit(); this.finish(space, id, 'succeeded', null); })();
+      this.learning.db.transaction(() => { scenario.commit(); persistSession!(); emitContext(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
     } finally {
+      await Promise.all(responses);
+      if (this.get(space, id).state !== 'succeeded') persistSession?.();
+      entry.session?.dispose();
       this.options.library?.release(id);
       if (this.get(space, id).state !== 'succeeded') this.learning.db.transaction(() => sealToolCalls(this.learning.db,
         frozen.sessionId ? 'agent_messages' : 'task_messages', space, id))();

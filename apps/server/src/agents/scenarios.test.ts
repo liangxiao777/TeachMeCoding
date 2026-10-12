@@ -19,7 +19,8 @@ test('the opening request starts intake once, and only its tool fills the editab
   ] };
   let turns = 0;
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
-    assert.ok(context.messages.some((m) => m.role === 'user' && m.content === opening));
+    assert.ok(context.messages.some((m) => m.role === 'user' &&
+      (typeof m.content === 'string' ? m.content : m.content.filter((part) => part.type === 'text').map((part) => part.text).join('')) === opening));
     return turns++ === 0 ? response(reply([{ type: 'toolCall', name: 'submit_requirement_draft', id: 'draft', arguments: expected }], 'toolUse')) : response(reply([{ type: 'text', text: '请确认时间。' }]));
   } });
   try {
@@ -97,7 +98,8 @@ test('retry reuses the fixed original input, does not duplicate users or clear a
   const space = learning.create({ name: 'retry', goal: 'retry' }), session = space.sessions[0]!.id;
   let fail = true;
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
-    assert.equal(context.messages.at(-1)?.content, 'original question');
+    const last = context.messages.at(-1);
+    assert.equal(typeof last?.content === 'string' ? last.content : last?.content.filter((part) => part.type === 'text').map((part) => part.text).join(''), 'original question');
     return response(reply([{ type: 'text', text: 'answer' }], fail ? 'error' : 'stop'));
   } });
   try {

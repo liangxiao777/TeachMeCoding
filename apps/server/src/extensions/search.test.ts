@@ -10,7 +10,7 @@ import type { SearchProvider } from '@teach-me-coding/contracts';
 import { SearchService } from './search.js';
 import type { CodexAuthSource } from './codex-search.js';
 import { TeachingRuntime } from '../agents/runtime.js';
-import { reply, response, teachingModel } from '../agents/test-support.js';
+import { reply, response, syntheticSource, teachingModel } from '../agents/test-support.js';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
@@ -407,7 +407,7 @@ for (const provider of ['tavily', 'gemini'] as const) {
       }
       return Response.json({ results: [{ title: 'Rust Book', url: 'https://doc.rust-lang.org/book/', content: 'TRANSIENT-SEARCH-EVIDENCE' }] });
     });
-    const runtime = new TeachingRuntime(new Learning(db), { current: () => ({ selection, model }), resolve: () => model }, {
+    const runtime = new TeachingRuntime(new Learning(db), { ...syntheticSource, current: () => ({ selection, model }), resolve: () => model }, {
       search: service, stream: (current, context) => {
         assert.equal(current.provider, 'deepseek'); assert.equal(current.id, 'deepseek-chat');
         assert.doesNotMatch(JSON.stringify(context), /synthetic-search-secret/);

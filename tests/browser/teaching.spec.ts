@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AgentDisplayPart, RunEvent, SessionDetail } from '../../packages/contracts/src/workspace';
+import type { AgentContext, AgentDisplayPart, RunEvent, SessionDetail } from '../../packages/contracts/src/workspace';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 async function create(page: Page, goal: string) {
@@ -13,8 +13,23 @@ async function send(page: Page, text: string) {
   await page.getByRole('button', { name: '发送', exact: true }).click();
 }
 
+async function contextShot(page: Page, state: string, project: string) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    // Floating placement follows the new height when status text changes.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
+  const popup = (await page.locator('[data-slot="context-content"]').boundingBox())!;
+  const trigger = (await page.getByRole('button', { name: '查看上下文用量', exact: true }).boundingBox())!;
+  const viewport = page.viewportSize()!;
+  const x = Math.max(0, Math.min(popup.x, trigger.x) - 12), y = Math.max(0, Math.min(popup.y, trigger.y) - 12);
+  await page.screenshot({ path: `.amp/in/artifacts/context-${state}-${project}.png`, animations: 'disabled', clip: { x, y,
+    width: Math.min(viewport.width, Math.max(popup.x + popup.width, trigger.x + trigger.width) + 12) - x,
+    height: Math.min(viewport.height, Math.max(popup.y + popup.height, trigger.y + trigger.height) + 12) - y } });
+}
+
 // Browser-only public projection fixtures; the underlying test server is disposable.
-async function mockToolRun(page: Page, goal: string, parts: AgentDisplayPart[], live = false) {
+async function mockToolRun(page: Page, goal: string, parts: AgentDisplayPart[], live = false, context?: AgentContext) {
   await create(page, goal);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
   await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
@@ -28,7 +43,7 @@ async function mockToolRun(page: Page, goal: string, parts: AgentDisplayPart[], 
   await page.route(`**/api/spaces/${saved.id}/sessions/*`, async (route) => {
     const response = await route.fetch(), body = await response.json() as SessionDetail;
     body.messages = body.messages.map((message) => message.id === runId
-      ? { ...message, parts, sequence: 1000, status: live ? 'streaming' : 'done' } : message);
+      ? { ...message, parts, ...(context ? { context } : {}), sequence: 1000, status: live ? 'streaming' : 'done' } : message);
     await route.fulfill({ response, json: body });
   });
   if (live) await page.addInitScript((runId) => {
@@ -720,6 +735,11 @@ test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dar
   expect(composer!.x + composer!.width).toBeLessThanOrEqual(panel.x + panel.width);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `.amp/in/artifacts/ai-reasoning-dark-${info.project.name}.png`, animations: 'disabled' });
+  await agent.getByRole('button', { name: '查看上下文用量', exact: true }).click();
+  const context = page.locator('[data-slot="context-content"]');
+  await expect(context).toHaveClass(/dark/);
+  await expect(context).toContainText('本次运行消耗 · 含压缩请求');
+  await contextShot(page, 'dark', info.project.name);
 });
 
 test('planning shows real phases without counters, idle warnings or skeletons; failure survives reload', async ({ page }, info) => {
@@ -1007,4 +1027,108 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await page.reload();
   await expect(code).toHaveText('// 第三份新草稿，不属于已提交代码', { useInnerText: true });
   await expect(page.getByText(/不是沙箱，拥有服务账号权限/)).toBeVisible();
+});
+
+test('context usage hydrates, updates through SSE and resists stale refreshes without treating unknown as zero', async ({ page }, info) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  const context: AgentContext = { modelId: 'context-fixture', provider: 'synthetic', contextWindow: 65_536, tokens: 32_768, phase: 'ready',
+    usage: { input: 12_345, output: 567, cacheRead: 89, cacheWrite: 10, cost: 0.0234 } };
+  const runId = await mockToolRun(page, `上下文显示验收 ${info.project.name}`,
+    [{ type: 'tool', id: 'context-tool', name: 'read', status: 'done' }], true, context);
+  const trigger = page.getByRole('button', { name: '查看上下文用量', exact: true });
+  const popup = page.locator('[data-slot="context-content"]');
+  const emit = (seq: number, next: AgentContext) => page.evaluate((event) => {
+    window.dispatchEvent(new CustomEvent('tool-test-event', { detail: event }));
+  }, { runId, seq, data: { type: 'context', context: next } });
+  await expect(trigger).toContainText('50%');
+  await trigger.focus(); await page.keyboard.press('Enter');
+  await expect(popup).toContainText('32.8K / 65.5K');
+  await expect(popup.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+  await expect(popup.getByText('输入（不含缓存）', { exact: true }).locator('..')).toContainText('12.3K');
+  await expect(popup.getByText('输出', { exact: true }).locator('..')).toContainText('567');
+  await expect(popup.getByText('缓存读取', { exact: true }).locator('..')).toContainText('89');
+  await expect(popup.getByText('缓存写入', { exact: true }).locator('..')).toContainText('10');
+  await expect(popup).not.toContainText(/费用|\$/);
+  await contextShot(page, 'default', info.project.name);
+  await page.keyboard.press('Escape');
+  await expect(popup).toBeHidden(); await expect(trigger).toBeFocused();
+  await trigger.hover(); await expect(popup).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.mouse.move(0, 0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await trigger.scrollIntoViewIfNeeded();
+  await trigger.click();
+  await expect(popup).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await contextShot(page, 'narrow', info.project.name);
+  await page.keyboard.press('Escape');
+  await page.mouse.move(0, 0);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await trigger.click();
+  await emit(1001, { ...context, phase: 'compacting' });
+  await expect(trigger).toContainText('压缩中');
+  await expect(popup).toContainText('正在压缩上下文…');
+  await emit(1002, { ...context, tokens: null, phase: 'compacted' });
+  await expect(trigger).toContainText('上下文 —');
+  await expect(popup).toContainText('待估算');
+  await expect(popup.getByRole('progressbar')).toHaveCount(0);
+  // Saving requirements triggers a full refresh with the older snapshot at 1000.
+  await page.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByLabel('回答 4', { exact: true }).fill('刷新不应覆盖新的上下文事件');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('button', { name: '修改', exact: true })).toBeEnabled();
+  await expect(trigger).toContainText('上下文 —');
+  await trigger.click();
+  await expect(popup).toContainText('已自动压缩，下一次模型响应后更新占用。');
+  await emit(1001, { ...context, phase: 'failed' });
+  await expect(popup).not.toContainText('本次压缩未完成');
+  await emit(1003, { ...context, tokens: 78_644 });
+  await expect(trigger).toContainText('120%');
+  await expect(popup.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+  await emit(1004, { ...context, phase: 'failed' });
+  await expect(popup).toContainText('本次压缩未完成；原始上下文仍保留。');
+  await contextShot(page, 'failed', info.project.name);
+  await emit(1005, { ...context, phase: 'interrupted' });
+  await expect(popup).toContainText('压缩已中断；原始上下文仍保留。');
+  await contextShot(page, 'interrupted', info.project.name);
+});
+
+test('native automatic compaction streams its status, hydrates after reload and continues from the saved summary', async ({ page }, info) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  const goal = `自动压缩验收 ${info.project.name}`;
+  await create(page, goal);
+  const trigger = page.getByRole('button', { name: '查看上下文用量', exact: true });
+  const popup = page.locator('[data-slot="context-content"]');
+  await expect(trigger).toContainText('压缩中');
+  await trigger.click();
+  await expect(popup).toContainText('正在压缩上下文…');
+  await contextShot(page, 'compacting', info.project.name);
+  await expect(popup).toContainText('已自动压缩，下一次模型响应后更新占用。', { timeout: 10000 });
+  await expect(popup).toContainText('待估算');
+  await expect(popup.getByRole('progressbar')).toHaveCount(0);
+  await contextShot(page, 'compacted', info.project.name);
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  const before = await workspace(page, goal), runId = before.runs[0].id;
+  const snapshot = await page.evaluate(async ({ space, run }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    return (await fetch(`/api/spaces/${space}/runs/${run}`, { headers: { 'X-TMC-Token': token } })).json();
+  }, { space: before.id, run: runId });
+  expect(snapshot.state).toBe('succeeded'); expect(snapshot.context.tokens).toBeNull();
+  expect(snapshot.context.compaction.reason).toBe('threshold');
+  expect(snapshot.context.usage.input).toBeGreaterThan(snapshot.context.contextWindow - 16_384);
+  expect(snapshot.context.usage.cost).toBeGreaterThan(0.0123);
+  await page.reload();
+  await expect(trigger).toContainText('上下文 —');
+  await trigger.click();
+  await expect(popup).toContainText('已自动压缩，下一次模型响应后更新占用。');
+  expect(await page.locator('body').innerText()).not.toContain('BROWSER-COMPACTION-CHECKPOINT');
+  await page.keyboard.press('Escape');
+  await send(page, '压缩后继续核对练习');
+  await expect(page.getByText('压缩后的对话已继续。', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  await trigger.click();
+  await expect(popup).not.toContainText('待估算');
+  await expect(popup.getByRole('progressbar')).toHaveCount(1);
+  const after = await workspace(page, goal);
+  expect(after.runs).toHaveLength(2); expect(after.runs.every((run: { state: string }) => run.state === 'succeeded')).toBe(true);
 });

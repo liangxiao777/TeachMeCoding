@@ -4,6 +4,7 @@ import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Trash2 } from 'lucide-re
 import { useEffect, useRef, useState } from 'react'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
+import { RunContext } from '@/components/agent/run-context'
 import { QuestionRoundCard, ResearchCard } from '@/components/intake-panel'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
 import { Message, MessageContent } from '@/components/ai-elements/message'
@@ -258,7 +259,8 @@ function Chat() {
               className="leading-relaxed"
             />
             <PromptInputFooter>
-              <span className="text-xs text-muted-foreground">
+              <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
+              <span className="hidden text-xs text-muted-foreground sm:inline">
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
               <PromptInputSubmit className="ml-auto" status={persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
@@ -295,6 +297,7 @@ export function Onboarding() {
               steps={persistence ? ['分析学习需求', '生成路线内容', '校验路线结构', '保存完整路线'] : ['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
               note="这一步只生成路线和单元概要。每个单元的课件，会在你进入该单元时结合你当时的学习情况再生成。"
               parts={persistence ? planningParts : undefined}
+              context={<RunContext runId={planning?.run?.id} />}
             />}
             {persistence && <div className="mt-6 flex flex-wrap gap-2">
               {planning?.run && ['failed', 'interrupted'].includes(planning.run.state) ? (

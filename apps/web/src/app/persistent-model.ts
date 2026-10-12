@@ -20,6 +20,7 @@ interface StoredSpace {
   requirementDraft: RequirementDraft | null
   planningError: string | null
   taskParts: Record<string, AgentDisplayPart[]>
+  runContexts: NonNullable<AppModel['persistence']>['runContexts']
   actions: ActionProposal[]
   executions: CodeExecution[]
 }
@@ -69,6 +70,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   const metadata = saved.route.content?.stages.flatMap((stage) => stage.units) ?? []
   const completedTasks = [...new Map(saved.tasks.map((task) => [`${task.unitId}:${task.kind}`, task])).values()]
     .filter((task) => !['pending', 'running'].includes(task.state))
+  const runContexts: StoredSpace['runContexts'] = {}
   const [sessions, units, tree, taskEntries, actionGroups, executionGroups] = await Promise.all([
     Promise.all(saved.sessions.map((s) => api<SessionDetail>(`/spaces/${saved.id}/sessions/${s.id}`))),
     Promise.all(metadata.map((unit) => api<UnitDetail>(`/spaces/${saved.id}/units/${unit.id}`))),
@@ -81,7 +83,10 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
           throw error
         })
         if (!page?.events.length) break
-        for (const event of page.events) { parts = applyAgentEvent(parts, event); cursor = event.seq }
+        for (const event of page.events) {
+          parts = applyAgentEvent(parts, event); cursor = event.seq
+          if (event.data.type === 'context') runContexts[task.id] = { sequence: event.seq, context: event.data.context }
+        }
       }
       return [task.id, parts]
     })),
@@ -89,6 +94,8 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     Promise.all(metadata.map((u) => api<CodeExecution[]>(`/spaces/${saved.id}/units/${u.id}/executions`))),
   ])
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
+  for (const session of sessions) for (const message of session.messages) if (message.context)
+    runContexts[message.id] = { sequence: message.sequence ?? 0, context: message.context }
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
   const drafts = Object.fromEntries(units.map((unit) => {
     const task = saved.tasks.find((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind) && ['pending', 'running'].includes(t.state))
@@ -107,7 +114,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
     selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
   }
-  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), actions: actionGroups.flat(), executions: executionGroups.flat(),
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), runContexts, actions: actionGroups.flat(), executions: executionGroups.flat(),
     ui: {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
@@ -308,7 +315,11 @@ export function usePersistentModel(): AppModel {
       // A refresh started before a new execution must not erase its stop control.
       executions.push(...s.executions.filter((known) => !executions.some((e) => e.id === known.id)))
       executions.sort((a, b) => a.createdAt - b.createdAt)
+      const runContexts = { ...s.runContexts }
+      for (const [id, fresh] of Object.entries(loaded.runContexts))
+        if (fresh.sequence >= (runContexts[id]?.sequence ?? 0)) runContexts[id] = fresh
       return { ...s, actions, executions, saved: { ...loaded.saved, requirement, readiness, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
+        runContexts,
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
           ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
           currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
@@ -336,6 +347,11 @@ export function usePersistentModel(): AppModel {
       if (terminal || event.runId !== work.id || event.seq <= cursor) return
       cursor = event.seq
       parts = applyAgentEvent(parts, event)
+      if (event.data.type === 'context') {
+        const context = event.data.context
+        change(space, (s) => (s.runContexts[work.id]?.sequence ?? 0) >= event.seq ? s
+          : { ...s, runContexts: { ...s.runContexts, [work.id]: { sequence: event.seq, context } } })
+      }
       if (event.data.type === 'text') text += event.data.delta
       if (event.data.type === 'state') terminal = !['pending', 'running'].includes(event.data.state)
       const state = event.data.type === 'state' ? event.data.state : 'running'
@@ -400,6 +416,9 @@ export function usePersistentModel(): AppModel {
       const saved = mergeSession(s.sessions[fresh.id], fresh)
       const knownRun = work && s.saved.runs.find((run) => run.id === work.id)
       const nextRun = knownRun && !['pending', 'running'].includes(knownRun.state) ? knownRun : work
+      const runContexts = { ...s.runContexts }
+      for (const message of fresh.messages) if (message.context && (message.sequence ?? 0) >= (runContexts[message.id]?.sequence ?? 0))
+        runContexts[message.id] = { sequence: message.sequence ?? 0, context: message.context }
       const update = (old: Session) => {
         const next = uiSession(saved), messages = new Map(old.messages.map((message) => [message.id, message]))
         for (const message of next.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
@@ -407,7 +426,7 @@ export function usePersistentModel(): AppModel {
           composerText: consumed && old.composerText === consumed.text ? fresh.draft.text : old.composerText,
           composerQuote: consumed && same(old.composerQuote, consumed.quote) ? fresh.draft.quote : old.composerQuote }
       }
-      return { ...s, sessions: { ...s.sessions, [saved.id]: saved },
+      return { ...s, sessions: { ...s.sessions, [saved.id]: saved }, runContexts,
         saved: { ...s.saved, ...(changesIntake ? { readiness: undefined } : {}),
           runs: nextRun ? [...s.saved.runs.filter((run) => run.id !== nextRun.id), nextRun] : s.saved.runs },
         ui: { ...s.ui, sessions: s.ui.sessions.some((old) => old.id === saved.id)
@@ -782,6 +801,7 @@ export function usePersistentModel(): AppModel {
       },
       tasks: selected?.saved.tasks ?? [],
       taskParts: selected?.taskParts ?? {},
+      runContexts: selected?.runContexts ?? {},
       generateAssessment: () => { if (current && recordUnit) assessmentTask(current.id, recordUnit, 'assessment') },
       stopTask: (id) => { if (current) void run(`stop:${id}`, () => api(`/spaces/${current.id}/runs/${id}/stop`, {})) },
       retryTask: (id) => { if (current) retryTask(current.id, id) },

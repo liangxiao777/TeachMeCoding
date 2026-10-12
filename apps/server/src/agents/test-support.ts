@@ -1,5 +1,6 @@
-import { createAssistantMessageEventStream, type AssistantMessage, type JsonObject, type Message } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, createProvider, InMemoryCredentialStore, type Api, type AssistantMessage, type JsonObject, type Message, type Model } from '@earendil-works/pi-ai';
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import type { IntakeMetadata, RouteSubmission } from '@teach-me-coding/contracts';
 import type { ModelSource } from '../models/service.js';
 import { randomUUID } from 'node:crypto';
@@ -21,9 +22,23 @@ export function populated(learning: Learning, name = 'Rust') {
 
 export const teachingModel = getBuiltinModel('openrouter', 'stealth/space-bunny-alpha');
 export const syntheticSelection = { provider: 'openrouter', model: teachingModel.id, thinkingLevel: 'high' as const };
+export async function syntheticSessionRuntime(model: Model<Api>) {
+  const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
+  const noTransport = () => { throw new Error('Synthetic session must use the test stream'); };
+  runtime.registerNativeProvider(createProvider({ id: model.provider, name: 'Synthetic', models: [model],
+    api: { stream: noTransport, streamSimple: noTransport },
+    auth: { apiKey: { name: 'Synthetic transport',
+      check: async () => ({ type: 'api_key', source: 'synthetic' }),
+      resolve: async () => ({ type: 'api_key', source: 'synthetic', auth: { apiKey: 'synthetic-test-only' } }),
+    } },
+  }));
+  await runtime.refresh({ providers: [model.provider], allowNetwork: false });
+  return runtime;
+}
 export const syntheticSource: ModelSource = {
   current: () => ({ selection: syntheticSelection, model: teachingModel }),
   resolve: (selection) => selection.provider === syntheticSelection.provider && selection.model === syntheticSelection.model ? teachingModel : undefined,
+  sessionRuntime: syntheticSessionRuntime,
 };
 // Initial routes express content without storage IDs; adjustments finalize their existing draft.
 export function routeReply(messages: Message[], content: RouteSubmission, adjustment = false) {

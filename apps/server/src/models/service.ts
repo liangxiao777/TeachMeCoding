@@ -7,6 +7,7 @@ import type { StreamFn } from '@earendil-works/pi-agent-core';
 import { clampThinkingLevel, getSupportedThinkingLevels, InMemoryCredentialStore, type Api, type AuthContext, type AuthEvent, type AuthPrompt,
   type CredentialStore, type Model, type MutableModels } from '@earendil-works/pi-ai';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { loginAnswerSchema, loginStartSchema, modelSelectionSchema, type LoginEvent, type LoginSession, type ModelSelection,
   type ModelSettings, type ModelSummary, type ProviderSummary } from '@teach-me-coding/contracts';
 import type { EnvLookup } from '../config/model.js';
@@ -17,6 +18,7 @@ export interface ModelChoice { selection: ModelSelection; model: Model<Api> }
 export interface ModelSource {
   current(): ModelChoice | null;
   resolve(selection: ModelSelection): Model<Api> | undefined;
+  sessionRuntime(model: Model<Api>): Promise<ModelRuntime>;
   stream?: StreamFn;
 }
 
@@ -46,6 +48,23 @@ export class ModelService implements ModelSource {
   }
   readonly stream: StreamFn = (model, context, options) => this.models.streamSimple(model, context, options);
   get ready() { return this.status.ready; }
+
+  async sessionRuntime(model: Model<Api>) {
+    const provider = this.models.getProvider(model.provider);
+    if (!provider) throw new BusinessError(503, '所选 Provider 已不可用。');
+    const runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, refreshOnCreate: false });
+    const context = authContext(this.options.env);
+    // Pi sessions and the teaching transport share credentials and the app's
+    // injected environment. Never discover the user's CLI model configuration.
+    runtime.registerNativeProvider({ ...provider, auth: { ...provider.auth,
+      ...(provider.auth.apiKey ? { apiKey: { ...provider.auth.apiKey,
+        ...(provider.auth.apiKey.check ? { check: (input) => provider.auth.apiKey!.check!({ ...input, ctx: { ...input.ctx, ...context } }) } : {}),
+        resolve: (input) => provider.auth.apiKey!.resolve({ ...input, ctx: { ...input.ctx, ...context } }),
+      } } : {}),
+    } });
+    await runtime.refresh({ providers: [provider.id], allowNetwork: false });
+    return runtime;
+  }
 
   private setting<T>(key: string): T | undefined {
     const row = this.db?.prepare('SELECT value FROM app_settings WHERE key=?').get(key) as { value: string } | undefined;

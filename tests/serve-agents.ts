@@ -25,6 +25,9 @@ const projects = new Projects(root), terminals = new Terminals((space) => projec
 const actions = new Actions(learning, projects);
 const executions = new Executions(learning);
 const agents = new TeachingRuntime(learning, syntheticSource, { stream: agentTransport, projectDirectory: (space) => projects.root(space), actions, executions,
+  // Small retained tails let the browser exercise native compaction with short,
+  // readable fixtures. Production keeps Pi's default 20,000 recent tokens.
+  compaction: { keepRecentTokens: 64 },
   webFetch: {
     lookup: async (hostname) => { if (hostname !== 'docs.example.org') throw new Error('Unexpected fixture host'); return [{ address: '8.8.8.8', family: 4 }]; },
     fetch: async (url) => {

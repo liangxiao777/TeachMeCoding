@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { ActionProposal, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, ProjectFile, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentContext, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, ProjectFile, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 import type { LocalTerminal } from '@/lib/terminal'
 
@@ -100,6 +100,7 @@ export interface AppModel {
     stopExecution: (id: string) => void
     tasks: WorkStatus[]
     taskParts: Record<string, AgentDisplayPart[]>
+    runContexts: Record<string, { sequence: number; context: AgentContext }>
     generateAssessment: Action
     retryTask: (id: string) => void
     stopTask: (id: string) => void

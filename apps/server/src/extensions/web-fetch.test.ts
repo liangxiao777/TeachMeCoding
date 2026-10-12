@@ -11,7 +11,7 @@ import { Readability } from '@mozilla/readability';
 import { createWebFetchTool, type WebFetchOptions, type WebFetchResponse } from './web-fetch.js';
 import { SearchService } from './search.js';
 import { TeachingRuntime } from '../agents/runtime.js';
-import { reply, response, teachingModel } from '../agents/test-support.js';
+import { reply, response, syntheticSource, teachingModel } from '../agents/test-support.js';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
@@ -295,7 +295,7 @@ test('DeepSeek receives ordinary web_fetch without a search key or enabled searc
   const model = { ...teachingModel, id: 'deepseek-chat', provider: 'deepseek' };
   const selection = { provider: model.provider, model: model.id, thinkingLevel: 'high' as const };
   let turns = 0, pages = 0;
-  const runtime = new TeachingRuntime(new Learning(db), { current: () => ({ model, selection }), resolve: () => model }, {
+  const runtime = new TeachingRuntime(new Learning(db), { ...syntheticSource, current: () => ({ model, selection }), resolve: () => model }, {
     search, webFetch: { lookup: publicLookup, fetch: async () => { pages++; return new Response('TRANSIENT-PAGE-EVIDENCE'); } },
     stream: (current, context) => {
       assert.equal(current.provider, 'deepseek');
@@ -331,7 +331,7 @@ test('a teaching model can follow an ordinary web_search result with web_fetch i
   } });
   search.save({ enabled: true, provider: 'tavily', apiKey: 'synthetic-search-secret' });
   const model = teachingModel, selection = { provider: model.provider, model: model.id, thinkingLevel: 'high' as const };
-  const runtime = new TeachingRuntime(new Learning(db), { current: () => ({ model, selection }), resolve: () => model }, {
+  const runtime = new TeachingRuntime(new Learning(db), { ...syntheticSource, current: () => ({ model, selection }), resolve: () => model }, {
     search, webFetch: { lookup: publicLookup, fetch: async (url, options) => {
       pages++; assert.equal(url.href, address); assert.doesNotMatch(JSON.stringify(options.headers), /secret|authorization|cookie/i);
       return new Response('DETAILED-PAGE-EVIDENCE');
@@ -366,7 +366,7 @@ test('stopping or closing a teaching run aborts web_fetch without another model 
     const db = openDatabase(':memory:'), learning = new Learning(db); let entered!: () => void, turns = 0, cancelled = false, commits = 0;
     const ready = new Promise<void>((resolve) => { entered = resolve; });
     const model = { ...teachingModel, id: 'deepseek-chat', provider: 'deepseek' }, selection = { provider: model.provider, model: model.id, thinkingLevel: 'high' as const };
-    const runtime = new TeachingRuntime(learning, { current: () => ({ model, selection }), resolve: () => model }, {
+    const runtime = new TeachingRuntime(learning, { ...syntheticSource, current: () => ({ model, selection }), resolve: () => model }, {
       scenario: () => ({ tools: [], commit() { commits++; } }), webFetch: { lookup: publicLookup, fetch: async () => new Response(new ReadableStream<Uint8Array>({
         pull() { entered(); }, cancel() { cancelled = true; },
       })) }, stream: () => { turns++; return response({ ...reply([{ type: 'toolCall', id: 'pending-fetch', name: 'web_fetch', arguments: { url: address } }], 'toolUse'), provider: model.provider, model: model.id }); },

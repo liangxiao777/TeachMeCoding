@@ -19,6 +19,7 @@ import { bundledLanguages, type BundledLanguage } from 'shiki/langs'
 import { bundledThemes } from 'shiki/themes'
 import type { ExtraProps } from 'streamdown'
 import { Generating, InlineText, RichText, StatusPill } from '@/components/shared'
+import { RunContext } from '@/components/agent/run-context'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -350,6 +351,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
             title="正在为你生成课件"
             steps={persistence ? ['分析单元目标', '生成课件内容', '整理课件内容', '保存课件'] : ['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
             parts={persistence ? persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? [] : undefined}
+            context={<RunContext runId={persistence?.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id} />}
             note="课件会结合你此刻的学习情况生成，所以和别人看到的可能不一样。"
           />
         )}

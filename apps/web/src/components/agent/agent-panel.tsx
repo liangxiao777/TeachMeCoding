@@ -25,6 +25,7 @@ import { Message as ChatMessage, MessageContent } from '@/components/ai-elements
 import { PromptInput, PromptInputFooter, PromptInputHeader, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { RunContent } from './run-content'
+import { RunContext } from './run-context'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -279,6 +280,7 @@ function Composer() {
             className="min-h-16 leading-relaxed"
           />
           <PromptInputFooter>
+            <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
             <PromptInputSubmit className="ml-auto" status={replying ? 'streaming' : 'ready'} onStop={stopReply}
               disabled={!replying && !canSend} aria-label={replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
           </PromptInputFooter>

@@ -64,15 +64,23 @@ export interface SessionSummary { id: string; scope: 'intake' | 'route' | 'unit'
 export type AgentDisplayPart = { type: 'text'; id: string; text: string }
   | { type: 'reasoning'; id: string; text: string; status: 'streaming' | 'done' | 'interrupted' }
   | { type: 'tool'; id: string; name: string; input?: unknown; inputText?: string; status: 'generating' | 'ready' | 'running' | 'done' | 'error' | 'interrupted' };
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
+export interface AgentContext {
+  modelId: string; provider: string; contextWindow: number; tokens: number | null;
+  phase: 'ready' | 'compacting' | 'compacted' | 'failed' | 'interrupted';
+  compaction?: { reason: 'threshold' | 'overflow'; tokensBefore: number | null };
+  /** This run's reported usage, including summary requests; not context occupancy. */
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | null;
+}
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
   valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
 export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent; intake?: IntakeMetadata | null }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
-export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null }
+export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
+  | { type: 'context'; context: AgentContext }
   | { type: 'text'; delta: string; partId?: string }
   | { type: 'reasoning'; partId: string; phase: 'start' | 'delta' | 'end'; delta?: string }
   | { type: 'tool'; name: string; phase: 'input' | 'ready' | 'start' | 'end'; input?: unknown; inputDelta?: string; failed?: boolean; callId?: string };
@@ -84,6 +92,7 @@ export interface RunSubmission { run: AgentRun; session: SessionDetail }
 // before applying events; hydration starts empty, never from Message.text.
 export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEvent): AgentDisplayPart[] {
   const { data, runId, seq } = event;
+  if (data.type === 'context') return [...parts];
   if (data.type === 'state') {
     return parts.map((part) => ['succeeded', 'failed', 'interrupted'].includes(data.state)
       && ((part.type === 'reasoning' && part.status === 'streaming') || (part.type === 'tool' && ['generating', 'ready', 'running'].includes(part.status)))

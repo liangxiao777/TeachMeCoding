@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
   applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, unlockedUnitIds,
-  type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type ResearchRef, type ResearchSaveResult, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type ResearchRef, type ResearchSaveResult, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
 
@@ -123,12 +123,17 @@ export class Learning {
         `SELECT e.run_id AS runId,e.seq,e.value FROM agent_events e JOIN messages m ON m.space_id=e.space_id AND m.id=e.run_id
          WHERE m.space_id=? AND m.session_id=? ORDER BY e.run_id,e.seq`, space, id);
       const parts = new Map<string, AgentDisplayPart[]>();
-      for (const event of events) parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [],
-        { runId: event.runId, seq: event.seq, data: JSON.parse(event.value) as AgentEventData }));
+      const contexts = new Map<string, AgentContext>();
+      for (const event of events) {
+        const data = JSON.parse(event.value) as AgentEventData;
+        parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [], { runId: event.runId, seq: event.seq, data }));
+        if (data.type === 'context') contexts.set(event.runId, data.context);
+      }
       return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
         draft: { ...JSON.parse(row.draft), revision: row.revision },
         messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
           ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
+          ...(contexts.has(m.id) ? { context: contexts.get(m.id) } : {}),
         })),
         ...(row.scope === 'intake' ? { questions: this.intake.questions(space, id) } : {}),
       };

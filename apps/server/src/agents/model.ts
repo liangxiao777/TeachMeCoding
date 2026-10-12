@@ -2,7 +2,7 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 
-// pi-coding-agent 1.0.0 defaults, without its session/settings host.
+// pi-coding-agent 1.0.0 defaults, shared by sessions and the scoped HTTP transport.
 export const defaultHttpIdleTimeoutMs = 300_000;
 export const defaultRetryPolicy: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 2000 };
 

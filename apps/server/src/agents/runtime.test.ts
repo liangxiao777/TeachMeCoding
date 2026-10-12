@@ -53,7 +53,8 @@ test('runs isolate sessions, reject concurrency, replay durable cursors and dedu
     assert.ok(!contexts[0]!.includes('独立事实 B') && !contexts[1]!.includes('A prompt'));
     assert.throws(() => runtime.get(b.id, first.run.id), /不存在/);
     const events = runtime.events(a.id, first.run.id).events;
-    assert.deepEqual(events.map((e) => e.seq), [1, 2, 3, 4]);
+    assert.deepEqual(events.map((e) => e.seq), Array.from({ length: events.length }, (_, i) => i + 1));
+    assert.deepEqual(events.filter((e) => e.data.type !== 'context').map((e) => e.data.type), ['state', 'state', 'text', 'state']);
     assert.deepEqual(runtime.events(a.id, first.run.id, 2).events, events.slice(2));
     assert.equal(learning.session(a.id, sa).messages.length, 2);
     assert.equal(learning.session(a.id, sa).messages[1]?.text, 'A reply');
@@ -161,7 +162,8 @@ test('protected SSE reconnect reads missing events and disconnect does not stop 
     const replay = await app.request(`${path}?after=2`, { headers });
     const text = await replay.text();
     const events = text.split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
-    assert.deepEqual(events.map((event) => event.seq), Array.from({ length: 601 }, (_, i) => i + 3));
+    assert.deepEqual(events.map((event) => event.seq), Array.from({ length: events.length }, (_, i) => i + 3));
+    assert.equal(events.filter((event) => event.data.type === 'text').length, 600);
     assert.equal(events.at(-1)?.data.state, 'succeeded', 'SSE must drain beyond its first 500-event page');
   } finally { complete?.(); await runtime.close(); db.close(); }
 });
@@ -249,6 +251,7 @@ test('each run freezes the model and reasoning level that were selected at its c
   const second: ModelSelection = { provider: 'openrouter', model: other.id, thinkingLevel: 'low' };
   let active = first;
   const source: ModelSource = {
+    ...syntheticSource,
     current: () => ({ selection: active, model: active.model === other.id ? other : teachingModel }),
     resolve: (s) => s.model === other.id ? other : s.model === teachingModel.id ? teachingModel : undefined,
   };
@@ -338,11 +341,11 @@ test('hydrating unfinished reasoning and replaying from the saved cursor never d
     stream.push({ type: 'text_delta', contentIndex: 0, delta: 'Preface. ', partial });
     stream.push({ type: 'thinking_start', contentIndex: 1, partial });
     stream.push({ type: 'thinking_delta', contentIndex: 1, delta: 'Consider ', partial });
-    for (let i = 0; i < 100 && runtime.events(a.id, run.id).events.length < 5; i++) await new Promise((r) => setTimeout(r, 1));
+    for (let i = 0; i < 100 && !runtime.events(a.id, run.id).events.some((event) => event.data.type === 'reasoning' && event.data.delta === 'Consider '); i++) await new Promise((r) => setTimeout(r, 1));
     const saved = new Learning(db).session(a.id, sa).messages.at(-1)!;
     assert.deepEqual(saved.parts?.at(-1), { type: 'reasoning', id: `${run.id}:1:reasoning:1`, text: 'Consider ', status: 'streaming' });
     assert.equal(saved.text, 'Preface. ');
-    assert.equal(saved.sequence, 5);
+    assert.equal(saved.sequence, runtime.events(a.id, run.id).events.at(-1)?.seq);
     stream.push({ type: 'thinking_delta', contentIndex: 1, delta: 'the result.', partial });
     stream.push({ type: 'thinking_end', contentIndex: 1, content: 'Consider the result.', partial });
     stream.push({ type: 'text_delta', contentIndex: 2, delta: 'Answer.', partial });
@@ -380,7 +383,7 @@ test('stop or provider failure before reasoning_end preserves unfinished display
       stream.push({ type: 'start', partial });
       stream.push({ type: 'thinking_start', contentIndex: 0, partial });
       stream.push({ type: 'thinking_delta', contentIndex: 0, delta: 'Unfinished', partial });
-      for (let i = 0; i < 100 && runtime.events(a.id, run.id).events.length < 4; i++) await new Promise((r) => setTimeout(r, 1));
+      for (let i = 0; i < 100 && !runtime.events(a.id, run.id).events.some((event) => event.data.type === 'reasoning' && event.data.delta === 'Unfinished'); i++) await new Promise((r) => setTimeout(r, 1));
       assert.equal(learning.session(a.id, sa).messages.at(-1)?.parts?.[0]?.type, 'reasoning');
       if (mode === 'stop') {
         runtime.stop(a.id, run.id);
@@ -625,7 +628,7 @@ test('real HTTP stalls time out while continuously streaming bodies outlive the 
     });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const model = { ...teachingModel, baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1` };
-    const source: ModelSource = { current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
+    const source: ModelSource = { ...syntheticSource, current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
     const adapter = providerStream();
     const runtime = new TeachingRuntime(learning, source, {
       httpIdleTimeoutMs: 100, retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
@@ -654,7 +657,7 @@ test('Google and native SDK transports are not given an unsupported scoped fetch
     const { db, learning, a, sa } = setup();
     const model = models.getModels(provider)[0]!;
     const selection: ModelSelection = { provider, model: model.id, thinkingLevel: 'off' };
-    const source: ModelSource = { current: () => ({ selection, model }), resolve: () => model };
+    const source: ModelSource = { ...syntheticSource, current: () => ({ selection, model }), resolve: () => model };
     let providerError: string | undefined;
     const runtime = new TeachingRuntime(learning, source, { scenario: () => ({ tools: [], commit() {} }), stream: async (model, context, options) => {
       const stream = await adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
@@ -732,7 +735,8 @@ test('each request records the same run tool inventory while provider selection 
       const system = context.messages.find((m) => m.role === 'system'); assert.ok(system?.role === 'system');
       assert.deepEqual(system.toolsAdded?.map((t) => t.name), inventory.map((t) => t.name));
       assert.deepEqual(system.toolsAdded?.find((t) => t.name === mcpTool.name), {
-        name: mcpTool.name, description: 'PRIVATE-MCP-DESCRIPTION', parameters: mcpTool.parameters, outputSchema: mcpTool.outputSchema,
+        // Pi advertises JSON input schemas; outputSchema remains on executable tools.
+        name: mcpTool.name, description: 'PRIVATE-MCP-DESCRIPTION', parameters: JSON.parse(JSON.stringify(mcpTool.parameters)),
       });
       requests++;
       if (requests === 1) {
@@ -908,4 +912,162 @@ PY` : `pdftotext -enc UTF-8 -nopgbrk ${source} ${quote(outputPath)}`;
       assert.equal(readFileSync(outputPath, 'utf8').trim(), '');
     }
   } finally { await runtime.close(); await library.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('native default compaction uses the strict reserve boundary, counts summary usage and never replays a completed reply', async () => {
+  for (const total of [49_152, 49_153]) {
+    const { db, learning, a, sa } = setup();
+    const model = { ...teachingModel, contextWindow: 65_536 };
+    const source: ModelSource = { ...syntheticSource, current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
+    let requests = 0, summaries = 0, commits = 0;
+    const answer = 'Completed answer. ' + 'x'.repeat(85_000);
+    const runtime = new TeachingRuntime(learning, source, { scenario: () => ({ tools: [], commit() { commits++; } }),
+      stream: (_model, context, options) => {
+        const summary = options?.maxTokens !== undefined;
+        if (summary) {
+          summaries++;
+          assert.ok(!context.messages.some((m) => m.role === 'system' && m.toolsAdded?.length), 'Summary requests must not receive teaching tools');
+        } else requests++;
+        const result = reply([{ type: 'text', text: summary ? 'NATIVE-CHECKPOINT-ONLY' : answer }]);
+        return response({ ...result, timestamp: Date.now(), usage: summary
+          ? { input: 83, output: 29, cacheRead: 13, cacheWrite: 5, totalTokens: 130, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0034 } }
+          : { input: total - 17, output: 17, cacheRead: 0, cacheWrite: 0, totalTokens: total, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0123 } } });
+      } });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('Check the native threshold.'));
+      await runtime.idle(run.id);
+      const final = runtime.get(a.id, run.id);
+      assert.equal(final.state, 'succeeded', final.error ?? '');
+      assert.equal(requests, 1); assert.equal(commits, 1);
+      assert.equal(summaries > 0, total === 49_153);
+      assert.equal(final.context?.tokens, summaries ? null : 49_152);
+      assert.equal(final.context?.phase, summaries ? 'compacted' : 'ready');
+      assert.deepEqual(final.context?.usage, { input: total - 17 + summaries * 83, output: 17 + summaries * 29,
+        cacheRead: summaries * 13, cacheWrite: summaries * 5, cost: 0.0123 + summaries * 0.0034 });
+      const hydrated = learning.session(a.id, sa).messages.at(-1)!;
+      assert.equal(hydrated.text, answer); assert.deepEqual(hydrated.context, final.context);
+      assert.doesNotMatch(JSON.stringify(runtime.events(a.id, run.id)), /NATIVE-CHECKPOINT-ONLY/);
+      const manifests = (db.prepare('SELECT value FROM context_manifests ORDER BY request').all() as { value: string }[]).map((r) => JSON.parse(r.value));
+      assert.equal(manifests[0].purpose, 'agent');
+      assert.ok(manifests.slice(1).every((m) => m.purpose === 'compaction'));
+      assert.deepEqual(manifests[0].modelExecution.compaction, { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 });
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('successive native compactions survive restart without resurrecting raw history or stale teaching baselines', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-session-compaction-'));
+  let data = openDataDirectory(root), learning = new Learning(data.db);
+  const space = learning.create({ name: 'Persistent compaction', goal: 'Learning continuity' }), session = space.sessions[0]!.id;
+  const model = { ...teachingModel, contextWindow: 65_536 };
+  const source: ModelSource = { ...syntheticSource, current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
+  let requests = 0, summaries = 0;
+  const runtimeOptions = { compaction: { reserveTokens: 1000, keepRecentTokens: 64 },
+    scenario: () => ({ tools: [], commit() {} }),
+    stream: async (_model: Parameters<NonNullable<ModelSource['stream']>>[0], context: Parameters<NonNullable<ModelSource['stream']>>[1], options?: Parameters<NonNullable<ModelSource['stream']>>[2]) => {
+      await new Promise((resolve) => setTimeout(resolve, 2)); // Native responses must be newer than the previous compaction.
+      if (options?.maxTokens !== undefined) {
+        summaries++;
+        return response({ ...reply([{ type: 'text', text: `PERSISTED-CHECKPOINT-${summaries}` }]), timestamp: Date.now() });
+      }
+      requests++;
+      if (requests > 1) {
+        assert.match(JSON.stringify(context), /PERSISTED-CHECKPOINT-/);
+        assert.doesNotMatch(JSON.stringify(context), /FIRST-RAW-PROMPT/);
+      }
+      if (requests === 3) {
+        assert.doesNotMatch(JSON.stringify(context), /SECOND-RAW-PROMPT|OLD-BASELINE/);
+        assert.match(JSON.stringify(context), /LATEST-BASELINE/);
+      }
+      const result = reply([{ type: 'text', text: requests < 3 ? 'Retained tail. ' + 'y'.repeat(800) : 'Continue from the saved summary.' }]);
+      return response({ ...result, timestamp: Date.now(), usage: { ...result.usage, input: requests < 3 ? 64_550 : 11,
+        totalTokens: requests < 3 ? 64_557 : 18 } });
+    } };
+  let runtime = new TeachingRuntime(learning, source, runtimeOptions);
+  try {
+    learning.saveRequirement(space.id, { ...space.requirement, value: { rows: [{ question: 'Goal', answer: 'OLD-BASELINE' }] } });
+    for (const text of ['FIRST-RAW-PROMPT', 'SECOND-RAW-PROMPT']) {
+      const { run } = runtime.submit(space.id, session, randomUUID(), message(text, learning.session(space.id, session).draft.revision));
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, 'succeeded', runtime.get(space.id, run.id).error ?? '');
+      assert.equal(runtime.get(space.id, run.id).context?.phase, 'compacted');
+      await runtime.close(); data.close();
+      data = openDataDirectory(root); learning = new Learning(data.db); runtime = new TeachingRuntime(learning, source, runtimeOptions);
+    }
+    learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, value: { rows: [{ question: 'Goal', answer: 'LATEST-BASELINE' }] } });
+    const { run } = runtime.submit(space.id, session, randomUUID(), message('Continue after restart.', learning.session(space.id, session).draft.revision));
+    await runtime.idle(run.id);
+    assert.equal(runtime.get(space.id, run.id).state, 'succeeded', runtime.get(space.id, run.id).error ?? '');
+    assert.equal(requests, 3); assert.ok(summaries >= 2);
+    assert.equal(learning.session(space.id, session).messages.at(-1)?.text, 'Continue from the saved summary.');
+    assert.ok(runtime.get(space.id, run.id).context?.tokens !== null);
+  } finally { await runtime.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('native overflow recovery compacts and retries once without re-executing completed tools', async () => {
+  for (const recovered of [true, false]) {
+    const { db, learning, a, sa } = setup();
+    let requests = 0, summaries = 0, executions = 0, commits = 0;
+    const runtime = new TeachingRuntime(learning, syntheticSource, { compaction: { keepRecentTokens: 256 },
+      scenario: () => ({ tools: [{ name: 'read', label: 'Read', description: 'Read a fixture', parameters: Type.Object({}),
+        async execute() { executions++; return { content: [{ type: 'text', text: 'Completed tool result: 47' }], details: {} }; } }], commit() { commits++; } }),
+      stream: async (_model, context, options) => {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        if (options?.maxTokens !== undefined) { summaries++; return response({ ...reply([{ type: 'text', text: 'OVERFLOW-CHECKPOINT-ONLY' }]), timestamp: Date.now() }); }
+        requests++;
+        const result = requests === 1 ? reply([{ type: 'text', text: 'Prior conversation. ' + 'z'.repeat(4000) }])
+          : requests === 2 ? reply([{ type: 'toolCall', id: 'once-only', name: 'read', arguments: {} }], 'toolUse')
+          : requests === 3 || !recovered ? { ...reply([], 'error'), errorMessage: 'maximum context length exceeded PRIVATE-PROVIDER-BODY', usage: { ...reply([]).usage, input: 0, output: 0, totalTokens: 0 } }
+          : reply([{ type: 'text', text: 'Recovered answer.' }]);
+        if (requests === 4) {
+          assert.match(JSON.stringify(context), /OVERFLOW-CHECKPOINT-ONLY/);
+          assert.match(JSON.stringify(context), /Completed tool result: 47/);
+          assert.doesNotMatch(JSON.stringify(context), /PRIVATE-PROVIDER-BODY/);
+        }
+        return response({ ...result, timestamp: Date.now() });
+      } });
+    try {
+      const first = runtime.submit(a.id, sa, randomUUID(), message('Seed history.'));
+      await runtime.idle(first.run.id);
+      assert.equal(runtime.get(a.id, first.run.id).state, 'succeeded');
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('Use the tool and recover.', 1));
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(a.id, run.id).state, recovered ? 'succeeded' : 'failed');
+      assert.equal(requests, 4); assert.ok(summaries > 0); assert.equal(executions, 1); assert.equal(commits, recovered ? 2 : 1);
+      assert.equal(runtime.get(a.id, run.id).context?.compaction?.reason, 'overflow');
+      assert.doesNotMatch(JSON.stringify({ events: runtime.events(a.id, run.id), session: learning.session(a.id, sa) }), /PRIVATE-|OVERFLOW-CHECKPOINT-ONLY/);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('failed or cancelled compaction keeps the original context and never exposes summary diagnostics', async () => {
+  for (const cancel of [false, true]) {
+    const { db, learning, a, sa } = setup();
+    let entered!: () => void, summaryStream = createAssistantMessageEventStream(), requests = 0, commits = 0;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const runtime = new TeachingRuntime(learning, syntheticSource, { compaction: { reserveTokens: 1000, keepRecentTokens: 64 },
+      scenario: () => ({ tools: [], commit() { commits++; } }), stream: (_model, _context, options) => {
+        if (options?.maxTokens !== undefined) {
+          entered();
+          if (cancel) return summaryStream;
+          return response({ ...reply([], 'error'), errorMessage: '401 PRIVATE-SUMMARY-ERROR' });
+        }
+        requests++;
+        const result = reply([{ type: 'text', text: 'Original completed answer. ' + 'a'.repeat(800) }]);
+        return response({ ...result, timestamp: Date.now(), usage: { ...result.usage, input: teachingModel.contextWindow - 1000, totalTokens: teachingModel.contextWindow - 993 } });
+      } });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('Summarize this turn.'));
+      await started;
+      assert.equal(runtime.get(a.id, run.id).context?.phase, 'compacting');
+      if (cancel) { runtime.stop(a.id, run.id); summaryStream.push({ type: 'error', reason: 'aborted', error: reply([], 'aborted') }); }
+      await runtime.idle(run.id);
+      const final = runtime.get(a.id, run.id);
+      assert.equal(final.state, cancel ? 'interrupted' : 'succeeded');
+      assert.equal(final.context?.phase, cancel ? 'interrupted' : 'failed');
+      assert.equal(commits, cancel ? 0 : 1); assert.equal(requests, 1);
+      assert.doesNotMatch(JSON.stringify({ final, session: learning.session(a.id, sa), events: runtime.events(a.id, run.id),
+        manifests: db.prepare('SELECT value FROM context_manifests').all() }), /PRIVATE-SUMMARY-ERROR/);
+    } finally { summaryStream.end(); await runtime.close(); db.close(); }
+  }
 });

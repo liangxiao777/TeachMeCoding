@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createProvider } from '@earendil-works/pi-ai';
+import { createProvider, InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { openDatabase } from '../storage/database.js';
 import { ModelService } from './service.js';
 import { BusinessError } from '../modules/learning.js';
@@ -77,6 +77,27 @@ test('settings enumerates pi-ai providers and catalog models without leaking sec
   assert.ok(model.contextWindow > 0);
   assert.throws(() => models.modelsOf('nope'), BusinessError);
   db.close();
+});
+
+test('native sessions share app credentials and injected auth rather than discovering CLI configuration', async () => {
+  const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
+  const models = new ModelService(db, { env, credentials, fallback: stealth });
+  try {
+    await models.refresh();
+    const model = models.current()!.model, native = await models.sessionRuntime(model);
+    assert.deepEqual(await native.checkAuth(model.provider), { type: 'api_key', source: 'OPENROUTER_API_KEY' });
+    assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-env-key');
+    // A session created before a login sees the same credential store afterward.
+    await credentials.modify('openrouter', async () => ({ type: 'api_key', key: 'synthetic-stored-key' }));
+    assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-stored-key');
+    assert.equal((await models.models.getAuth(model))?.auth.apiKey, 'synthetic-stored-key');
+    await credentials.delete('openrouter');
+    assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-env-key');
+    const unconfigured = new ModelService(db, { env: noenv, fallback: stealth });
+    const isolated = await unconfigured.sessionRuntime(model);
+    assert.equal(await isolated.checkAuth(model.provider), undefined);
+    assert.equal(await isolated.getAuth(model), undefined);
+  } finally { models.close(); db.close(); }
 });
 
 // A fully offline provider: login asks for a secret and stores it; auth is
