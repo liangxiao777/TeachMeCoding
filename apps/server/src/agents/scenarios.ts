@@ -13,14 +13,14 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
   if (input.scenario === 'intake') return createIntakeTools(learning, input, runId);
   if (input.scenario === 'roadmap') {
     const initial = input.route!.content === null;
-    const draft = createRouteTools(input.route!.content);
+    const draft = createRouteTools(input.route!.content, input.progress);
     return {
       tools: draft.tools,
       commit() {
         const proposal = draft.proposal();
         if (initial && !proposal) throw new BusinessError(422, '未生成完整学习路线，请重试规划。');
         if (proposal) {
-          const saved = learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision });
+          const saved = learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision }, runId);
           if (initial) learning.applyProposal(input.spaceId, saved.id);
         }
       },

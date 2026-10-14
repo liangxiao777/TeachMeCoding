@@ -5,7 +5,20 @@ export const allUnits = (space: Space): Unit[] => space.stages.flatMap((stage) =
 export const findUnit = (space: Space, id: string | null): Unit | undefined => allUnits(space).find((unit) => unit.id === id)
 export function availableUnitIds(space: Space): Set<string> {
   const units = allUnits(space)
-  return unlockedUnitIds(units, new Set(units.filter((unit) => unit.hasLesson ?? unit.contentState === 'ready').map((unit) => unit.id)))
+  return unlockedUnitIds(units, new Set(units.filter((unit) => unit.hasLesson ?? unit.contentState === 'ready').map((unit) => unit.id)),
+    new Set(units.filter((unit) => unit.started || unit.active).map((unit) => unit.id)))
+}
+function unpublishedGap(units: Unit[], available: ReadonlySet<string>): Unit | undefined {
+  const lastStarted = units.findLastIndex((unit) => unit.started || unit.active || (unit.hasLesson ?? unit.contentState === 'ready'))
+  // Catch up an inserted gap before retained learning; ordinary future units
+  // must not take priority over the unfinished unit the learner already began.
+  return units.slice(0, lastStarted).find((unit) => available.has(unit.id) && !(unit.hasLesson ?? unit.contentState === 'ready') && unit.status !== 'skipped')
+}
+export function recommendedUnit(space: Space): Unit | undefined {
+  const available = availableUnitIds(space), units = allUnits(space)
+  // Recommendation follows learning progress, not the unit currently viewed.
+  return unpublishedGap(units, available)
+    ?? units.find((unit) => available.has(unit.id) && unit.status !== 'passed' && unit.status !== 'skipped')
 }
 export function canAccessView(space: Space, view: SpaceView, unitId: string | null): boolean {
   if (!['unit', 'assessment', 'result'].includes(view)) return true
@@ -15,7 +28,10 @@ export function canAccessView(space: Space, view: SpaceView, unitId: string | nu
 }
 export function nextUnit(space: Space, id: string): Unit | undefined {
   const units = allUnits(space)
-  return units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')
+  const available = availableUnitIds(space)
+  const gap = unpublishedGap(units, available)
+  return gap && gap.id !== id ? gap
+    : units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => available.has(unit.id) && unit.status !== 'passed' && unit.status !== 'skipped')
 }
 export function relativeTime(ts: number): string {
   const min = Math.floor((Date.now() - ts) / 60000)

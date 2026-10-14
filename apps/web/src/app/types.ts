@@ -11,6 +11,8 @@ export interface Unit {
   status: UnitStatus
   contentState: ContentState
   hasLesson?: boolean
+  started?: boolean
+  active?: boolean
   lessonKey: string
   lastAdvice?: string[]
 }

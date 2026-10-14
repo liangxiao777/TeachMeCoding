@@ -361,16 +361,20 @@ test('pending questions gate confirmation, route freeze, propose and apply witho
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => ++requests === 1 ? call('ask_user_question', questions) : done() });
   try {
     learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, confirmed: true });
-    const content = route(), proposal = learning.proposeRoute(spaceId, routeSession, content);
-    const asked = submit(runtime, spaceId, sessionId); await runtime.idle(asked.run.id);
+    const content = route(), asked = submit(runtime, spaceId, sessionId);
+    // Already-running intake may finish while a route proposal enters review.
+    const proposal = learning.proposeRoute(spaceId, routeSession, content);
+    await runtime.idle(asked.run.id);
     assert.equal(runtime.get(spaceId, asked.run.id).state, 'succeeded');
     const before = snapshot(learning), current = learning.space(spaceId);
     assert.equal(current.requirement.confirmed, true); assert.equal(current.readiness!.ready, false);
     assert.throws(() => learning.saveRequirement(spaceId, { ...current.requirement, confirmed: true }), status(422, /问题/));
-    assert.throws(() => submit(runtime, spaceId, routeSession, '绕过 plan 入口'), status(422, /问题/));
+    assert.throws(() => submit(runtime, spaceId, routeSession, '绕过 plan 入口'), status(409, /先接受或拒绝/));
     assert.throws(() => learning.proposeRoute(spaceId, routeSession, content), status(422, /问题/));
     assert.throws(() => learning.applyProposal(spaceId, proposal.id), status(422, /问题/));
     assert.deepEqual(snapshot(learning), before); assert.equal(learning.space(spaceId).route.content, null); assert.equal(requests, 2);
+    learning.rejectProposal(spaceId, proposal.id, {});
+    assert.throws(() => submit(runtime, spaceId, routeSession, '拒绝提案后仍需回答问题'), status(422, /问题/));
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -565,7 +569,7 @@ test('migration converts legacy fields to ordinary rows without changing confirm
   } });
   try {
     const saved = learning.space(space);
-    assert.equal(db.pragma('user_version', { simple: true }), 11);
+    assert.equal(db.pragma('user_version', { simple: true }), migrations.length);
     assert.deepEqual(saved.route, { revision: 2, content });
     assert.deepEqual(saved.requirement, { revision: 3, confirmed: true, value: { rows: [
       { question: '学习目标', answer: '  写一个流式账本解析器\r\n' }, { question: '期望达成', answer: '处理三种损坏记录\n' },
@@ -644,19 +648,30 @@ test('manual Markdown saves are protected, atomic and idempotent; stale edits ca
 test('migration 9 to 10 preserves agent document bytes and foreign keys while allowing manual provenance', async () => {
   const db = new Database(':memory:'); db.pragma('foreign_keys = ON');
   migrate(db, migrations.slice(0, 9));
-  const learning = new Learning(db), space = learning.create({ name: 'schema 9 Markdown', goal: '验证已有资料' });
-  const session = space.sessions.find((value) => value.scope === 'intake')!.id;
+  const learning = new Learning(db), space = { id: randomUUID() }, session = randomUUID(), run = randomUUID();
+  // Seed the old wire shape directly, without calling today's workspace reader
+  // against tables that intentionally predate today's proposal schema.
+  db.prepare('INSERT INTO spaces VALUES (?,?,0)').run(space.id, 'schema 9 Markdown');
+  db.prepare('INSERT INTO requirements VALUES (?,0,0,?,NULL)').run(space.id, JSON.stringify(conceptFields));
+  db.prepare('INSERT INTO routes VALUES (?,0,NULL,NULL)').run(space.id);
+  db.prepare("INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,'intake','资料')").run(space.id, session);
+  db.prepare("INSERT INTO runs VALUES (?,?,NULL,?,'intake','succeeded')").run(space.id, run, session);
+  db.prepare("INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,'{}',0)").run(space.id, run);
+  const ref = { id: randomUUID(), revision: 1 };
+  const dossier = learning.intake.prepareResearch(ref, run, { content: '\n# 已有资料\n\n```ts\n  parse("b");\n```\n' });
+  learning.intake.saveResearch(space.id, dossier);
+  db.prepare('UPDATE requirements SET intake=? WHERE space_id=?').run(JSON.stringify({ researchRef: ref }), space.id);
   try {
-    const original = await publishResearch(learning, space.id, session, '\n# 已有资料\n\n```ts\n  parse("b");\n```\n', false);
     const before = snapshot(learning);
     migrate(db, migrations.slice(0, 10));
     assert.equal(db.pragma('user_version', { simple: true }), 10);
     assert.deepEqual(snapshot(learning), before);
-    assert.deepEqual(learning.intake.research(space.id, original.ref), original.dossier);
-    const manual = learning.saveResearch(space.id, original.ref, { content: '# 用户的新资料\n\n手动说明。\n' });
+    assert.deepEqual(learning.intake.research(space.id, ref), dossier);
+    migrate(db);
+    const manual = learning.saveResearch(space.id, ref, { content: '# 用户的新资料\n\n手动说明。\n' });
     assert.equal(manual.document.runId, null); assert.equal(manual.document.revision, 2);
-    assert.deepEqual(db.prepare('SELECT run_id FROM research_dossiers ORDER BY revision').all(), [{ run_id: original.runId }, { run_id: null }]);
-    const invalid = learning.intake.prepareResearch({ id: original.ref.id, revision: 3 }, randomUUID(), research());
+    assert.deepEqual(db.prepare('SELECT run_id FROM research_dossiers ORDER BY revision').all(), [{ run_id: run }, { run_id: null }]);
+    const invalid = learning.intake.prepareResearch({ id: ref.id, revision: 3 }, randomUUID(), research());
     assert.throws(() => learning.intake.saveResearch(space.id, invalid), /FOREIGN KEY/);
     assert.throws(() => learning.intake.saveResearch(randomUUID(), { ...invalid, runId: null }), /FOREIGN KEY/);
     assert.deepEqual(db.pragma('foreign_key_check'), []);

@@ -91,7 +91,11 @@ export interface AppModel {
     disk: ProjectFile | null
     resolveFile: (keepLocal: boolean) => void
     proposals: Proposal[]
+    routeRevision: number
+    requirementRevision: number
+    routeAdjustmentRun?: WorkStatus
     applyProposal: (id: string) => void
+    rejectProposal: (id: string, feedback: string) => Promise<boolean>
     conclusions: LearningConclusion[]
     decideConclusion: (id: string, adopted: boolean) => void
     actions: ActionProposal[]

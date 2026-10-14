@@ -20,7 +20,7 @@ test('real scene and task tool sets never include side effects, cross-scene arti
     scenario: 'intake', requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, lessonRefs: [], references: [] };
   try {
     const expected = { intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'], roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'], tutor: ['read', 'ls', 'find', 'grep', 'submit_learning_conclusion'],
-      lesson: ['read_learning_route', 'read_previous_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
+      lesson: ['read_learning_route', 'read_reference_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
       const frozen = { ...input, scenario };
       const tools = ['intake', 'roadmap', 'tutor'].includes(scenario) ? createScenario(l, frozen, randomUUID(), '/synthetic/cwd').tools : createTask(l, frozen).tools;

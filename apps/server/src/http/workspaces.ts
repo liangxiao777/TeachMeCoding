@@ -4,10 +4,11 @@ import { streamSSE } from 'hono/streaming';
 import { createSpaceSchema, researchRefSchema } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
-import type { TeachingRuntime } from '../agents/runtime.js';
+import { TeachingRuntime } from '../agents/runtime.js';
 
 export function workspaceApi(learning: Learning, projects?: Projects, agents?: TeachingRuntime) {
   const api = new Hono();
+  const decisions = agents ?? new TeachingRuntime(learning, null);
   api.use('*', bodyLimit({ maxSize: 1_100_000, onError: (c) => c.json({ error: '请求内容过大。' }, 413) }));
   api.onError((error, c) => {
     if (error instanceof BusinessError) return c.json({ error: error.message }, error.status);
@@ -115,16 +116,28 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     const { space, session, action } = c.req.param();
     if (!['draft', 'messages'].includes(action)) return c.json({ error: 'Not found' }, 404);
     const input: unknown = await c.req.json();
-    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () =>
-      action === 'draft' ? learning.saveSessionDraft(space, session, input) : learning.addMessage(space, session, input)));
+    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => {
+      if (action === 'messages') return learning.addMessage(space, session, input);
+      learning.assertAgentInputAllowed(space);
+      const target = learning.session(space, session);
+      if (target.unitId) learning.assertUnitUnlocked(space, target.unitId);
+      return learning.saveSessionDraft(space, session, input);
+    }));
   });
   api.post('/spaces/:space/units/:unit/draft', async (c) => {
-    const input: unknown = await c.req.json();
-    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () =>
-      learning.saveAssessmentDraft(c.req.param('space'), c.req.param('unit'), input)));
+    const { space, unit } = c.req.param(), input: unknown = await c.req.json();
+    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => {
+      learning.assertUnitUnlocked(space, unit);
+      return learning.saveAssessmentDraft(space, unit, input);
+    }));
   });
   api.post('/spaces/:space/proposals/:proposal/apply', (c) => c.json(learning.once(
     c.req.header('Idempotency-Key') ?? '', c.req.path, null, () => learning.applyProposal(c.req.param('space'), c.req.param('proposal')))));
+  api.post('/spaces/:space/proposals/:proposal/reject', async (c) => {
+    const { space, proposal } = c.req.param(), input: unknown = await c.req.json(), key = c.req.header('Idempotency-Key') ?? '';
+    // Decision recording remains available even when no teaching model is configured.
+    return c.json(decisions.rejectProposal(space, proposal, key, input));
+  });
   api.post('/spaces/:space/conclusions/:conclusion', async (c) => {
     const input: unknown = await c.req.json();
     return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.decideConclusion(c.req.param('space'), c.req.param('conclusion'), input)));

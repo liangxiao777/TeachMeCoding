@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
-import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, Proposal, ProposalRejection, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { access, api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel, RequirementDraft } from './context'
 import { activeSession, availableUnitIds, canAccessView, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
@@ -44,6 +44,14 @@ function mergeQuestions(known: QuestionRound[] = [], fresh: QuestionRound[] = []
     if (!old || old.state === 'pending' || old.state === 'superseded' && round.state === 'answered') rounds.set(round.id, round)
   }
   return [...rounds.values()]
+}
+function mergeProposals(known: Proposal[], fresh: Proposal[]) {
+  const proposals = new Map(known.map((proposal) => [proposal.id, proposal]))
+  for (const proposal of fresh) {
+    const old = proposals.get(proposal.id)
+    if (!old || old.state === 'pending') proposals.set(proposal.id, proposal)
+  }
+  return [...proposals.values()]
 }
 function mergeSession(known: SessionDetail | undefined, fresh: SessionDetail, acceptQuestions = true): SessionDetail {
   if (!known) return { ...fresh, questions: acceptQuestions ? fresh.questions : [] }
@@ -106,7 +114,9 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const task = saved.tasks.filter((t) => t.unitId === unit.id && t.kind === 'lesson').at(-1)
     return { ...unit, status: details[unit.id]!.status, contentState: task && ['pending', 'running'].includes(task.state) ? 'generating' as const
       : task && ['failed', 'interrupted'].includes(task.state) ? 'failed' as const : details[unit.id]!.lesson ? 'ready' as const : 'none' as const,
-      hasLesson: !!details[unit.id]!.lesson,
+      hasLesson: !!details[unit.id]!.lesson, started: details[unit.id]!.started,
+      active: [...saved.tasks, ...saved.runs].some((work) => work.unitId === unit.id && ['pending', 'running'].includes(work.state))
+        || executionGroups.flat().some((execution) => execution.unitId === unit.id && ['pending', 'running'].includes(execution.state)),
       lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns }
   }) })) ?? []
   const selectedSessions: Record<string, string> = {}
@@ -262,6 +272,7 @@ export function usePersistentModel(): AppModel {
   }, [ready, current?.id, current?.view, viewedUnitId, current?.stages])
   const editSession = (patch: SessionEdit) => {
     if (!current) return
+    if (cache.current[current.id]!.saved.proposals.some((proposal) => proposal.state === 'pending')) return
     if (sessionScope(current) === 'unit' && (!viewedUnitId || !availableUnitIds(current).has(viewedUnitId))) return
     const space = current.id, key = sessionKey(current)
     if (session) {
@@ -283,27 +294,50 @@ export function usePersistentModel(): AppModel {
   }, [ready, capabilities.agent, current?.id, current?.view, current?.currentUnitId, session?.id])
   const refreshBusiness = async (space: string) => {
     const ticket = invalidateBusiness(space)
-    const loaded = await loadSpace(await api<Workspace>(`/spaces/${space}`))
+    const currentTicket = () => ticket === businessRefresh.current.get(space)
+    let loaded: StoredSpace
+    try {
+      const saved = await api<Workspace>(`/spaces/${space}`)
+      // Fence the route before dependent reads: an older snapshot may contain
+      // units that the accepted proposal has already retired.
+      if (!currentTicket() || saved.route.revision < cache.current[space]!.saved.route.revision) return
+      loaded = await loadSpace(saved)
+    } catch (error) {
+      // A decision can supersede a refresh while its child reads are in flight.
+      // Their stale failures must not appear beside the successful decision.
+      if (!currentTicket()) return
+      throw error
+    }
+    if (!currentTicket()) return
     change(space, (s) => {
       const freshIntake = ticket === businessRefresh.current.get(space) && loaded.saved.requirement.revision >= s.saved.requirement.revision
+      const freshRoute = ticket === businessRefresh.current.get(space) && loaded.saved.route.revision >= s.saved.route.revision
       const requirement = freshIntake ? loaded.saved.requirement : s.saved.requirement
       const readiness = freshIntake ? loaded.saved.readiness : s.saved.readiness
-      // A terminal refresh may return after the user has already retried the run.
-      const runs = [...loaded.saved.runs]
-      for (const known of s.saved.runs) {
-        const index = runs.findIndex((r) => r.id === known.id)
-        if (index < 0) runs.push(known)
-        else if (!['pending', 'running'].includes(known.state) || known.state === 'running' && runs[index]!.state === 'pending') runs[index] = known
+      const route = freshRoute ? loaded.saved.route : s.saved.route
+      const unitIds = new Set(route.content?.stages.flatMap((stage) => stage.units.map((unit) => unit.id)))
+      // A terminal refresh may return after a retry or decision. Neither work
+      // states nor a finished proposal may move backwards to pending.
+      const mergeWork = (known: WorkStatus[], fresh: WorkStatus[]) => {
+        const work = new Map(fresh.map((work) => [work.id, work]))
+        for (const old of known) {
+          const next = work.get(old.id)
+          if (!next || !['pending', 'running'].includes(old.state) || old.state === 'running' && next.state === 'pending') work.set(old.id, old)
+        }
+        return [...work.values()]
       }
-      const sessions = { ...s.sessions }
-      for (const [id, fresh] of Object.entries(loaded.sessions)) sessions[id] = mergeSession(sessions[id], fresh, freshIntake)
-      const units = { ...loaded.units }
+      const runs = mergeWork(s.saved.runs, loaded.saved.runs), tasks = mergeWork(s.saved.tasks, loaded.saved.tasks)
+      const proposals = mergeProposals(s.saved.proposals, loaded.saved.proposals)
+      const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([, session]) => !session.unitId || unitIds.has(session.unitId)))
+      for (const [id, fresh] of Object.entries(loaded.sessions))
+        if (!fresh.unitId || unitIds.has(fresh.unitId)) sessions[id] = mergeSession(sessions[id], fresh, freshIntake)
+      const units = { ...(freshRoute ? loaded.units : s.units) }
       for (const [id, fresh] of Object.entries(units)) {
         const known = s.units[id]?.draft
         if (known && known.revision > fresh.draft.revision) units[id] = { ...fresh, draft: known }
       }
-      const drafts = { ...s.drafts }
-      for (const [id, fresh] of Object.entries(loaded.drafts)) drafts[id] = { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }
+      const drafts = Object.fromEntries(Object.entries(freshRoute ? loaded.drafts : s.drafts).map(([id, fresh]) =>
+        [id, { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }]))
       const actions = loaded.actions.map((fresh) => {
         const known = s.actions.find((p) => p.id === fresh.id)
         return known && (!['pending', 'running'].includes(known.state) || known.state === 'running' && fresh.state === 'pending') ? known : fresh
@@ -318,23 +352,41 @@ export function usePersistentModel(): AppModel {
       const runContexts = { ...s.runContexts }
       for (const [id, fresh] of Object.entries(loaded.runContexts))
         if (fresh.sequence >= (runContexts[id]?.sequence ?? 0)) runContexts[id] = fresh
-      return { ...s, actions, executions, saved: { ...loaded.saved, requirement, readiness, runs }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
+      const uiSessions = Object.values(sessions).map((saved) => {
+        const old = s.ui.sessions.find((session) => session.id === saved.id)
+        const next = uiSession(saved)
+        if (!old) return next
+        const messages = new Map(old.messages.map((message) => [message.id, message]))
+        for (const message of next.messages)
+          if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
+        return { ...next, messages: [...messages.values()], composerText: old.composerText, composerQuote: old.composerQuote, routeSuggestion: old.routeSuggestion,
+          updatedAt: Math.max(old.updatedAt, next.updatedAt) }
+      })
+      const currentUnitId = s.ui.currentUnitId && unitIds.has(s.ui.currentUnitId) ? s.ui.currentUnitId : loaded.ui.currentUnitId
+      return { ...s, actions, executions, saved: { ...s.saved, requirement, readiness, route, proposals, runs, tasks,
+        sessions: Object.values(sessions), conclusions: freshRoute && freshIntake ? loaded.saved.conclusions : s.saved.conclusions }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
         runContexts,
-        sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? s.ui.draft : null, completed: loaded.ui.completed,
-          ...(s.ui.view === 'planning' && loaded.saved.route.content ? { view: 'route', agentOpen: false } : {}),
-          currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId,
-          requirement: requirement.value, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records,
-          sessions: s.ui.sessions.map((old) => {
-            const fresh = loaded.ui.sessions.find((next) => next.id === old.id)
-            if (!fresh) return old
-            const messages = new Map(old.messages.map((m) => [m.id, m]))
-            for (const message of fresh.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
-            return { ...old, messages: [...messages.values()], updatedAt: Math.max(old.updatedAt, fresh.updatedAt) }
-          }),
+        sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? null : null,
+          ...(freshRoute ? { completed: loaded.ui.completed, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records } : {}),
+          ...(s.ui.view === 'planning' && route.content ? { view: 'route', agentOpen: false } : {}),
+          ...(proposals.some((proposal) => proposal.state === 'pending') ? { agentOpen: true } : {}),
+          currentUnitId, requirement: requirement.value, sessions: uiSessions,
         },
       }
     })
+    for (const work of [...cache.current[space]!.saved.runs, ...cache.current[space]!.saved.tasks])
+      if (['pending', 'running'].includes(work.state)) watchRun(space, work)
   }
+  useEffect(() => {
+    if (!ready || !currentId) return
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void refreshBusiness(currentId).catch((error: unknown) =>
+        setError(error instanceof Error ? error.message : '无法刷新学习路线，请重试。'))
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh) }
+  }, [ready, currentId])
   const watchRun = (space: string, work: WorkStatus) => {
     if (subscriptions.current.has(work.id)) return
     const controller = new AbortController()
@@ -433,8 +485,18 @@ export function usePersistentModel(): AppModel {
           ? s.ui.sessions.map((old) => old.id === saved.id ? update(old) : old) : [...s.ui.sessions, uiSession(saved)] } }
     })
   }
+  const inputAllowed = (route = false) => {
+    if (!selected) return false
+    if (selected.saved.proposals.some((proposal) => proposal.state === 'pending')) {
+      setError('请先接受或拒绝当前路线提案，再继续对话。'); return false
+    }
+    if (route && selected.saved.runs.some((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))) {
+      setError('正在生成路线调整，请等待完成或停止当前生成。'); return false
+    }
+    return true
+  }
   const sendMessage = (text?: string): Promise<boolean> => {
-    if (!current || !session) return Promise.resolve(false)
+    if (!current || !session || !inputAllowed(sessionScope(current) === 'route')) return Promise.resolve(false)
     const space = current.id, id = session.id, snapshot = { text: session.composerText, quote: session.composerQuote }
     const stored = cache.current[space]!.sessions[id]!
     const input = { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision }
@@ -452,7 +514,7 @@ export function usePersistentModel(): AppModel {
     }).then(Boolean)
   }
   const answerQuestions = (round: string, input: QuestionAnswer): Promise<boolean> => {
-    if (!current || !session || !capabilities.agent) return Promise.resolve(false)
+    if (!current || !session || !capabilities.agent || !inputAllowed()) return Promise.resolve(false)
     const space = current.id, id = session.id
     const snapshot = structuredClone(input)
     let submission: RunSubmission | undefined, applied = false
@@ -609,6 +671,12 @@ export function usePersistentModel(): AppModel {
     const entry = cache.current[current.id]!
     if (capabilities.agent && !entry.units[id]?.lesson && !entry.saved.tasks.some((task) => task.unitId === id && task.kind === 'lesson')) generateLesson(current.id, id)
   }
+  const acceptDecision = (space: string, saved: Workspace) => {
+    invalidateBusiness(space)
+    change(space, (s) => ({ ...s, saved: { ...s.saved,
+      route: saved.route.revision >= s.saved.route.revision ? saved.route : s.saved.route,
+      proposals: mergeProposals(s.saved.proposals, saved.proposals) } }))
+  }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
   const uiCurrent = current && { ...current, onboarding: { ...current.onboarding,
@@ -652,7 +720,7 @@ export function usePersistentModel(): AppModel {
     onboardSend: (text) => { void sendMessage(text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
-    confirmRequirement: () => { if (!current?.requirement || !selected) return
+    confirmRequirement: () => { if (!current?.requirement || !selected || !inputAllowed(true)) return
       if (!selected.saved.readiness?.ready) {
         setError(selected.saved.readiness?.reasons.join(' ') || '请先核对学习对象、版本和资料，再确认需求。')
         return
@@ -695,10 +763,12 @@ export function usePersistentModel(): AppModel {
       return sendMessage(text)
     },
     stopReply: () => { if (!current) return
-      const running = current.view === 'planning' ? latestPlan(selected!.saved) : session?.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
+      const running = current.view === 'planning' ? latestPlan(selected!.saved)
+        : sessionScope(current) === 'route' ? selected!.saved.runs.findLast((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))
+        : session?.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
       if (running) void run(`stop:${running.id}`, () => api(`/spaces/${current.id}/runs/${running.id}/stop`, {}))
     },
-    retryReply: (id) => { if (!current) return; const space = current.id
+    retryReply: (id) => { if (!current || !inputAllowed(selected?.saved.runs.find((work) => work.id === id)?.kind === 'roadmap')) return; const space = current.id
       void run(`retry:${id}`, async () => {
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
         acceptSession(space, submission.session, submission.run)
@@ -710,6 +780,7 @@ export function usePersistentModel(): AppModel {
     newSession: () => { if (!current) return; const space = current.id, key = sessionKey(current)
       void run(`new-session:${space}:${key}`, async () => {
         const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
+        invalidateBusiness(space)
         change(space, (s) => ({ ...s, saved: { ...s.saved, sessions: [...s.saved.sessions, saved] }, sessions: { ...s.sessions, [saved.id]: saved }, ui: { ...s.ui, sessions: [...s.ui.sessions, uiSession(saved)], activeSessionIds: { ...s.ui.activeSessionIds, [key]: saved.id } } }))
         sessionStorage.setItem(`session:${space}:${key}`, saved.id)
       })
@@ -717,7 +788,8 @@ export function usePersistentModel(): AppModel {
     switchSession: (id) => { if (!current) return; const key = sessionKey(current)
       changeUi(current.id, (s) => ({ ...s, activeSessionIds: { ...s.activeSessionIds, [key]: id } })); sessionStorage.setItem(`session:${current.id}:${key}`, id)
     },
-    toggleAgent: (open) => { if (current) changeUi(current.id, (s) => ({ ...s, agentOpen: open ?? !s.agentOpen })) },
+    toggleAgent: (open) => { if (current) changeUi(current.id, (s) => ({ ...s,
+      agentOpen: cache.current[current.id]!.saved.proposals.some((proposal) => proposal.state === 'pending') || (open ?? !s.agentOpen) })) },
     toggleIde: (open) => { if (current) changeUi(current.id, (s) => ({ ...s, ideOpen: open ?? !s.ideOpen, ideFullscreen: false })) },
     setIdeFullscreen: (full) => { if (current) changeUi(current.id, (s) => ({ ...s, ideFullscreen: full, ideOpen: true })) },
     toggleExplorer: () => { if (current) changeUi(current.id, (s) => ({ ...s, explorerOpen: !s.explorerOpen })) },
@@ -841,12 +913,37 @@ export function usePersistentModel(): AppModel {
         change(current.id, (s) => ({ ...s, disk: null, files: { ...s.files, [disk.path]: disk }, ui: { ...s.ui, files: s.ui.files.map((file) => file.id === disk.path && !keepLocal ? { ...file, content: disk.content } : file) } }))
       },
       proposals: selected?.saved.proposals ?? [],
+      routeRevision: selected?.saved.route.revision ?? 0,
+      requirementRevision: selected?.saved.requirement.revision ?? 0,
+      routeAdjustmentRun: selected?.saved.runs.findLast((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state)),
       applyProposal: (id) => { if (!current) return; const space = current.id
+        let receipt: Workspace | undefined
         void run(`proposal:${id}`, async () => {
-          const saved = await api<Workspace>(`/spaces/${space}/proposals/${id}/apply`, {})
-          const loaded = await loadSpace(saved)
-          change(space, (s) => ({ ...s, units: { ...loaded.units, ...s.units }, drafts: { ...loaded.drafts, ...s.drafts }, saved: { ...s.saved, route: saved.route, proposals: saved.proposals }, ui: { ...s.ui, currentUnitId: s.ui.currentUnitId ?? loaded.ui.currentUnitId, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote } }))
+          receipt ??= await api<Workspace>(`/spaces/${space}/proposals/${id}/apply`, {})
+          acceptDecision(space, receipt)
+          await refreshBusiness(space)
         })
+      },
+      rejectProposal: (id, feedback) => {
+        if (!current) return Promise.resolve(false)
+        const space = current.id
+        let receipt: ProposalRejection | undefined, applied = false
+        return run(`proposal:${id}`, async () => {
+          receipt ??= await api<ProposalRejection>(`/spaces/${space}/proposals/${id}/reject`, { feedback })
+          if (!applied) {
+            acceptDecision(space, receipt.workspace)
+            acceptSession(space, receipt.session, receipt.run ?? undefined)
+            if (receipt.run) {
+              changeUi(space, (s) => ({ ...s, agentOpen: true, activeSessionIds: { ...s.activeSessionIds, route: receipt!.session.id } }))
+              sessionStorage.setItem(`session:${space}:route`, receipt.session.id)
+              watchRun(space, receipt.run)
+            }
+            applied = true
+          }
+          await refreshBusiness(space)
+          if (receipt.followupError) setError(receipt.followupError)
+          return true
+        }).then(Boolean)
       },
     },
   }

@@ -117,6 +117,24 @@ export const migrations = [
    UPDATE routes SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
    UPDATE proposals SET intake = json_remove(intake, '$.target') WHERE intake IS NOT NULL;
    UPDATE research_dossiers SET value = json_remove(value, '$.target');`,
+  `CREATE TABLE proposals_next (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL, session_id TEXT NOT NULL,
+     base_revision INTEGER NOT NULL, content TEXT NOT NULL CHECK(json_valid(content)),
+     state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','rejected','superseded')),
+     requirement_revision INTEGER, intake TEXT CHECK(json_valid(intake)), run_id TEXT, feedback TEXT NOT NULL DEFAULT '',
+     PRIMARY KEY(space_id,id), FOREIGN KEY(space_id,session_id) REFERENCES sessions(space_id,id),
+     FOREIGN KEY(space_id,run_id) REFERENCES runs(space_id,id));
+   INSERT INTO proposals_next(space_id,id,session_id,base_revision,content,state,requirement_revision,intake)
+     SELECT p.space_id,p.id,p.session_id,p.base_revision,p.content,
+       CASE WHEN p.state='pending' AND p.rowid != COALESCE((
+         SELECT MAX(candidate.rowid) FROM proposals candidate JOIN routes r ON r.space_id=candidate.space_id
+           JOIN requirements q ON q.space_id=candidate.space_id
+         WHERE candidate.space_id=p.space_id AND candidate.state='pending'
+           AND candidate.base_revision=r.revision AND candidate.requirement_revision=q.revision
+       ),-1) THEN 'superseded' ELSE p.state END,
+       p.requirement_revision,p.intake FROM proposals p ORDER BY p.rowid;
+   DROP TABLE proposals;
+   ALTER TABLE proposals_next RENAME TO proposals;
+   CREATE UNIQUE INDEX one_pending_route_proposal ON proposals(space_id) WHERE state='pending';`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

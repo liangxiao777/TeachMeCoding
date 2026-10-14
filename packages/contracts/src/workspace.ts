@@ -30,6 +30,7 @@ export const routeContentSchema = z.object({ note: text, stages: z.array(routeSt
 export const routeSubmissionSchema = z.object({ note: text.optional(), stages: z.array(routeStageSchema.omit({ id: true }).extend({
   units: z.array(routeUnitSchema.omit({ id: true }).partial({ summary: true, goals: true })).min(1).max(100),
 })).min(1).max(30) }).strict();
+export const rejectRouteProposalSchema = z.object({ feedback: text.trim().default('') }).strict();
 export const lessonBlockSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('h2'), id: title, text }).strict(),
   z.object({ type: z.literal('p'), text }).strict(),
@@ -76,7 +77,8 @@ export interface SessionDetail extends SessionSummary { draft: z.infer<typeof se
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
   valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
-export interface Proposal { id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: RouteContent; intake?: IntakeMetadata | null }
+export interface Proposal { id: string; sessionId: string; runId: string | null; baseRevision: number; requirementRevision: number | null;
+  state: 'pending' | 'applied' | 'rejected' | 'superseded'; feedback: string; content: RouteContent; intake?: IntakeMetadata | null }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
@@ -87,6 +89,7 @@ export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error:
 export interface RunEvent { runId: string; seq: number; data: AgentEventData }
 export interface RunEvents { run: AgentRun; events: RunEvent[] }
 export interface RunSubmission { run: AgentRun; session: SessionDetail }
+export interface ProposalRejection { workspace: Workspace; session: SessionDetail; run: AgentRun | null; followupError: string | null }
 
 // One run's ordered display projection. Callers discard seq <= their saved cursor
 // before applying events; hydration starts empty, never from Message.text.
@@ -137,15 +140,18 @@ export interface Workspace extends SpaceSummary {
 export interface ResearchSaveResult { document: ResearchDossier; workspace: Workspace }
 export interface UnitDetail {
   id: string; status: 'not_started' | 'learning' | 'needs_work' | 'passed' | 'skipped';
+  /** Actual saved learning activity, not merely an empty session or draft. */
+  started: boolean;
   lesson: Lesson | null; assessment: AssessmentSpec | null; draft: AssessmentDraft;
   records: AssessmentRecord[];
   nextAttempt?: number;
 }
+export type UnitProgress = Pick<UnitDetail, 'id' | 'status' | 'started'> & { hasLesson: boolean; active: boolean };
 
-// The first unpublished unit is accessible; every unit after it remains locked.
-// Published courseware, not assessment status or an active task, advances access.
-export function unlockedUnitIds(units: readonly { id: string }[], published: ReadonlySet<string>): Set<string> {
-  const available = new Set<string>();
+// Courseware advances the sequential prefix. Inserting a prerequisite never
+// relocks published, already-started or currently-running learning activity.
+export function unlockedUnitIds(units: readonly { id: string }[], published: ReadonlySet<string>, retained: ReadonlySet<string> = new Set()): Set<string> {
+  const available = new Set(units.filter((unit) => published.has(unit.id) || retained.has(unit.id)).map((unit) => unit.id));
   for (const unit of units) {
     available.add(unit.id);
     if (!published.has(unit.id)) break;

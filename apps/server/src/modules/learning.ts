@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, unlockedUnitIds,
-  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type ResearchRef, type ResearchSaveResult, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type Workspace,
+  applyAgentEvent, executionFeedback, idSchema, lessonSchema, messageInputSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, unlockedUnitIds,
+  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Message, type Proposal, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
 
@@ -46,12 +46,15 @@ export class Learning {
     const base = this.one<SpaceSummary>('SELECT id,name,created_at AS createdAt FROM spaces WHERE id=?', id);
     const { intake, ...req } = this.one<{ revision: number; confirmed: number; value: string; intake: string | null }>('SELECT revision,confirmed,value,intake FROM requirements WHERE space_id=?', id);
     const route = this.one<{ revision: number; content: string | null; intake: string | null }>('SELECT revision,content,intake FROM routes WHERE space_id=?', id);
-    const proposals = this.all<{ id: string; baseRevision: number; requirementRevision: number | null; state: 'pending' | 'applied'; content: string; intake: string | null }>(
-      'SELECT id,base_revision AS baseRevision,requirement_revision AS requirementRevision,state,content,intake FROM proposals WHERE space_id=? ORDER BY rowid', id);
+    const content: RouteContent | null = route.content === null ? null : JSON.parse(route.content);
+    const unitIds = new Set(content?.stages.flatMap((stage) => stage.units.map((unit) => unit.id)));
+    const proposals = this.all<Omit<Proposal, 'content' | 'intake'> & { content: string; intake: string | null }>(
+      'SELECT id,session_id AS sessionId,run_id AS runId,base_revision AS baseRevision,requirement_revision AS requirementRevision,state,feedback,content,intake FROM proposals WHERE space_id=? ORDER BY rowid', id);
     const requirement = { ...req, confirmed: !!req.confirmed, value: JSON.parse(req.value), ...(intake ? { intake: JSON.parse(intake) } : {}) };
     return { ...base, requirement, readiness: this.intake.readiness(id, requirement),
-      route: { revision: route.revision, content: route.content === null ? null : JSON.parse(route.content), ...(route.intake ? { intake: JSON.parse(route.intake) } : {}) },
-      sessions: this.all('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id),
+      route: { revision: route.revision, content, ...(route.intake ? { intake: JSON.parse(route.intake) } : {}) },
+      sessions: this.all<SessionSummary>('SELECT id,scope,unit_id AS unitId,title FROM sessions WHERE space_id=? ORDER BY rowid', id)
+        .filter((session) => session.unitId === null || unitIds.has(session.unitId)),
       proposals: proposals.map(({ intake, ...p }) => ({ ...p, content: JSON.parse(p.content), ...(intake ? { intake: JSON.parse(intake) } : {}) })),
       tasks: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM tasks WHERE space_id=? ORDER BY rowid', id),
       runs: this.all('SELECT id,unit_id AS unitId,session_id AS sessionId,kind,state FROM runs WHERE space_id=? ORDER BY rowid', id),
@@ -112,6 +115,7 @@ export class Learning {
     return this.db.transaction(() => {
       const row = this.one<SessionSummary & { revision: number; draft: string }>(
         'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
+      if (row.unitId) this.assertUnitInRoute(space, row.unitId);
       const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
         `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
          COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=m.space_id AND e.run_id=m.id),0) AS sequence,
@@ -159,6 +163,9 @@ export class Learning {
     const v = messageInputSchema.parse(input);
     return this.db.transaction(() => {
       const session = this.session(space, id);
+      this.assertAgentInputAllowed(space);
+      // A new message must not unlock its own otherwise-empty unit session.
+      if (session.unitId) this.assertUnitUnlocked(space, session.unitId);
       if (session.draft.revision !== v.draftRevision) throw conflict();
       if (session.scope === 'intake') this.intake.supersede(space, id);
       this.db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?)').run(space, id, randomUUID(), 'user', v.text, v.quote ? JSON.stringify(v.quote) : null, Date.now());
@@ -169,12 +176,13 @@ export class Learning {
   unit(space: string, id: string): UnitDetail {
     idSchema.parse(space); idSchema.parse(id);
     const unit = this.one<Pick<UnitDetail, 'id' | 'status'>>('SELECT id,status FROM units WHERE space_id=? AND id=?', space, id);
+    this.assertUnitInRoute(space, id);
     const lesson = this.db.prepare('SELECT content,revision FROM lessons WHERE space_id=? AND unit_id=?').get(space, id) as { content: string; revision: number } | undefined;
     const spec = this.db.prepare('SELECT content,revision FROM assessment_specs WHERE space_id=? AND unit_id=?').get(space, id) as { content: string; revision: number } | undefined;
     const draft = this.db.prepare('SELECT revision,answers FROM assessment_drafts WHERE space_id=? AND unit_id=?').get(space, id) as { revision: number; answers: string } | undefined;
     const records = this.all<{ id: string; unitId: string; attempt: number; answers: string; result: string; createdAt: number }>(
       'SELECT id,unit_id AS unitId,attempt,answers,result,created_at AS createdAt FROM assessments WHERE space_id=? AND unit_id=? ORDER BY attempt DESC', space, id);
-    const versions = this.one<{ requirement: number; route: number }>('SELECT r.revision AS requirement,t.revision AS route FROM requirements r JOIN routes t ON t.space_id=r.space_id WHERE r.space_id=?', space);
+    const versions = this.one<{ requirement: number }>('SELECT revision AS requirement FROM requirements WHERE space_id=?', space);
     const submitted = this.db.prepare('SELECT MAX(attempt) AS n FROM submissions WHERE space_id=? AND unit_id=?').get(space, id) as { n: number | null };
     const evaluated: AssessmentRecord[] = records.map(({ result, answers, ...r }) => {
       const value = JSON.parse(result);
@@ -188,7 +196,7 @@ export class Learning {
       if (value.result === 'unverified') value.summary = execution ? executionFeedback(execution).summary : '本次没有可用的代码运行结果，尚不能判断代码是否符合要求。';
       if (execution && value.result === 'needs_work' && value.summary.startsWith('实际输出与测试期望不符。')) value.summary = executionFeedback(execution).summary;
       const valid = ['non-execution', 'execution-verified'].includes(value.verification) && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
-        && value.sources?.requirement === versions.requirement && value.sources?.route === versions.route;
+        && value.sources?.requirement === versions.requirement;
       return { ...r, ...value, valid, answers: JSON.parse(answers) };
     });
     // Versioned evidence, unlike legacy imports, must stop driving progress when its sources expire.
@@ -196,7 +204,8 @@ export class Learning {
       const current = evaluated.find((r) => r.valid);
       unit.status = current ? current.result === 'pass' ? 'passed' : 'needs_work' : 'learning';
     }
-    return { ...unit, lesson: lesson ? { ...JSON.parse(lesson.content), revision: lesson.revision } : null, assessment: spec ? { ...JSON.parse(spec.content), revision: spec.revision } : null,
+    return { ...unit, started: this.activities(space, id)[0]!.started,
+      lesson: lesson ? { ...JSON.parse(lesson.content), revision: lesson.revision } : null, assessment: spec ? { ...JSON.parse(spec.content), revision: spec.revision } : null,
       nextAttempt: Math.max(submitted.n ?? 0, records[0]?.attempt ?? 0) + 1,
       draft: { unitId: id, revision: draft?.revision ?? 0, ...(draft ? JSON.parse(draft.answers) : { q1: '', q2: '' }) },
       records: evaluated,
@@ -206,18 +215,54 @@ export class Learning {
     idSchema.parse(space);
     return this.all('SELECT unit_id AS unitId,revision FROM lessons WHERE space_id=?', space);
   }
+  private activities(space: string, unit?: string): UnitProgress[] {
+    // Match String.trim() without rewriting saved drafts or quoted content.
+    // SQLite's default trim only removes ASCII spaces, not tabs or newlines.
+    const hasText = (field: string) => `trim(${field},char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279))!=''`;
+    const rows = this.all<Omit<UnitProgress, 'started' | 'hasLesson' | 'active'> & { started: number; hasLesson: number; active: number }>(
+      `SELECT u.id,u.status,
+       EXISTS(SELECT 1 FROM lessons l WHERE l.space_id=u.space_id AND l.unit_id=u.id) AS hasLesson,
+       (u.status IN ('learning','needs_work','passed')
+        OR EXISTS(SELECT 1 FROM lessons l WHERE l.space_id=u.space_id AND l.unit_id=u.id)
+        OR EXISTS(SELECT 1 FROM assessment_specs a WHERE a.space_id=u.space_id AND a.unit_id=u.id)
+        OR EXISTS(SELECT 1 FROM assessments a WHERE a.space_id=u.space_id AND a.unit_id=u.id)
+        OR EXISTS(SELECT 1 FROM submissions a WHERE a.space_id=u.space_id AND a.unit_id=u.id)
+        OR EXISTS(SELECT 1 FROM code_executions e WHERE e.space_id=u.space_id AND e.unit_id=u.id)
+        OR EXISTS(SELECT 1 FROM assessment_drafts d WHERE d.space_id=u.space_id AND d.unit_id=u.id
+          AND (${hasText("json_extract(d.answers,'$.q1')")} OR ${hasText("json_extract(d.answers,'$.q2')")}))
+        OR EXISTS(SELECT 1 FROM sessions s WHERE s.space_id=u.space_id AND s.unit_id=u.id
+          AND (${hasText("json_extract(s.draft,'$.text')")} OR ${hasText("json_extract(s.draft,'$.quote.text')")}))
+        OR EXISTS(SELECT 1 FROM messages m JOIN sessions s ON s.space_id=m.space_id AND s.id=m.session_id
+          WHERE s.space_id=u.space_id AND s.unit_id=u.id AND (${hasText('m.text')} OR ${hasText("json_extract(m.quote,'$.text')")}))) AS started,
+       (EXISTS(SELECT 1 FROM tasks t WHERE t.space_id=u.space_id AND t.unit_id=u.id AND t.state IN ('pending','running'))
+        OR EXISTS(SELECT 1 FROM runs r WHERE r.space_id=u.space_id AND r.unit_id=u.id AND r.state IN ('pending','running'))
+        OR EXISTS(SELECT 1 FROM code_executions e WHERE e.space_id=u.space_id AND e.unit_id=u.id
+          AND json_extract(e.value,'$.state') IN ('pending','running'))) AS active
+       FROM units u WHERE u.space_id=?${unit ? ' AND u.id=?' : ''}`, ...(unit ? [space, unit] : [space]));
+    return rows.map((row) => ({ ...row, started: !!row.started, hasLesson: !!row.hasLesson, active: !!row.active }));
+  }
+  progress(space: string): UnitProgress[] {
+    const ids = new Set(this.space(space).route.content?.stages.flatMap((stage) => stage.units.map((unit) => unit.id)));
+    return this.activities(space).filter((unit) => ids.has(unit.id)).map((unit) => ({ ...unit, status: this.unit(space, unit.id).status }));
+  }
+  assertUnitInRoute(space: string, id: string) {
+    if (!this.db.prepare(`SELECT 1 FROM routes r,json_each(r.content,'$.stages') s,json_each(s.value,'$.units') u
+      WHERE r.space_id=? AND json_extract(u.value,'$.id')=?`).get(space, id)) throw new BusinessError(404, '单元不在当前学习路线中。');
+  }
   assertUnitUnlocked(space: string, id: string) {
     idSchema.parse(id);
     const units = this.space(space).route.content?.stages.flatMap((stage) => stage.units) ?? [];
     if (!units.some((unit) => unit.id === id)) throw new BusinessError(404, '单元不在当前学习路线中。');
     const published = new Set(this.lessonReferences(space).map((ref) => ref.unitId));
-    if (!unlockedUnitIds(units, published).has(id)) {
+    const retained = new Set(this.progress(space).filter((unit) => unit.started || unit.active).map((unit) => unit.id));
+    if (!unlockedUnitIds(units, published, retained).has(id)) {
       const first = units.find((unit) => !published.has(unit.id))!;
       throw new BusinessError(422, `单元尚未解锁，请先生成并保存「${first.title}」的课件。`);
     }
   }
   lessonVersion(space: string, unit: string, revision: number) {
     idSchema.parse(space); idSchema.parse(unit);
+    this.assertUnitInRoute(space, unit);
     const row = this.db.prepare('SELECT content FROM lesson_versions WHERE space_id=? AND unit_id=? AND revision=?').get(space, unit, revision) as { content: string } | undefined;
     if (!row) throw new BusinessError(409, '本次任务固定的课件版本无法读取，不会改用最新版。请重新生成课件。');
     return { ...lessonSchema.parse(JSON.parse(row.content)), revision };
@@ -225,7 +270,7 @@ export class Learning {
   checkLessonReferences(space: string, refs: readonly LessonReference[]) {
     const current = new Map(this.lessonReferences(space).map((ref) => [ref.unitId, ref.revision]));
     if (refs.some((ref) => current.get(ref.unitId) !== ref.revision)) {
-      throw new BusinessError(409, '前序课件已改变，请按当前资料重新生成课件；本次结果未保存。');
+      throw new BusinessError(409, '参考课件已改变，请按当前资料重新生成课件；本次结果未保存。');
     }
     for (const ref of refs) this.lessonVersion(space, ref.unitId, ref.revision);
   }
@@ -245,19 +290,45 @@ export class Learning {
   }
 
   // Internal business entrypoints for validated future generation tasks; not browser generation APIs.
-  proposeRoute(space: string, session: string, input: unknown, baseline?: { requirement: number; route: number }) {
+  assertAgentInputAllowed(space: string) {
+    if (this.db.prepare("SELECT 1 FROM proposals WHERE space_id=? AND state='pending'").get(space)) {
+      throw new BusinessError(409, '请先接受或拒绝当前路线提案，再继续对话。');
+    }
+  }
+  assertRouteAdjustmentAllowed(space: string, run?: string) {
+    this.assertAgentInputAllowed(space);
+    if (this.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND kind='roadmap' AND state IN ('pending','running') AND id!=?").get(space, run ?? '')) {
+      throw new BusinessError(409, '这个学习空间正在调整路线，请等待完成或停止当前生成。');
+    }
+  }
+  private validateRouteAdjustment(space: string, content: RouteContent, previous: RouteContent | null) {
+    const protectedIds = new Set(this.progress(space).filter((unit) => unit.started || unit.active).map((unit) => unit.id));
+    const next = new Map(content.stages.flatMap((stage) => stage.units.map((unit) => [unit.id, unit] as const)));
+    for (const unit of previous?.stages.flatMap((stage) => stage.units) ?? []) {
+      if (!protectedIds.has(unit.id)) continue;
+      const replacement = next.get(unit.id);
+      if (!replacement) throw new BusinessError(409, `不能移除已开始学习或正在生成的单元「${unit.title}」，可以移动它或添加补充单元。`);
+      if (JSON.stringify(unit.goals) !== JSON.stringify(replacement.goals)) throw new BusinessError(409,
+        `「${unit.title}」已有学习活动，学习目标需要保留；新增目标请安排为补充单元。`);
+    }
+  }
+  proposeRoute(space: string, session: string, input: unknown, baseline?: { requirement: number; route: number }, run?: string) {
     const content = routeContentSchema.parse(input);
-    const current = this.space(space);
-    if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, '路线提案需要已确认需求及路线会话。');
-    this.intake.assertReady(space, current.requirement);
-    const base = baseline ?? { requirement: current.requirement.revision, route: current.route.revision };
-    if (base.requirement !== current.requirement.revision || base.route !== current.route.revision) throw conflict();
-    const ids = content.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
-    if (new Set(ids).size !== ids.length) throw new BusinessError(422, '路线中的阶段和单元标识不能重复。');
-    const id = randomUUID();
-    this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content,intake) VALUES (?,?,?,?,?,?,?)')
-      .run(space, id, session, base.route, base.requirement, JSON.stringify(content), JSON.stringify(current.requirement.intake));
-    return this.space(space).proposals.find((p) => p.id === id)!;
+    return this.db.transaction(() => {
+      const current = this.space(space);
+      if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, '路线提案需要已确认需求及路线会话。');
+      this.intake.assertReady(space, current.requirement);
+      const base = baseline ?? { requirement: current.requirement.revision, route: current.route.revision };
+      if (base.requirement !== current.requirement.revision || base.route !== current.route.revision) throw conflict();
+      const ids = content.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
+      if (new Set(ids).size !== ids.length) throw new BusinessError(422, '路线中的阶段和单元标识不能重复。');
+      this.assertRouteAdjustmentAllowed(space, run);
+      this.validateRouteAdjustment(space, content, current.route.content);
+      const id = randomUUID();
+      this.db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content,intake,run_id) VALUES (?,?,?,?,?,?,?,?)')
+        .run(space, id, session, base.route, base.requirement, JSON.stringify(content), JSON.stringify(current.requirement.intake), run ?? null);
+      return this.space(space).proposals.find((p) => p.id === id)!;
+    })();
   }
   applyProposal(space: string, id: string) {
     idSchema.parse(id);
@@ -266,14 +337,26 @@ export class Learning {
       const p = current.proposals.find((p) => p.id === id);
       if (!p) throw new BusinessError(404, '路线提案不存在。');
       if (p.state === 'applied') return current;
+      if (p.state !== 'pending') throw new BusinessError(409, '这份路线提案已经结束，不能再应用。');
       if (!current.requirement.confirmed || p.requirementRevision !== current.requirement.revision || p.baseRevision !== current.route.revision) throw conflict();
       this.intake.assertReady(space, current.requirement);
       const units = p.content.stages.flatMap((s) => s.units);
-      const existing = this.all<{ id: string }>('SELECT id FROM units WHERE space_id=?', space);
-      if (existing.some((u) => !units.some((v) => v.id === u.id))) throw new BusinessError(409, '提案不能移除已有单元及学习记录。');
+      this.validateRouteAdjustment(space, p.content, current.route.content);
       for (const u of units) this.db.prepare('INSERT INTO units(space_id,id) VALUES (?,?) ON CONFLICT DO NOTHING').run(space, u.id);
       this.db.prepare('UPDATE routes SET content=?,intake=?,revision=revision+1 WHERE space_id=?').run(JSON.stringify(p.content), p.intake ? JSON.stringify(p.intake) : null, space);
       this.db.prepare("UPDATE proposals SET state='applied' WHERE space_id=? AND id=?").run(space, id);
+      return this.space(space);
+    })();
+  }
+  rejectProposal(space: string, id: string, raw: unknown) {
+    idSchema.parse(id);
+    const input = rejectRouteProposalSchema.parse(raw);
+    return this.db.transaction(() => {
+      const current = this.space(space), proposal = current.proposals.find((proposal) => proposal.id === id);
+      if (!proposal) throw new BusinessError(404, '路线提案不存在。');
+      if (proposal.state === 'rejected' && proposal.feedback === input.feedback) return current;
+      if (proposal.state !== 'pending') throw new BusinessError(409, '这份路线提案已经结束，不能再改变选择。');
+      this.db.prepare("UPDATE proposals SET state='rejected',feedback=? WHERE space_id=? AND id=?").run(input.feedback, space, id);
       return this.space(space);
     })();
   }
@@ -293,12 +376,16 @@ export class Learning {
     const w = this.space(space), u = this.unit(space, unit);
     if (!w.requirement.confirmed || w.requirement.revision !== baseline.requirement || w.route.revision !== baseline.route || (u.lesson?.revision ?? 0) !== baseline.lesson) throw conflict();
   }
+  checkLearningSources(space: string, unit: string, baseline: { requirement: number; lesson: number }) {
+    const w = this.space(space), u = this.unit(space, unit);
+    if (!w.requirement.confirmed || w.requirement.revision !== baseline.requirement || (u.lesson?.revision ?? 0) !== baseline.lesson) throw conflict();
+  }
   conclusions(space: string): LearningConclusion[] {
     const rows = this.all<Omit<LearningConclusion, 'sources' | 'adopted' | 'valid'> & { sources: string; adopted: number; valid: number }>(
       `SELECT c.id,c.unit_id AS unitId,c.run_id AS runId,c.text,c.revision,c.adopted,c.sources,
-        (r.confirmed=1 AND r.revision=json_extract(c.sources,'$.requirement') AND t.revision=json_extract(c.sources,'$.route')
+        (r.confirmed=1 AND r.revision=json_extract(c.sources,'$.requirement')
         AND COALESCE(l.revision,0)=json_extract(c.sources,'$.lesson')) AS valid
-        FROM conclusions c JOIN requirements r ON r.space_id=c.space_id JOIN routes t ON t.space_id=c.space_id
+        FROM conclusions c JOIN requirements r ON r.space_id=c.space_id
         LEFT JOIN lessons l ON l.space_id=c.space_id AND l.unit_id=c.unit_id WHERE c.space_id=? ORDER BY c.rowid`, space);
     return rows.map((r) => ({ ...r, sources: JSON.parse(r.sources), adopted: !!r.adopted, valid: !!r.valid }));
   }

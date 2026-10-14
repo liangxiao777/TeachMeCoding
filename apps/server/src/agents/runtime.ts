@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { type AssistantMessage, type RetryPolicy } from '@earendil-works/pi-ai';
 import { AgentSession, convertToLlm, createExtensionRuntime, SettingsManager, type CompactionSettings, type ResourceLoader } from '@earendil-works/pi-coding-agent';
-import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
 import { compileRequest, hash, retainedMessage, xmlText, type FrozenContext } from './context.js';
@@ -12,7 +12,6 @@ import { defaultHttpIdleTimeoutMs, defaultRetryPolicy, failureStream, providerSt
 import { createModelTransport } from './model-transport.js';
 import { createScenario } from './scenarios.js';
 import { baseline, createTask } from './tasks.js';
-import { previousLessonReferences } from './lesson-tools.js';
 import { Assessments } from '../modules/assessments.js';
 import type { Actions } from '../modules/actions.js';
 import type { Executions } from '../modules/executions.js';
@@ -104,6 +103,8 @@ export class TeachingRuntime {
       requirement: w.requirement, route: s.scope === 'intake' ? null : w.route,
       unit: w.route.content?.stages.flatMap((stage) => stage.units).find((unit) => unit.id === s.unitId) ?? null,
       lesson: s.unitId ? this.learning.unit(space, s.unitId).lesson : null, references,
+      progress: s.scope === 'intake' ? undefined : this.learning.progress(space),
+      rejectedProposal: s.scope === 'route' ? w.proposals.findLast((proposal) => proposal.state === 'rejected') : undefined,
       conclusions: s.scope === 'intake' ? [] : w.conclusions.filter((c) => c.adopted && c.valid),
       evidence: s.scope === 'intake' ? [] : this.evidence(space),
       publicAssessment: s.unitId ? this.learning.unit(space, s.unitId).assessment : null,
@@ -132,6 +133,7 @@ export class TeachingRuntime {
         model: this.models?.current()?.selection,
         requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
         lesson: u.lesson, references: [], conclusions: w.conclusions.filter((c) => c.adopted && c.valid), evidence: this.evidence(space),
+        progress: input.kind === 'evaluation' ? undefined : this.learning.progress(space),
         research: w.route.intake?.researchRef ? this.learning.intake.research(space, w.route.intake.researchRef) : null,
         assessmentRevision: u.assessment?.revision ?? 0,
         ...(input.kind === 'lesson' ? { lessonRefs: this.learning.lessonReferences(space) } : {}),
@@ -160,7 +162,13 @@ export class TeachingRuntime {
       const old = this.learning.db.prepare('SELECT input FROM task_runs WHERE space_id=? AND id=?').get(space, previousId) as { input: string };
       if (previous.kind === 'lesson') {
         const frozen = JSON.parse(old.input) as FrozenContext;
-        const refs = previousLessonReferences(frozen);
+        if (!frozen.lessonRefs) throw new BusinessError(409, '旧课件任务没有固定参考资料，请按当前资料重新生成课件。');
+        // Only consumed lesson bodies are dependencies. Unread courseware can
+        // change without invalidating an otherwise reproducible retry.
+        const refs = this.learning.db.prepare(`SELECT DISTINCT json_extract(s.value,'$.id') AS unitId,json_extract(s.value,'$.revision') AS revision
+          FROM task_manifests m,json_each(m.value,'$.toolSources') t,json_each(t.value,'$.sources') s
+          WHERE m.space_id=? AND m.run_id=? AND json_extract(s.value,'$.kind') IN ('reference-lesson','previous-lesson')`)
+          .all(space, previousId) as { unitId: string; revision: number }[];
         this.learning.checkBaseline(space, previous.unitId!, baseline(frozen));
         this.learning.checkLessonReferences(space, refs);
       }
@@ -203,6 +211,35 @@ export class TeachingRuntime {
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);
   }
+  rejectProposal(space: string, proposalId: string, key: string, raw: unknown): ProposalRejection {
+    const input = rejectRouteProposalSchema.parse(raw);
+    const receipt = this.learning.once(key, `reject-proposal:${space}:${proposalId}`, input, () => {
+      const proposal = this.learning.space(space).proposals.find((proposal) => proposal.id === proposalId);
+      if (!proposal) throw new BusinessError(404, '路线提案不存在。');
+      const unfinished = proposal.state === 'pending';
+      this.learning.rejectProposal(space, proposalId, input);
+      let runId: string | null = null, followupError: string | null = null;
+      if (unfinished && input.feedback) {
+        const message = { text: input.feedback, quote: null, draftRevision: this.learning.session(space, proposal.sessionId).draft.revision };
+        try {
+          // Savepoint: a failed follow-up still records the decision and feedback,
+          // without leaving a half-created run or consuming an unrelated draft.
+          runId = this.learning.db.transaction(() => {
+            if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用，请恢复后再要求调整路线。');
+            return this.recordRun(space, proposal.sessionId, message, undefined, true);
+          })();
+        } catch (error) {
+          if (!(error instanceof BusinessError)) throw error;
+          this.learning.addMessage(space, proposal.sessionId, message, false);
+          followupError = `已拒绝提案并保存修改意见；${error.message}`;
+        }
+      }
+      return { sessionId: proposal.sessionId, runId, followupError };
+    });
+    if (receipt.runId) this.launch(space, receipt.runId, input.feedback);
+    return { workspace: this.learning.space(space), session: this.learning.session(space, receipt.sessionId),
+      run: receipt.runId ? this.get(space, receipt.runId) : null, followupError: receipt.followupError };
+  }
   answer(space: string, session: string, round: string, key: string, raw: unknown): RunSubmission {
     idSchema.parse(round);
     const input = questionAnswerSchema.parse(raw);
@@ -233,6 +270,8 @@ export class TeachingRuntime {
     return { run: this.get(space, id), session: this.learning.session(space, session) };
   }
   private recordRun(space: string, session: string, input: ReturnType<typeof messageInputSchema.parse>, retryOf?: string, preserveDraft = false) {
+    this.learning.assertAgentInputAllowed(space);
+    if (this.learning.session(space, session).scope === 'route') this.learning.assertRouteAdjustmentAllowed(space);
     if (this.learning.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session)) {
       throw new BusinessError(409, '该会话已有运行，请等待完成或主动停止。');
     }
@@ -469,7 +508,11 @@ export class TeachingRuntime {
           phase = event.aborted ? 'interrupted' : event.result ? 'compacted' : 'failed';
           emitContext();
         }
-        if (event.type === 'tool_execution_end' && event.result.details?.sources) toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
+        if (event.type === 'tool_execution_end' && event.result.details?.sources) {
+          toolSources.push({ callId: event.toolCallId, sources: event.result.details.sources, retention: 'body omitted' });
+          this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.toolSources',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
+            .run(JSON.stringify(toolSources), space, id, request);
+        }
         if (event.type === 'message_update') {
           const update = event.assistantMessageEvent;
           if (displayModelText && update.type === 'text_delta') {

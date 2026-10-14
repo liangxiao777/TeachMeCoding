@@ -463,7 +463,7 @@ test('unit access follows published courseware and lesson generation reads earli
   const reads = evidence.events.events.filter((event: RunEvent) => event.data.type === 'tool' && event.data.phase === 'end')
     .map((event: RunEvent) => event.data.type === 'tool' ? [event.data.name, event.data.failed] : []);
   expect(reads).toContainEqual(['read_learning_route', false]);
-  expect(reads).toContainEqual(['read_previous_lesson', false]);
+  expect(reads).toContainEqual(['read_reference_lesson', false]);
   await page.reload();
   await expect(page.locator('.lesson-prose')).toContainText('承接前一单元介绍的命令行参数');
 });
@@ -551,6 +551,94 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
   await expect(page.getByTestId('route-proposal')).toHaveCount(0);
   expect((await workspace(page, goal)).route.content.note).toBe('调整后增加边界练习');
+});
+
+test('blank rejection ends a round; feedback rejection survives response loss and preserves the applied baseline and unsent input', async ({ page }, info) => {
+  test.setTimeout(60000);
+  const goal = `路线拒绝验收 ${info.project.name}`;
+  await page.emulateMedia({ colorScheme: 'light' });
+  await create(page, goal);
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
+  const original = await workspace(page, goal);
+  const decision = page.getByTestId('route-decision'), preview = page.getByTestId('route-proposal');
+  const input = page.getByLabel('向 Agent 提问', { exact: true });
+  await page.getByLabel('路线调整想法', { exact: true }).fill('提出补充提案 A');
+  await page.getByLabel('路线调整想法', { exact: true }).press('Enter');
+  await input.fill('选择后继续写的草稿');
+  await expect(preview).toContainText('未接受的补充 A');
+  await expect(input).toHaveCount(0);
+  await decision.getByRole('button', { name: '拒绝', exact: true }).click();
+  await expect(decision).toContainText('不会自动生成另一份提案');
+  await decision.getByRole('button', { name: '确认拒绝', exact: true }).click();
+  await expect(decision).toHaveCount(0);
+  await expect(input).toHaveValue('选择后继续写的草稿');
+  const rejected = await workspace(page, goal);
+  expect(rejected.route).toEqual(original.route);
+  expect(rejected.runs.filter((run: { kind: string }) => run.kind === 'roadmap')).toHaveLength(2);
+  expect(rejected.proposals.at(-1).state).toBe('rejected');
+  await input.fill('再提出一份补充提案 A');
+  await input.press('Enter');
+  await input.fill('独立未发送输入');
+  await expect(preview).toContainText('未接受的补充 A');
+  const aId = await preview.getAttribute('data-proposal-id');
+  const feedback = '从原路线细化输入边界，不要增加补充 A';
+  await decision.getByRole('button', { name: '拒绝', exact: true }).click();
+  await decision.getByLabel('修改意见（选填）').fill(feedback);
+  await expect(decision).toContainText('从当前已应用路线重新提出调整');
+  await page.screenshot({ path: `.amp/in/artifacts/route-feedback-rejection-${info.project.name}.png`, animations: 'disabled' });
+  let dropped = false;
+  const keys: string[] = [];
+  await page.route(`**/proposals/${aId}/reject`, async (route) => {
+    keys.push(route.request().headers()['idempotency-key']!);
+    if (!dropped) { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await decision.getByRole('button', { name: '确认拒绝', exact: true }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(preview).not.toHaveAttribute('data-proposal-id', aId!);
+  await expect(preview).toContainText('参数输入与边界检查');
+  await expect(preview).not.toContainText('未接受的补充 A');
+  await expect(input).toHaveCount(0);
+  const pending = await workspace(page, goal), bId = await preview.getAttribute('data-proposal-id');
+  expect(keys).toHaveLength(2); expect(new Set(keys).size).toBe(1);
+  expect(pending.route).toEqual(original.route);
+  expect(pending.runs.filter((run: { kind: string }) => run.kind === 'roadmap')).toHaveLength(4);
+  expect(pending.proposals.filter((proposal: { state: string }) => proposal.state === 'pending')).toHaveLength(1);
+  expect(pending.proposals.find((proposal: { id: string }) => proposal.id === aId).feedback).toBe(feedback);
+  expect(pending.proposals.at(-1).content.stages[0].units.map((unit: { id: string }) => unit.id)).toEqual(original.route.content.stages[0].units.map((unit: { id: string }) => unit.id));
+  await page.screenshot({ path: `.amp/in/artifacts/route-feedback-revised-${info.project.name}.png`, animations: 'disabled' });
+
+  let release!: () => void, received!: () => void, heldOnce = false;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const captured = new Promise<void>((resolve) => { received = resolve; });
+  await page.route(`**/api/spaces/${original.id}`, async (route) => {
+    if (!heldOnce) {
+      heldOnce = true; const response = await route.fetch(); received(); await held; await route.fulfill({ response });
+    } else await route.continue();
+  });
+  try {
+    // Capture pending B, apply it, then deliver that older read last.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await captured;
+    await decision.getByRole('button', { name: '确认调整路线', exact: true }).click();
+    await expect(decision).toHaveCount(0);
+    await expect(input).toHaveValue('独立未发送输入');
+    const staleDelivered = page.waitForResponse((response) => response.url().endsWith(`/api/spaces/${original.id}`) && response.ok());
+    release(); await staleDelivered;
+    // The old snapshot includes the same units, so dependent reads can finish
+    // normally. Observe its completed render, not just the successful decision.
+    await page.waitForTimeout(500);
+    await expect(decision).toHaveCount(0);
+    await expect(page.getByRole('main').getByText('参数输入与边界检查', { exact: true }).first()).toBeVisible();
+    await expect(input).toHaveValue('独立未发送输入');
+    const applied = await workspace(page, goal);
+    expect(applied.route.revision).toBe(original.route.revision + 1);
+    expect(applied.proposals.find((proposal: { id: string }) => proposal.id === bId).state).toBe('applied');
+    expect(applied.tasks).toHaveLength(0);
+    await page.screenshot({ path: `.amp/in/artifacts/route-feedback-applied-${info.project.name}.png`, animations: 'disabled' });
+  } finally { release(); }
 });
 
 test('planning response loss, provider failure and cancellation remain recoverable without repeating confirmation', async ({ page }, info) => {

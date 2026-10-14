@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { SessionDetail, UnitDetail, Workspace } from '../../packages/contracts/src/workspace';
-import type { seedWorkspaces } from '../seed-workspaces';
+import { seedRouteReview, type seedWorkspaces } from '../seed-workspaces';
 
 test.use({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light' });
 const seed = (info: TestInfo) => JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
@@ -169,7 +169,7 @@ test('a delayed requirement response preserves sessions created while saving', a
   } finally { release(); }
 });
 
-test('unit sessions, references, assessment drafts, historical records and confirmed proposals stay scoped', async ({ page }, info) => {
+test('unit sessions, references, assessment drafts and historical records stay scoped', async ({ page }, info) => {
   const data = seed(info);
   await page.goto(`/?space=${data.spaceId}&tab=route`);
   await enterUnit(page, '所有权与借用');
@@ -265,13 +265,127 @@ test('unit sessions, references, assessment drafts, historical records and confi
   await page.getByRole('button', { name: '收起 Agent', exact: true }).click();
   await expect(visible(page, '路线调整想法')).toHaveValue('');
   await expect(page.getByText('验收数据：两个独立单元。', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '确认调整路线', exact: true }).click();
-  await expect(page.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
-  await expect(page.getByText('用户确认后的路线说明', { exact: true })).toBeVisible();
   await shot(page, info, 'route');
   await page.reload();
-  await expect(page.getByText('用户确认后的路线说明', { exact: true })).toBeVisible();
+  await expect(page.getByText('验收数据：两个独立单元。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
+});
+
+test('inline route review keeps learned history, blocks every composer, and applies the whole proposal without generating lessons', async ({ page, context }, info) => {
+  const data = seedRouteReview(seed(info).root);
+  await page.goto(`/?space=${data.spaceId}&tab=route&unit=${data.learnedIds[1]}`);
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  const decision = agent.getByTestId('route-decision'), preview = page.getByTestId('route-proposal');
+  await expect(preview).toHaveAttribute('data-proposal-id', data.proposalId);
+  await expect(decision).toHaveAttribute('data-proposal-id', data.proposalId);
+  await expect(page.getByLabel('向 Agent 提问', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('路线调整想法', { exact: true })).toHaveCount(0);
+  await expect(preview.getByRole('button', { name: '确认调整路线', exact: true })).toHaveCount(0);
+  await expect(preview.locator('[data-unit-id][data-change="added"]')).toHaveCount(2);
+  const removed = preview.locator(`[data-unit-id="${data.removedId}"]`);
+  await expect(removed).toHaveAttribute('data-change', 'removed');
+  await expect(removed.locator('del')).toContainText(['并发入门', '初步了解线程。']);
+  await expect(removed.getByRole('button')).toHaveCount(0);
+  const modified = preview.locator('[data-unit-id][data-change="modified"]');
+  await expect(modified.locator('del')).toContainText(['命令行项目', '完成一个小工具。']);
+  await expect(modified.locator('ins')).toContainText(['单词计数器：输入与错误处理', '分步读取文件、统计单词并报告错误']);
+  await expect(modified.getByLabel('单元目标（修改前）')).toContainText('编写命令行程序');
+  await expect(modified.getByLabel('单元目标（修改后）')).toContainText('处理缺失文件与空输入');
+  for (const id of data.learnedIds) {
+    await expect(preview.locator(`[data-unit-id="${id}"]`)).toContainText('通过');
+    await expect(preview.locator(`[data-unit-id="${id}"]`).getByRole('button', { name: '查看已有课件' })).toBeEnabled();
+  }
+  await preview.locator(`[data-unit-id="${data.learnedIds[1]}"]`).getByRole('button', { name: '查看已有课件' }).click();
+  await expect(page.locator('.lesson-prose')).toContainText('已保存的课件：所有权与移动。');
+  await expect(decision).toBeVisible();
+  await expect(agent.getByLabel('向 Agent 提问', { exact: true })).toHaveCount(0);
+  await decision.getByRole('button', { name: '查看路线中的变化', exact: true }).click();
+  await page.goto(`/?space=${data.spaceId}&tab=requirement&unit=${data.learnedIds[1]}`);
+  await expect(page.getByRole('button', { name: '修改', exact: true })).toBeDisabled();
+  await expect(page.getByLabel('回复 Agent', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('route-decision')).toBeVisible();
+  await page.getByTestId('route-decision').getByRole('button', { name: '查看路线中的变化', exact: true }).click();
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: `.amp/in/artifacts/route-review-pending-${info.project.name}.png`, animations: 'disabled' });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.screenshot({ path: `.amp/in/artifacts/route-review-dark-${info.project.name}.png`, animations: 'disabled' });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveClass(/light/);
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await expect(decision.getByRole('button', { name: '确认调整路线', exact: true })).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/route-review-narrow-${info.project.name}.png`, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await modified.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/route-review-detail-${info.project.name}.png`, animations: 'disabled' });
+  await decision.getByRole('button', { name: '拒绝', exact: true }).click();
+  await decision.getByLabel('修改意见（选填）').fill('项目再拆细一些，保留已完成单元。');
+  await expect(decision).toContainText('Agent 暂不可用。拒绝和修改意见仍会保存');
+  await page.screenshot({ path: `.amp/in/artifacts/route-review-rejection-${info.project.name}.png`, animations: 'disabled' });
+  await decision.getByRole('button', { name: '返回选择', exact: true }).click();
+  await agent.getByRole('button', { name: '新建会话', exact: true }).click();
+  await expect(agent.getByRole('button', { name: '切换会话', exact: true })).toContainText('新会话');
+  await expect(decision).toBeVisible();
+  await expect(agent.getByLabel('向 Agent 提问', { exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(decision).toBeVisible();
+  const otherTab = await context.newPage();
+  await otherTab.goto(page.url());
+  await expect(otherTab.getByTestId('route-decision')).toBeVisible();
+  let release!: () => void, received!: () => void, heldOnce = false;
+  let releaseUnit!: () => void, receivedUnit!: () => void, heldUnitOnce = false;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const captured = new Promise<void>((resolve) => { received = resolve; });
+  const unitHeld = new Promise<void>((resolve) => { releaseUnit = resolve; });
+  const unitCaptured = new Promise<void>((resolve) => { receivedUnit = resolve; });
+  await page.route(`**/api/spaces/${data.spaceId}`, async (route) => {
+    if (!heldOnce) {
+      heldOnce = true; const response = await route.fetch(); received(); await held; await route.fulfill({ response });
+    } else await route.continue();
+  });
+  await page.route(`**/api/spaces/${data.spaceId}/units/${data.removedId}`, async (route) => {
+    if (!heldUnitOnce) {
+      heldUnitOnce = true; receivedUnit(); await unitHeld; await route.continue();
+    } else await route.continue();
+  });
+  try {
+    // Delay both an old workspace snapshot and a second refresh's unit read.
+    // Neither may restore review or surface a retired unit's 404 after apply.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await captured;
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await unitCaptured;
+    await decision.getByRole('button', { name: '确认调整路线', exact: true }).click();
+    await expect(preview).toHaveCount(0);
+    await expect(agent.getByLabel('向 Agent 提问', { exact: true })).toBeVisible();
+    await expect(page.getByRole('main').locator('[data-slot="card"]').filter({ hasText: '推荐从这里继续' })).toContainText('借用规则与引用');
+    const delivered = page.waitForResponse((response) => response.url().endsWith(`/api/spaces/${data.spaceId}`) && response.ok());
+    const retiredUnit = page.waitForResponse((response) => response.url().endsWith(`/units/${data.removedId}`) && response.status() === 404);
+    release(); releaseUnit(); await Promise.all([delivered, retiredUnit]);
+    await page.waitForTimeout(500);
+    await expect(preview).toHaveCount(0);
+    await expect(page.getByRole('alert').filter({ hasText: '单元不在当前学习路线中' })).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`unit=${data.learnedIds[1]}`));
+    await page.screenshot({ path: `.amp/in/artifacts/route-review-applied-${info.project.name}.png`, animations: 'disabled' });
+  } finally { release(); releaseUnit(); }
+  await otherTab.bringToFront();
+  await otherTab.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(otherTab.getByTestId('route-decision')).toHaveCount(0);
+  await expect(otherTab.locator('[data-slot="card-title"]').filter({ hasText: '单词计数器：输入与错误处理' })).toBeVisible();
+  const state = await page.evaluate(async (space) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token };
+    const workspace = await (await fetch(`/api/spaces/${space}`, { headers })).json() as Workspace;
+    const units = await Promise.all(workspace.route.content!.stages.flatMap((stage) => stage.units).map(async (unit) =>
+      (await fetch(`/api/spaces/${space}/units/${unit.id}`, { headers })).json() as Promise<UnitDetail>));
+    return { workspace, units };
+  }, data.spaceId);
+  expect(state.workspace.route.content).toEqual(data.after);
+  expect(state.workspace.tasks).toHaveLength(0);
+  const learnedIds = new Set<string>(data.learnedIds);
+  expect(state.units.filter((unit) => learnedIds.has(unit.id)).map((unit) => [unit.status, unit.records[0]?.valid, unit.lesson?.revision])).toEqual([['passed', true, 1], ['passed', true, 1]]);
+  expect(state.units.filter((unit) => !learnedIds.has(unit.id)).every((unit) => !unit.started && unit.lesson === null)).toBe(true);
+  await otherTab.close();
 });
 
 test('disk editing preserves local changes on failure, compares external content and survives fullscreen and refresh', async ({ page }, info) => {

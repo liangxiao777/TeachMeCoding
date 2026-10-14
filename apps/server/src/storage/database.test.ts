@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { createSessionSchema, routeContentSchema, saveRequirementSchema } from '@teach-me-coding/contracts';
 import { migrate, migrations, openDatabase } from './database.js';
+import { Learning } from '../modules/learning.js';
 
 test('schema enforces cross-space ownership and atomically rolls back incomplete routes', () => {
   const db = openDatabase(':memory:');
@@ -63,7 +64,7 @@ test('migration 11 preserves each frozen baseline and document pin while moving 
       db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(id, id, 31);
       db.prepare('INSERT INTO requirements VALUES (?,0,0,?,NULL)').run(id, JSON.stringify(value));
     }
-    migrate(db);
+    migrate(db, migrations.slice(0, 11));
     const read = (table: string, id: string, column: string) => JSON.parse((db.prepare(`SELECT ${column} AS value FROM ${table} WHERE ${table === 'requirements' || table === 'routes' ? 'space_id' : 'id'}=?`).get(id) as { value: string }).value);
     assert.equal(db.pragma('user_version', { simple: true }), 11);
     assert.deepEqual(read('requirements', space, 'value'), { rows: [
@@ -89,7 +90,63 @@ test('migration 11 preserves each frozen baseline and document pin while moving 
     assert.deepEqual(db.prepare('SELECT revision,confirmed FROM requirements WHERE space_id=?').get(space), { revision: 8, confirmed: 1 });
     assert.deepEqual(db.pragma('foreign_key_check'), []);
     const before = db.prepare('SELECT * FROM agent_runs').all();
-    migrate(db);
+    migrate(db, migrations.slice(0, 11));
     assert.deepEqual(db.prepare('SELECT * FROM agent_runs').all(), before);
+  } finally { db.close(); }
+});
+
+test('migration 12 preserves proposal history and applied routes, keeps only the latest matching pending per space, and enforces terminal states', () => {
+  const db = new Database(':memory:'); db.pragma('foreign_keys = ON');
+  migrate(db, migrations.slice(0, 11));
+  const spaces = [randomUUID(), randomUUID(), randomUUID()], sessions = spaces.map(() => randomUUID());
+  const content = JSON.stringify({ note: '  Historical rationale\r\n', stages: [{ id: randomUUID(), title: 'Stage',
+    units: [{ id: randomUUID(), title: 'Unit', summary: 'Exact history', goals: ['Original goal'] }] }] });
+  const intake = '{"researchRef":null}';
+  const insert = db.prepare('INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content,intake,state) VALUES (?,?,?,?,?,?,?,?)');
+  const add = (index: number, route: number, requirement: number | null, state = 'pending') => {
+    const id = randomUUID();
+    insert.run(spaces[index], id, sessions[index], route, requirement, content, intake, state);
+    return id;
+  };
+  try {
+    for (const [index, space] of spaces.entries()) {
+      db.prepare('INSERT INTO spaces VALUES (?,?,?)').run(space, `Legacy ${index}`, index);
+      db.prepare('INSERT INTO requirements VALUES (?,7,1,?,?)').run(space, '{"rows":[{"question":"Goal?","answer":"Learn"}]}', intake);
+      db.prepare('INSERT INTO routes VALUES (?,3,?,?)').run(space, content, intake);
+      db.prepare("INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,'route','Route')").run(space, sessions[index]);
+    }
+    const applied = add(0, 0, 1, 'applied');
+    const older = add(0, 3, 7), latest = add(0, 3, 7);
+    const staleRoute = add(0, 2, 7), staleRequirement = add(0, 3, 6), missingRequirement = add(0, 3, null);
+    const otherLatest = add(1, 3, 7);
+    const allStale = add(2, 0, 7);
+    const before = db.prepare('SELECT * FROM proposals ORDER BY rowid').all() as Record<string, unknown>[];
+    const routes = db.prepare('SELECT * FROM routes ORDER BY rowid').all();
+    assert.throws(() => migrate(db, [...migrations.slice(0, 11), `${migrations[11]}\nSELECT * FROM injected_missing_table;`]), /migration 12 failed/);
+    assert.equal(db.pragma('user_version', { simple: true }), 11);
+    assert.deepEqual(db.prepare('SELECT * FROM proposals ORDER BY rowid').all(), before, 'Failed rebuild must preserve all old rows and schema.');
+    migrate(db);
+    assert.equal(db.pragma('user_version', { simple: true }), 12);
+    assert.deepEqual(db.prepare('SELECT * FROM routes ORDER BY rowid').all(), routes);
+    const after = db.prepare('SELECT * FROM proposals ORDER BY rowid').all();
+    assert.deepEqual(after, before.map((row) => ({ ...row, state: row.id === applied ? 'applied'
+      : new Set<string>([latest, otherLatest]).has(row.id as string) ? 'pending' : 'superseded', run_id: null, feedback: '' })));
+    const learning = new Learning(db);
+    for (const id of [older, staleRoute, staleRequirement, missingRequirement, allStale]) {
+      const space = id === allStale ? spaces[2]! : spaces[0]!;
+      assert.throws(() => learning.applyProposal(space, id), /已经结束/);
+      assert.throws(() => learning.rejectProposal(space, id, {}), /已经结束/);
+    }
+    assert.equal(learning.space(spaces[0]!).proposals.find((proposal) => proposal.id === latest)!.state, 'pending');
+    assert.throws(() => add(0, 3, 7), /UNIQUE constraint/);
+    learning.rejectProposal(spaces[0]!, latest, { feedback: 'Saved after upgrade' });
+    learning.rejectProposal(spaces[0]!, latest, { feedback: 'Saved after upgrade' });
+    assert.throws(() => learning.applyProposal(spaces[0]!, latest), /已经结束/);
+    assert.doesNotThrow(() => add(0, 3, 7), 'Terminal decisions release the unique pending slot.');
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+    const stable = db.prepare('SELECT * FROM proposals ORDER BY rowid').all();
+    migrate(db);
+    assert.deepEqual(db.prepare('SELECT * FROM proposals ORDER BY rowid').all(), stable);
+    assert.equal(learning.space(spaces[0]!).proposals.find((proposal) => proposal.id === applied)!.state, 'applied');
   } finally { db.close(); }
 });

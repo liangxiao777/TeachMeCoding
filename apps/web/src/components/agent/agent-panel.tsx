@@ -26,6 +26,7 @@ import { PromptInput, PromptInputFooter, PromptInputHeader, PromptInputSubmit, P
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { RunContent } from './run-content'
 import { RunContext } from './run-context'
+import { RouteProposalDecision } from './route-proposal-decision'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,7 +41,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { findUnit, relativeTime, scopedSessions, sessionUnitId } from '@/app/selectors'
+import { findUnit, relativeTime, scopedSessions, sessionScope, sessionUnitId } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 import { uiMotion } from '@/lib/motion'
@@ -88,6 +89,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
   const { retryReply, applyRouteAction, bringToIde, capabilities, persistence } = useApp()
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
+  const awaitingDecision = persistence?.proposals.some((proposal) => proposal.state === 'pending')
 
   return (
     <ChatMessage from="assistant" className="max-w-full">
@@ -98,7 +100,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Square className="size-3" aria-hidden />
           已停止生成
-          <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent} onClick={() => retryReply(msg.id)}>
+          <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.id)}>
             重新生成
           </Button>
         </div>
@@ -108,7 +110,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
           <AlertCircle />
           <AlertTitle>回复失败，你的问题已保留</AlertTitle>
           <AlertAction>
-            <Button size="xs" variant="outline" disabled={!capabilities.agent} onClick={() => retryReply(msg.id)}>
+            <Button size="xs" variant="outline" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.id)}>
               <RotateCcw data-icon="inline-start" />
               重试
             </Button>
@@ -122,6 +124,15 @@ export function AgentMessage({ msg }: { msg: Message }) {
           <CardFooter><Button size="xs" variant="outline" disabled={persistence.busy || !c.valid && !c.adopted} onClick={() => persistence.decideConclusion(c.id, !c.adopted)}>
             {c.adopted ? '撤销采纳' : '采纳结论'}
           </Button></CardFooter>
+        </Card>
+      ))}
+      {persistence?.proposals.filter((proposal) => proposal.runId === msg.id).map((proposal) => (
+        <Card key={proposal.id} size="sm" data-testid="route-decision-history">
+          <CardHeader>
+            <CardTitle className="text-sm">路线提案 · {{ pending: '待确认', applied: '已接受', rejected: '已拒绝', superseded: '已失效' }[proposal.state]}</CardTitle>
+            <CardDescription className="whitespace-pre-wrap break-words">{proposal.content.note}</CardDescription>
+          </CardHeader>
+          {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">修改意见</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
         </Card>
       ))}
       {persistence?.actions.filter((p) => p.runId === msg.id).map((p) => (
@@ -218,13 +229,15 @@ export function SessionMenu() {
 
 function Composer() {
   const { session, setComposerText, setQuote, sendMessage, stopReply, capabilities, persistence } = useApp()
+  const space = useSpace()
   const ref = useRef<HTMLTextAreaElement>(null)
   const sendingRef = useRef(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const text = session?.composerText ?? ''
   const quote = session?.composerQuote
-  const replying = capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const replying = capabilities.agent && (!!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+    || sessionScope(space) === 'route' && !!persistence?.routeAdjustmentRun)
   const busy = replying || sending || !!persistence && (persistence.busy || !persistence.ready)
   const canSend = !busy && (text.trim() || quote)
 
@@ -280,6 +293,7 @@ function Composer() {
             className="min-h-16 leading-relaxed"
           />
           <PromptInputFooter>
+            {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">正在生成路线调整…</span>}
             <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
             <PromptInputSubmit className="ml-auto" status={replying ? 'streaming' : 'ready'} onStop={stopReply}
               disabled={!replying && !canSend} aria-label={replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
@@ -292,7 +306,8 @@ function Composer() {
 
 function EmptyChat() {
   const space = useSpace()
-  const { setComposerText, capabilities } = useApp()
+  const { setComposerText, capabilities, persistence } = useApp()
+  const awaitingDecision = persistence?.proposals.some((proposal) => proposal.state === 'pending')
   const unit = findUnit(space, sessionUnitId(space))
   const prompts =
     space.view === 'route'
@@ -306,9 +321,9 @@ function EmptyChat() {
         <EmptyMedia>
           <BrandMark className="size-9" />
         </EmptyMedia>
-        <EmptyTitle>有什么想问的？</EmptyTitle>
+        <EmptyTitle>{awaitingDecision ? '等待路线选择' : '有什么想问的？'}</EmptyTitle>
         <EmptyDescription className="text-left">
-          {!capabilities.agent
+          {awaitingDecision ? '这份路线提案属于整个学习空间，切换或新建会话不会取消它。请先在下方接受或拒绝。' : !capabilities.agent
             ? 'Agent 暂不可用。你仍可提交问题，但不会生成回复或调整路线。'
             : space.view === 'route'
             ? '告诉我你想怎样调整学习安排，我会结合你的目标和基础给出建议，确认后再更新路线。'
@@ -316,7 +331,7 @@ function EmptyChat() {
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent className="max-w-none items-stretch gap-1.5">
-        {prompts.map((p) => (
+        {!awaitingDecision && prompts.map((p) => (
           <Suggestion key={p} suggestion={p} className="h-auto justify-start whitespace-normal rounded-lg py-2 text-left font-normal" onClick={setComposerText}>
             <Sparkles data-icon="inline-start" className="text-primary" />
             {p}
@@ -330,6 +345,7 @@ function EmptyChat() {
 export function AgentPanel() {
   const space = useSpace()
   const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
+  const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
   const isPresent = useIsPresent()
   const reducedMotion = useReducedMotion()
 
@@ -351,7 +367,7 @@ export function AgentPanel() {
         <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label="新建会话">
           <Plus />
         </Button>
-        <Button variant="ghost" size="icon-sm" onClick={() => {
+        <Button variant="ghost" size="icon-sm" disabled={!!proposal} onClick={() => {
           document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]')?.focus({ preventScroll: true })
           toggleAgent(false)
         }} aria-label="收起 Agent">
@@ -406,7 +422,7 @@ export function AgentPanel() {
           <ConversationScrollButton aria-label="滚动到最新消息" />
         </Conversation>
       )}
-      <Composer />
+      {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : <Composer />}
     </motion.aside>
   )
 }

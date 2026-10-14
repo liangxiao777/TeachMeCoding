@@ -29,7 +29,7 @@ test('all six scenes retain their ordered business tools across independent Skil
     intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'],
     roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'],
     tutor: ['read', 'ls', 'find', 'grep', 'propose_file_change', 'propose_command', 'submit_learning_conclusion'],
-    lesson: ['read_learning_route', 'read_previous_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'],
+    lesson: ['read_learning_route', 'read_reference_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'],
   } as const;
   try {
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {

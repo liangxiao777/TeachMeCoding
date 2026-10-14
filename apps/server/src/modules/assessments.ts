@@ -38,7 +38,7 @@ export class Assessments {
       const v = l.db.prepare('SELECT content,rubric,sources FROM assessment_versions WHERE space_id=? AND unit_id=? AND revision=?').get(space, unit, input.specRevision) as { content: string; rubric: string | null; sources: string | null } | undefined;
       if (!v?.rubric || !v.sources) throw new BusinessError(422, '旧题目没有版本化评分标准，请重新生成题目。');
       const sources = JSON.parse(v.sources) as AssessmentSources;
-      l.checkBaseline(space, unit, sources);
+      l.checkLearningSources(space, unit, sources);
       const answers = { q1: input.q1, q2: input.q2 };
       if (!answers.q1.trim()) throw new BusinessError(422, '请先作答。');
       const previous = l.db.prepare(`SELECT MAX(attempt) AS n FROM (SELECT attempt FROM assessments WHERE space_id=? AND unit_id=? UNION ALL

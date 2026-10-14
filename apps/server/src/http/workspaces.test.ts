@@ -9,6 +9,7 @@ import { Learning } from '../modules/learning.js';
 import { Projects } from '../modules/projects.js';
 import { createApp } from './app.js';
 import { createLocalAccess } from './local-access.js';
+import { conceptIntake } from '../agents/test-support.js';
 
 test('all business reads and mutations use local protection, validation and idempotency', async () => {
   const db = openDatabase(':memory:'); const l = new Learning(db);
@@ -122,6 +123,35 @@ test('space rename and idempotent responses persist after reopening without repl
     assert.deepEqual(await (await app.request(`/api/spaces/${space.id}`, { headers })).json(), expected);
     assert.equal(db.prepare('SELECT * FROM requests').all().length, 2);
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('saving drafts cannot unlock an unstarted unit through its own learning activity', async () => {
+  const db = openDatabase(':memory:'); const l = new Learning(db);
+  const access = createLocalAccess({ port: 14333 }); const app = createApp(access, l);
+  const headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token, 'Content-Type': 'application/json' };
+  const post = (path: string, body: unknown) => app.request(`/api${path}`, {
+    method: 'POST', headers: { ...headers, 'Idempotency-Key': randomUUID() }, body: JSON.stringify(body),
+  });
+  try {
+    const space = l.create({ name: 'Sequential learning', goal: 'Learn' });
+    l.saveRequirement(space.id, { ...space.requirement, value: { rows: [{ question: 'Goal?', answer: 'Learn' }] }, intake: conceptIntake, confirmed: true });
+    const units = ['First', 'Locked'].map((title) => ({ id: randomUUID(), title, summary: 'Learn in order', goals: ['Explain the concept'] }));
+    l.applyProposal(space.id, l.proposeRoute(space.id, space.sessions.find((session) => session.scope === 'route')!.id,
+      { note: 'Learn in order', stages: [{ id: randomUUID(), title: 'Stage', units }] }).id);
+    const second = units[1]!.id;
+    const session = l.createSession(space.id, { scope: 'unit', unitId: second, title: 'Empty session' });
+    assert.equal(l.unit(space.id, second).started, false);
+    assert.equal((await post(`/spaces/${space.id}/sessions/${session.id}/draft`, { ...session.draft, text: 'Do not unlock myself' })).status, 422);
+    assert.equal((await post(`/spaces/${space.id}/units/${second}/draft`, { revision: 0, q1: 'Do not unlock myself', q2: '' })).status, 422);
+    assert.equal(l.unit(space.id, second).started, false);
+    assert.throws(() => l.assertUnitUnlocked(space.id, second), /尚未解锁/);
+    assert.equal(l.session(space.id, session.id).draft.revision, 0);
+    assert.equal(l.unit(space.id, second).draft.revision, 0);
+    l.saveLesson(space.id, units[0]!.id, { title: 'First lesson', content: 'Published predecessor' });
+    assert.equal((await post(`/spaces/${space.id}/sessions/${session.id}/draft`, { ...session.draft, text: 'Now accessible' })).status, 200);
+    assert.equal((await post(`/spaces/${space.id}/units/${second}/draft`, { revision: 0, q1: 'Now accessible', q2: '' })).status, 200);
+    assert.equal(l.unit(space.id, second).started, true);
+  } finally { db.close(); }
 });
 
 test('project HTTP operations enforce protection and do not store source in SQLite', async () => {

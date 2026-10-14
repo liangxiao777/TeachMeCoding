@@ -188,12 +188,10 @@ test('unit order crosses stage boundaries and advances only after successful les
     return response(reply([{ type: 'text', text: 'done' }], mode === 'error' ? 'error' : 'stop'));
   } });
   try {
-    for (const unit of units.slice(1)) {
+    assert.doesNotThrow(() => l.assertUnitUnlocked(space, units[3]!.id), 'Published later lessons remain accessible across earlier gaps.');
+    for (const unit of units.slice(1).filter((unit) => unit.id !== units[3]!.id)) {
       assert.throws(() => runtime.generate(space, unit.id, randomUUID(), { kind: 'lesson', revision: l.unit(space, unit.id).lesson?.revision ?? 0 }), /尚未解锁/);
     }
-    const session = l.createSession(space, { scope: 'unit', unitId: second, title: 'Locked tutor' });
-    assert.throws(() => runtime.submit(space, session.id, randomUUID(), { text: 'Skip ahead', quote: null, draftRevision: 0 }), /尚未解锁/);
-    assert.equal(l.session(space, session.id).messages.length, 0);
     for (mode of ['error', 'stop']) {
       const task = runtime.generate(space, first, randomUUID(), { kind: 'lesson', revision: 0 }); taskId = task.id;
       await runtime.idle(task.id);
@@ -215,12 +213,28 @@ test('unit order crosses stage boundaries and advances only after successful les
   } finally { await runtime.close(); db.close(); }
 });
 
-test('lesson tools expose the full route but only complete, fixed-version preceding lessons', async () => {
+test('submitting to an empty locked tutor session cannot make its own input count as prior learning activity', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning), unit = units[1]!.id;
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => response(reply([])) });
+  try {
+    const session = learning.createSession(space.id, { scope: 'unit', unitId: unit, title: 'Locked tutor' });
+    assert.equal(learning.unit(space.id, unit).started, false);
+    assert.throws(() => learning.assertUnitUnlocked(space.id, unit), /尚未解锁/);
+    const before = learning.space(space.id);
+    assert.throws(() => runtime.submit(space.id, session.id, randomUUID(), { text: 'Skip ahead', quote: null, draftRevision: 0 }), /尚未解锁/);
+    assert.deepEqual(learning.session(space.id, session.id), session);
+    assert.deepEqual(learning.space(space.id), before);
+    assert.equal(learning.unit(space.id, unit).started, false);
+  } finally { await runtime.close(); db.close(); }
+});
+
+test('lesson tools expose plan order and real progress, and read complete fixed-version references before or after the current unit', async () => {
   const db = openDatabase(':memory:'), l = new Learning(db), a = populated(l), b = populated(l, 'Other space');
   const current = { id: randomUUID(), title: 'Current', summary: 'CURRENT-PLAN', goals: ['Goal'] };
   const future = { id: randomUUID(), title: 'Future', summary: 'FUTURE-PLAN', goals: ['Later goal'] };
+  const unpublished = { id: randomUUID(), title: 'Unpublished', summary: 'UNPUBLISHED-PLAN', goals: [] };
   const proposal = l.proposeRoute(a.space.id, a.routeSession, { note: 'Complete roadmap', stages: [
-    { id: randomUUID(), title: 'Earlier', units: a.units }, { id: randomUUID(), title: 'Later', units: [current, future] },
+    { id: randomUUID(), title: 'Earlier', units: a.units }, { id: randomUUID(), title: 'Later', units: [current, future, unpublished] },
   ] });
   l.applyProposal(a.space.id, proposal.id);
   const legacy = { title: 'Legacy', content: 'LEGACY-CONTENT', intro: 'LEGACY-INTRO', blocks: [
@@ -250,27 +264,34 @@ test('lesson tools expose the full route but only complete, fixed-version preced
     if (requests === 2) {
       const route = JSON.parse(textOf(last.content));
       assert.equal(route.currentUnitId, current.id); assert.equal(route.note, 'Complete roadmap');
-      assert.deepEqual(route.stages.flatMap((s: { units: { unitId: string }[] }) => s.units.map((u) => u.unitId)), [...a.units.map((u) => u.id), current.id, future.id]);
+      assert.deepEqual(route.stages.flatMap((s: { units: { unitId: string }[] }) => s.units.map((u) => u.unitId)), [...a.units.map((u) => u.id), current.id, future.id, unpublished.id]);
       assert.equal(route.stages[1].units[1].summary, 'FUTURE-PLAN'); assert.equal(route.stages[1].units[1].hasLesson, true);
-      return response(reply([current.id, future.id, b.units[0]!.id, randomUUID()].map((unitId, index) => ({
-        type: 'toolCall', id: `forbidden-${index}`, name: 'read_previous_lesson', arguments: { unitId },
+      assert.equal(route.stages[1].units[1].started, true); assert.equal(route.stages[1].units[1].status, 'learning');
+      assert.equal(route.stages[1].units[2].hasLesson, false); assert.equal(route.stages[1].units[2].started, false);
+      return response(reply([current.id, unpublished.id, b.units[0]!.id, randomUUID()].map((unitId, index) => ({
+        type: 'toolCall', id: `forbidden-${index}`, name: 'read_reference_lesson', arguments: { unitId },
       })), 'toolUse'));
     }
     if (requests === 3) {
       const forbidden = context.messages.filter((m) => m.role === 'toolResult' && m.toolCallId.startsWith('forbidden-'));
       assert.equal(forbidden.length, 4); assert.ok(forbidden.every((m) => m.role === 'toolResult' && m.isError));
       assert.doesNotMatch(JSON.stringify(forbidden), /CURRENT-BODY|FUTURE-BODY|OTHER-SPACE-BODY/);
-      return call('read_previous_lesson', { unitId: a.units[0]!.id });
+      assert.ok(forbidden.every((m) => /不在本次可读取的参考课件/.test(JSON.stringify(m.content))));
+      return call('read_reference_lesson', { unitId: future.id });
     }
     if (requests === 4) {
+      assert.equal(last.isError, false); assert.equal(textOf(last.content), '课件：Future lesson\n\nFUTURE-BODY');
+      return call('read_reference_lesson', { unitId: a.units[0]!.id });
+    }
+    if (requests === 5) {
       assert.equal(last.isError, false);
       for (const required of ['Legacy', 'LEGACY-CONTENT', 'LEGACY-INTRO', 'Legacy heading', 'Legacy paragraph',
         '## Legacy Markdown\n\nKeep raw Markdown.', 'First list item', 'Second list item', 'Legacy tip', 'Legacy caution',
         'sample.ts', '  const fence = "```";\n', 'Legacy code caption', 'Legacy exercise', 'Explain the boundary.']) assert.ok(textOf(last.content).includes(required), required);
       l.saveLesson(a.space.id, a.units[1]!.id, { title: 'Newer lesson', content: 'LATEST-BODY-MUST-NOT-LEAK' });
-      return call('read_previous_lesson', { unitId: a.units[1]!.id });
+      return call('read_reference_lesson', { unitId: a.units[1]!.id });
     }
-    if (requests === 5) {
+    if (requests === 6) {
       assert.equal(last.isError, false); assert.equal(textOf(last.content), `课件：Long Markdown\n\n${markdown.content}`);
       return call('submit_lesson', { title: 'Continuation', content: 'New lesson based on fixed earlier material.' });
     }
@@ -279,28 +300,71 @@ test('lesson tools expose the full route but only complete, fixed-version preced
   try {
     const task = runtime.generate(a.space.id, current.id, randomUUID(), { kind: 'lesson', revision: 1 });
     await runtime.idle(task.id);
-    assert.equal(requests, 6); assert.equal(runtime.get(a.space.id, task.id).state, 'failed');
-    assert.match(runtime.get(a.space.id, task.id).error!, /前序课件已改变/);
+    assert.equal(requests, 7); assert.equal(runtime.get(a.space.id, task.id).state, 'failed');
+    assert.match(runtime.get(a.space.id, task.id).error!, /参考课件已改变/);
     assert.equal(l.unit(a.space.id, current.id).lesson!.content, 'CURRENT-BODY');
     const manifest = JSON.parse((db.prepare('SELECT value FROM task_manifests WHERE run_id=? ORDER BY request DESC LIMIT 1').get(task.id) as { value: string }).value);
-    assert.ok(manifest.toolSources.flatMap((tool: { sources: unknown[] }) => tool.sources).some((s: { kind: string; id: string; revision: number }) => s.kind === 'previous-lesson' && s.id === a.units[1]!.id && s.revision === 1));
+    const sources = manifest.toolSources.flatMap((tool: { sources: unknown[] }) => tool.sources);
+    for (const unitId of [future.id, ...a.units.map((unit) => unit.id)]) assert.ok(sources.some((s: { kind: string; id: string; revision: number }) => s.kind === 'reference-lesson' && s.id === unitId && s.revision === 1));
     assert.doesNotMatch(JSON.stringify(db.prepare('SELECT value FROM task_messages WHERE run_id=?').all(task.id)), /MARKDOWN-START|LEGACY-INTRO/);
     assert.deepEqual(JSON.parse((db.prepare('SELECT content FROM lesson_versions WHERE space_id=? AND unit_id=? AND revision=1').get(a.space.id, a.units[0]!.id) as { content: string }).content), legacy);
   } finally { await runtime.close(); db.close(); }
 });
 
+test('lesson publication depends only on references actually read, not other published lessons that changed during generation', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db), { space, units, routeSession } = populated(learning);
+  const current = { id: randomUUID(), title: 'Supplement', summary: 'Insert before an already published unit', goals: [] };
+  for (const unit of units) learning.saveLesson(space.id, unit.id, { title: unit.title, content: `Original-${unit.id}` });
+  const route = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [units[0]!, current, units[1]!] }] };
+  learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, route).id);
+  const lesson = { title: 'Supplement lesson', content: 'Derived only from the reference actually read.' };
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
+    const last = context.messages.at(-1);
+    if (last?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'reference', name: 'read_reference_lesson', arguments: { unitId: units[0]!.id } }], 'toolUse'));
+    if (last.toolName === 'read_reference_lesson') {
+      assert.equal(last.isError, false); assert.match(JSON.stringify(last.content), new RegExp(`Original-${units[0]!.id}`));
+      learning.saveLesson(space.id, units[1]!.id, { title: 'Updated unread lesson', content: 'UNREAD-CHANGED-BODY' });
+      return response(reply([{ type: 'toolCall', id: 'submit', name: 'submit_lesson', arguments: lesson }], 'toolUse'));
+    }
+    return response(reply([]));
+  } });
+  try {
+    const task = runtime.generate(space.id, current.id, randomUUID(), { kind: 'lesson', revision: 0 });
+    await runtime.idle(task.id); assert.equal(runtime.get(space.id, task.id).state, 'succeeded');
+    assert.deepEqual(learning.unit(space.id, current.id).lesson, { ...lesson, revision: 1 });
+    assert.equal(learning.unit(space.id, units[1]!.id).lesson!.revision, 2);
+  } finally { await runtime.close(); db.close(); }
+});
+
 test('lesson retries reject changed baselines, missing snapshots and unavailable fixed history before creating a task', async () => {
-  for (const change of ['none', 'previous', 'current', 'route', 'requirement', 'snapshot', 'history', 'locked'] as const) {
+  for (const change of ['none', 'reference', 'unread', 'unread-history', 'current', 'route', 'requirement', 'snapshot', 'history', 'locked'] as const) {
     const db = openDatabase(':memory:'), l = new Learning(db), { space, units, routeSession } = populated(l);
     l.saveLesson(space.id, units[0]!.id, { title: 'Earlier', content: 'Original material' });
+    const unread = { id: randomUUID(), title: 'Unread reference', summary: '', goals: [] };
+    if (change === 'unread' || change === 'unread-history') {
+      const route = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [...units, unread] }] };
+      l.applyProposal(space.id, l.proposeRoute(space.id, routeSession, route).id);
+      l.saveLesson(space.id, unread.id, { title: 'Unread', content: 'Other published material' });
+    }
     let fail = true;
-    const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => fail ? response(reply([], 'error'))
-      : context.messages.at(-1)?.role !== 'toolResult' ? response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments: { title: 'Lesson', content: 'No mandatory read-count gate.' } }], 'toolUse'))
-        : response(reply([{ type: 'text', text: 'done' }])) });
+    const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
+      if (fail) {
+        if (context.messages.at(-1)?.role !== 'toolResult') {
+          return response(reply([{ type: 'toolCall', id: 'reference', name: 'read_reference_lesson', arguments: { unitId: units[0]!.id } }], 'toolUse'));
+        }
+        const last = context.messages.at(-1);
+        assert.ok(last?.role === 'toolResult' && !last.isError);
+        assert.match(JSON.stringify(last.content), /Original material/);
+        return response(reply([], 'error'));
+      }
+      return context.messages.at(-1)?.role !== 'toolResult' ? response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments: { title: 'Lesson', content: 'No mandatory read-count gate.' } }], 'toolUse'))
+        : response(reply([{ type: 'text', text: 'done' }]));
+    } });
     try {
       const task = runtime.generate(space.id, units[1]!.id, randomUUID(), { kind: 'lesson', revision: 0 });
       await runtime.idle(task.id); assert.equal(runtime.get(space.id, task.id).state, 'failed'); fail = false;
-      if (change === 'previous' || change === 'current') l.saveLesson(space.id, units[change === 'previous' ? 0 : 1]!.id, { title: 'Replacement', content: 'Changed material' });
+      if (change === 'reference' || change === 'current') l.saveLesson(space.id, units[change === 'current' ? 1 : 0]!.id, { title: 'Replacement', content: 'Changed material' });
+      if (change === 'unread') l.saveLesson(space.id, unread.id, { title: 'Unread replacement', content: 'Changed unread material' });
       if (change === 'requirement') l.saveRequirement(space.id, { ...l.space(space.id).requirement, value: { rows: [{ question: 'Goal?', answer: 'Changed goal' }] } });
       if (change === 'route' || change === 'locked') {
         const content = structuredClone(l.space(space.id).route.content!);
@@ -313,15 +377,15 @@ test('lesson retries reject changed baselines, missing snapshots and unavailable
         const old = JSON.parse(row.input); delete old.lessonRefs;
         db.prepare('UPDATE task_runs SET input=? WHERE id=?').run(JSON.stringify(old), task.id);
       }
-      if (change === 'history') db.prepare('DELETE FROM lesson_versions WHERE space_id=? AND unit_id=?').run(space.id, units[0]!.id);
+      if (change === 'history' || change === 'unread-history') db.prepare('DELETE FROM lesson_versions WHERE space_id=? AND unit_id=?').run(space.id, change === 'history' ? units[0]!.id : unread.id);
       const count = l.space(space.id).tasks.length;
-      if (change === 'none') {
+      if (change === 'none' || change === 'unread' || change === 'unread-history') {
         const key = randomUUID(), retry = runtime.retryTask(space.id, task.id, key);
         assert.equal(runtime.retryTask(space.id, task.id, key).id, retry.id);
         await runtime.idle(retry.id); assert.equal(runtime.get(space.id, retry.id).state, 'succeeded');
         assert.equal(l.unit(space.id, units[1]!.id).lesson!.content, 'No mandatory read-count gate.');
       } else {
-        assert.throws(() => runtime.retryTask(space.id, task.id, randomUUID()), change === 'locked' ? /尚未解锁/ : change === 'snapshot' ? /没有固定的前序资料/ : change === 'history' ? /不会改用最新版/ : change === 'previous' ? /前序课件已改变/ : /内容已改变/);
+        assert.throws(() => runtime.retryTask(space.id, task.id, randomUUID()), change === 'locked' ? /尚未解锁/ : change === 'snapshot' ? /没有固定参考资料/ : change === 'history' ? /不会改用最新版/ : change === 'reference' ? /参考课件已改变/ : /内容已改变/);
         assert.equal(l.space(space.id).tasks.length, count, change);
         if (change !== 'locked' && change !== 'history') {
           const fresh = runtime.generate(space.id, units[1]!.id, randomUUID(), { kind: 'lesson', revision: l.unit(space.id, units[1]!.id).lesson?.revision ?? 0 });
@@ -352,6 +416,15 @@ test('only same-space adopted valid conclusions enter new sessions; revoke and s
     const c = l.conclusions(a.space.id)[0]!;
     l.decideConclusion(a.space.id, c.id, { revision: 0, adopted: true });
     await ask(a.space.id, a.units[1]!.id, 'next'); assert.match(saw, /ADOPTED-ARGUMENT-FACT/); assert.ok(!saw.includes('private-chat-marker'));
+    const beforeInsertion = l.conclusions(a.space.id);
+    const routeSession = a.space.sessions.find((session) => session.scope === 'route')!.id;
+    const supplement = { id: randomUUID(), title: 'Inserted prerequisite', summary: '', goals: [] };
+    const route = { ...a.space.route.content!, stages: [{ ...a.space.route.content!.stages[0]!, units: [supplement, ...a.units] }] };
+    l.applyProposal(a.space.id, l.proposeRoute(a.space.id, routeSession, route).id);
+    assert.deepEqual(l.conclusions(a.space.id), beforeInsertion, 'An unrelated route revision must not invalidate adopted conclusions.');
+    assert.doesNotThrow(() => l.assertUnitUnlocked(a.space.id, a.units[0]!.id));
+    assert.doesNotThrow(() => l.assertUnitUnlocked(a.space.id, a.units[1]!.id));
+    await ask(a.space.id, a.units[1]!.id, 'after insertion'); assert.match(saw, /ADOPTED-ARGUMENT-FACT/); assert.ok(!saw.includes('private-chat-marker'));
     await ask(b.space.id, b.units[0]!.id, 'next'); assert.ok(!saw.includes('ADOPTED-ARGUMENT-FACT'));
     assert.throws(() => l.decideConclusion(b.space.id, c.id, { revision: 1, adopted: false }), /不存在/);
     l.decideConclusion(a.space.id, c.id, { revision: 1, adopted: false });

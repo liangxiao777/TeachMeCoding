@@ -7,7 +7,7 @@ import { createRouteTools } from './route-tools.js';
 import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { TeachingRuntime } from './runtime.js';
-import { conceptIntake, reply, response, routeReply, syntheticSource } from './test-support.js';
+import { conceptIntake, populated, reply, response, routeReply, syntheticSource } from './test-support.js';
 
 function caller(draft: ReturnType<typeof createRouteTools>) {
   return async (name: string, args: ToolCall['arguments']) => {
@@ -72,23 +72,56 @@ test('route adjustment tools generate IDs, preserve order, reject incomplete dra
   assert.deepEqual(draft.proposal()!.stages[2]!.units.map((u) => u.title), ['B', 'A revised']);
 });
 
-test('adjustments preserve existing IDs, cannot delete published units, and can undo draft additions', async () => {
-  const stageId = randomUUID(), unitId = randomUUID();
-  const current = { note: 'original', stages: [{ id: stageId, title: 'Keep', units: [{ id: unitId, title: 'Existing', summary: 'Summary', goals: ['Goal'] }] }] };
-  const draft = createRouteTools(current), call = caller(draft);
-  await assert.rejects(call('remove_route_unit', { unitId }), /cannot be removed/);
-  await assert.rejects(call('remove_route_stage', { stageId }), /units/);
-  const added = await call('add_route_stage', { title: 'New' });
-  const extra = await call('add_route_unit', { stageId: added.stageId, title: 'Mistake' });
-  await call('submit_route_proposal', {});
-  assert.deepEqual(draft.proposal()!.stages[1]!.units[0], { id: extra.unitId, title: 'Mistake', summary: '', goals: [] });
-  await call('remove_route_unit', { unitId: extra.unitId });
-  await call('update_route_unit', { unitId, stageId: added.stageId, goals: ['Revised goal'] });
-  await call('remove_route_stage', { stageId });
-  await call('submit_route_proposal', { note: 'Moved, not recreated' });
-  assert.deepEqual(draft.proposal(), { note: 'Moved, not recreated', stages: [{ id: added.stageId, title: 'New',
-    units: [{ id: unitId, title: 'Existing', summary: 'Summary', goals: ['Revised goal'] }] }] });
-  assert.equal(current.stages[0]!.units[0]!.goals[0], 'Goal');
+test('adjustments protect real published and active units, retain goals, and allow corrections, moves and undoing additions', async () => {
+  for (const activity of ['published', 'active'] as const) {
+    const db = openDatabase(':memory:'), learning = new Learning(db), { space, units, routeSession } = populated(learning);
+    const current = space.route.content!, stageId = current.stages[0]!.id, unitId = units[0]!.id;
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => response(reply([], 'error')) });
+    try {
+      if (activity === 'published') learning.saveLesson(space.id, unitId, { title: 'Existing', content: 'Published material' });
+      else runtime.generate(space.id, unitId, randomUUID(), { kind: 'lesson', revision: 0 });
+      const progress = learning.progress(space.id);
+      assert.equal(progress.find((unit) => unit.id === unitId)![activity === 'published' ? 'started' : 'active'], true);
+      const draft = createRouteTools(current, progress), call = caller(draft);
+      await assert.rejects(call('remove_route_unit', { unitId }), /cannot be removed/);
+      await assert.rejects(call('remove_route_stage', { stageId }), /units/);
+      await assert.rejects(call('update_route_unit', { unitId, title: 'MUST NOT MUTATE', goals: ['Revised goal'] }), /retain their goals/);
+      const added = await call('add_route_stage', { title: 'New' });
+      const extra = await call('add_route_unit', { stageId: added.stageId, title: 'Mistake' });
+      await call('submit_route_proposal', {});
+      assert.deepEqual(draft.proposal()!.stages[1]!.units[0], { id: extra.unitId, title: 'Mistake', summary: '', goals: [] });
+      assert.equal(draft.proposal()!.stages[0]!.units[0]!.title, units[0]!.title);
+      await call('remove_route_unit', { unitId: extra.unitId });
+      await call('remove_route_unit', { unitId: units[1]!.id });
+      await call('update_route_unit', { unitId, stageId: added.stageId, title: 'Corrected title', summary: 'Corrected summary', goals: units[0]!.goals });
+      await call('remove_route_stage', { stageId });
+      await call('submit_route_proposal', { note: 'Moved, not recreated' });
+      const proposed = draft.proposal()!;
+      assert.deepEqual(proposed, { note: 'Moved, not recreated', stages: [{ id: added.stageId, title: 'New',
+        units: [{ ...units[0]!, title: 'Corrected title', summary: 'Corrected summary' }] }] });
+      learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, proposed).id);
+      assert.deepEqual(learning.space(space.id).route.content, proposed);
+      assert.deepEqual(current.stages[0]!.units, units);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('unstarted applied units with empty sessions and drafts can be retargeted or removed', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db), { space, units, routeSession } = populated(learning);
+  try {
+    learning.createSession(space.id, { scope: 'unit', unitId: units[1]!.id, title: 'Empty' });
+    learning.saveAssessmentDraft(space.id, units[1]!.id, { revision: 0, q1: '', q2: '' });
+    assert.equal(learning.unit(space.id, units[1]!.id).started, false);
+    const draft = createRouteTools(space.route.content!, learning.progress(space.id)), call = caller(draft);
+    await call('update_route_unit', { unitId: units[1]!.id, goals: ['New objective'] });
+    await call('submit_route_proposal', {});
+    assert.deepEqual(draft.proposal()!.stages[0]!.units[1]!.goals, ['New objective']);
+    await call('remove_route_unit', { unitId: units[1]!.id });
+    await call('submit_route_proposal', {});
+    learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, draft.proposal()).id);
+    assert.deepEqual(learning.space(space.id).route.content!.stages[0]!.units, [units[0]!]);
+    assert.throws(() => learning.unit(space.id, units[1]!.id), /当前学习路线/);
+  } finally { db.close(); }
 });
 
 test('unchanged updates preserve submissions and omitted fields, while actual goal changes still require resubmission', async () => {

@@ -760,8 +760,10 @@ test('each request records the same run tool inventory while provider selection 
       assert.equal(typeof manifest.extensions.skills, 'string');
       assert.doesNotMatch(JSON.stringify(manifest), /PRIVATE-|replacement/);
     }
+    // The request that issued a read retains its consumed-source receipt too,
+    // even if the next request never happens (for example, on failure or stop).
     assert.deepEqual(manifests.map((manifest) => manifest.toolSources.map((s: { callId: string }) => s.callId)),
-      [[], ['fixed-mcp'], ['fixed-mcp', 'fixed-search']]);
+      [['fixed-mcp'], ['fixed-mcp', 'fixed-search'], ['fixed-mcp', 'fixed-search']]);
     assert.doesNotMatch(JSON.stringify(db.prepare('SELECT value FROM agent_messages').all()), /PRIVATE-MCP-BODY|PRIVATE-SEARCH-BODY|PRIVATE-SKILL-BODY/);
   } finally { await Promise.all([runtime.close(), mcp.close(), skills.close()]); search.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });

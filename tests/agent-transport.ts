@@ -144,8 +144,8 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     const units = route.stages.flatMap((stage) => stage.units), index = units.findIndex((unit) => unit.unitId === route.currentUnitId);
     if (index < 0) throw new Error('Current unit missing from full route');
     const previous = units.slice(0, index).findLast((unit) => unit.hasLesson);
-    const previousResult = context.messages.find((m) => m.role === 'toolResult' && m.toolName === 'read_previous_lesson');
-    if (previous && !previousResult) return call('read_previous_lesson', { unitId: previous.unitId });
+    const previousResult = context.messages.find((m) => m.role === 'toolResult' && m.toolName === 'read_reference_lesson');
+    if (previous && !previousResult) return call('read_reference_lesson', { unitId: previous.unitId });
     if (previousResult?.role === 'toolResult' && previousResult.isError) throw new Error('Expected a readable previous lesson');
     return call('submit_lesson', {
       title: units[index]!.title, content: [
@@ -230,6 +230,26 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
         })();
         return stream;
       }
+    }
+    if (adjustment && (text.includes('补充提案 A') || text.includes('从原路线细化'))) {
+      const turn = context.messages.slice(context.messages.findLastIndex((message) => message.role === 'user') + 1);
+      const calls = turn.flatMap((message) => message.role === 'assistant' ? message.content.filter((part) => part.type === 'toolCall') : []);
+      if (turn.some((message) => message.role === 'toolResult' && message.isError)) throw new Error('Route review fixture tool failed');
+      const source = context.messages.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string'
+        ? message.content : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('')).find((text) => text.startsWith('<context'));
+      const encoded = source?.match(/<source kind="route"[^>]*>(.*?)<\/source>/s)?.[1];
+      if (!encoded) throw new Error('Review needs the applied route');
+      const route = JSON.parse(encoded.replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&')) as {
+        content: { stages: { id: string; units: { id: string; title: string }[] }[] };
+      };
+      const revised = text.includes('从原路线细化');
+      if (!calls.length) return response(reply([{ type: 'toolCall', id: 'review-edit', name: revised ? 'update_route_unit' : 'add_route_unit',
+        arguments: revised ? { unitId: route.content.stages[0]!.units[0]!.id, title: '参数输入与边界检查', summary: '分步读取参数，比较空输入与多个参数的处理。' }
+          : { stageId: route.content.stages[0]!.id, title: '未接受的补充 A', summary: '仅在提案 A 中存在', goals: ['解释补充边界'], position: 1 },
+      }], 'toolUse'));
+      if (calls.length === 1) return response(reply([{ type: 'toolCall', id: 'review-submit', name: 'submit_route_proposal',
+        arguments: { note: revised ? '从原路线细化输入边界，不沿用被拒绝的新增单元。' : '提案 A：增加一个补充单元。' },
+      }], 'toolUse'));
     }
     const next = routeReply(context.messages, { note: adjustment ? '调整后增加边界练习' : '从 Python 经验过渡到命令行工具', stages: [{ title: '工具基础', units: [
       { title: '参数与输入', summary: '学习读取命令行参数', goals: ['能解释参数来源'] },
