@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
 import { type AssistantMessage, type RetryPolicy } from '@earendil-works/pi-ai';
 import { AgentSession, convertToLlm, createExtensionRuntime, SettingsManager, type CompactionSettings, type ResourceLoader } from '@earendil-works/pi-coding-agent';
-import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
 import { compileRequest, hash, retainedMessage, xmlText, type FrozenContext } from './context.js';
@@ -105,6 +105,7 @@ export class TeachingRuntime {
       lesson: s.unitId ? this.learning.unit(space, s.unitId).lesson : null, references,
       progress: s.scope === 'intake' ? undefined : this.learning.progress(space),
       rejectedProposal: s.scope === 'route' ? w.proposals.findLast((proposal) => proposal.state === 'rejected') : undefined,
+      rejectedLessonProposal: s.unitId ? w.lessonProposals.findLast((p) => p.unitId === s.unitId && p.state === 'rejected') : undefined,
       conclusions: s.scope === 'intake' ? [] : w.conclusions.filter((c) => c.adopted && c.valid),
       evidence: s.scope === 'intake' ? [] : this.evidence(space),
       publicAssessment: s.unitId ? this.learning.unit(space, s.unitId).assessment : null,
@@ -120,6 +121,7 @@ export class TeachingRuntime {
     const input = generationInputSchema.parse(raw);
     if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
     const id = this.learning.once(key, `task:${space}:${unit}`, input, () => {
+      this.learning.assertAgentInputAllowed(space);
       const w = this.learning.space(space), u = this.learning.unit(space, unit);
       this.learning.assertUnitUnlocked(space, unit);
       const revision = input.kind === 'lesson' ? u.lesson?.revision ?? 0 : input.kind === 'assessment' ? u.assessment?.revision ?? 0 : u.draft.revision;
@@ -136,7 +138,8 @@ export class TeachingRuntime {
         progress: input.kind === 'evaluation' ? undefined : this.learning.progress(space),
         research: w.route.intake?.researchRef ? this.learning.intake.research(space, w.route.intake.researchRef) : null,
         assessmentRevision: u.assessment?.revision ?? 0,
-        ...(input.kind === 'lesson' ? { lessonRefs: this.learning.lessonReferences(space) } : {}),
+        ...(input.kind === 'lesson' ? { lessonRefs: this.learning.lessonReferences(space),
+          rejectedLessonProposal: w.lessonProposals.findLast((p) => p.unitId === unit && p.state === 'rejected') } : {}),
         ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
       if (input.kind === 'evaluation' && input.execute) {
         if (!this.executions) throw new BusinessError(503, '本机执行不可用。');
@@ -157,6 +160,7 @@ export class TeachingRuntime {
     if (previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的独立任务。');
     if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
     const id = this.learning.once(key, `retry-task:${space}:${previousId}`, null, () => {
+      this.learning.assertAgentInputAllowed(space);
       this.learning.assertUnitUnlocked(space, previous.unitId!);
       if (this.learning.db.prepare("SELECT 1 FROM tasks WHERE space_id=? AND unit_id=? AND kind=? AND state IN ('pending','running')").get(space, previous.unitId, previous.kind)) throw new BusinessError(409, '当前单元已有相同任务。');
       const old = this.learning.db.prepare('SELECT input FROM task_runs WHERE space_id=? AND id=?').get(space, previousId) as { input: string };
@@ -210,6 +214,33 @@ export class TeachingRuntime {
   }
   submit(space: string, session: string, key: string, raw: unknown): RunSubmission {
     return this.begin(space, session, key, raw);
+  }
+  rejectLessonProposal(space: string, proposalId: string, key: string, raw: unknown): ProposalRejection {
+    const input = rejectLessonProposalSchema.parse(raw);
+    const receipt = this.learning.once(key, `reject-lesson-proposal:${space}:${proposalId}`, input, () => {
+      const proposal = this.learning.space(space).lessonProposals.find((p) => p.id === proposalId);
+      if (!proposal) throw new BusinessError(404, '课件提案不存在。');
+      const unfinished = proposal.state === 'pending';
+      this.learning.rejectLessonProposal(space, proposalId, input);
+      let runId: string | null = null, followupError: string | null = null;
+      if (unfinished && input.feedback) {
+        const message = { text: input.feedback, quote: null, draftRevision: this.learning.session(space, proposal.sessionId).draft.revision };
+        try {
+          // A failed start rolls back only the follow-up, never the decision or opinion.
+          runId = this.learning.db.transaction(() => {
+            if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用，请恢复后再要求调整课件。');
+            return this.recordRun(space, proposal.sessionId, message, undefined, true);
+          })();
+        } catch (error) {
+          this.learning.addMessage(space, proposal.sessionId, message, false);
+          followupError = `已拒绝提案并保存修改意见；${error instanceof BusinessError ? error.message : '无法启动后续辅导，请稍后重试。'}`;
+        }
+      }
+      return { sessionId: proposal.sessionId, runId, followupError };
+    });
+    if (receipt.runId) this.launch(space, receipt.runId, input.feedback);
+    return { workspace: this.learning.space(space), session: this.learning.session(space, receipt.sessionId),
+      run: receipt.runId ? this.get(space, receipt.runId) : null, followupError: receipt.followupError };
   }
   rejectProposal(space: string, proposalId: string, key: string, raw: unknown): ProposalRejection {
     const input = rejectRouteProposalSchema.parse(raw);
@@ -375,7 +406,7 @@ export class TeachingRuntime {
         this.learning.db.prepare('UPDATE task_runs SET input=? WHERE space_id=? AND id=?').run(JSON.stringify(frozen), space, id);
         if (!active(this.get(space, id))) return;
       }
-      const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen));
+      const scenario = this.options.scenario?.(frozen) ?? (frozen.sessionId ? createScenario(this.learning, frozen, id, this.options.projectDirectory?.(space), this.actions) : createTask(this.learning, frozen, id));
       const skills = this.options.skills?.snapshot(text);
       const prepared = await prepareTools({ scenarioTools: scenario.tools,
         cwd: () => this.options.projectDirectory?.(space) ?? process.cwd(), hasSkills: !!skills?.skills.length,

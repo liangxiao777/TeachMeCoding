@@ -1,6 +1,6 @@
 import { Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { idSchema, type Lesson } from '@teach-me-coding/contracts';
+import { idSchema, lessonChangeSchema, lessonMarkdown } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import { hash, type FrozenContext } from './context.js';
 
@@ -12,22 +12,30 @@ function referenceLessons(input: FrozenContext) {
   return input.lessonRefs.filter((ref) => available.has(ref.unitId));
 }
 
-// Read compatibility only: preserve every stored text/code field and never
-// rewrite historical lessons or ask another model to summarize their contents.
-function lessonMarkdown(lesson: Lesson) {
-  const blocks = lesson.blocks?.map((block) => {
-    switch (block.type) {
-      case 'h2': return /^\s*#{1,6}\s/.test(block.text) ? block.text : `## ${block.text}`;
-      case 'p': case 'markdown': return block.text;
-      case 'list': case 'practice': return block.items.map((item) => `- ${item}`).join('\n');
-      case 'callout': return `### ${block.title}\n\n${block.text}`;
-      case 'code': {
-        const fence = '`'.repeat(Math.max(3, ...(block.code.match(/`+/g) ?? []).map((match) => match.length + 1)));
-        return `${fence}${block.language} file=${JSON.stringify(block.file)}\n${block.code}${block.code.endsWith('\n') ? '' : '\n'}${fence}${block.caption === undefined ? '' : `\n\n${block.caption}`}`;
-      }
-    }
-  }) ?? [];
-  return [lesson.content, lesson.intro, ...blocks].filter((part) => part !== undefined && part !== '').join('\n\n');
+export function createLessonChangeTools(input: FrozenContext) {
+  const lesson = input.lesson!;
+  let candidate: ReturnType<typeof lessonChangeSchema.parse> | undefined;
+  const tools: AgentTool[] = [{
+    name: 'read_current_lesson', label: '读取当前课件',
+    description: 'Read the complete applied lesson frozen for this unit session. Historical conversation and rejected drafts are references, not the applied version. No IDs, revisions, pagination or summaries are needed.',
+    parameters: Type.Object({}, { additionalProperties: false }),
+    async execute(_id, _args, signal) {
+      signal?.throwIfAborted();
+      const content = lessonMarkdown(lesson);
+      return { content: [{ type: 'text', text: `课件：${lesson.title}\n\n${content}` }],
+        details: { sources: [{ kind: 'current-lesson', id: input.unitId!, revision: lesson.revision, hash: hash(lesson), contentHash: hash(content) }] } };
+    },
+  }, {
+    name: 'propose_lesson_change', label: '提议修改课件',
+    description: 'Stage a complete replacement title and Markdown content for this session’s current unit only, with an optional explanatory note. Submit the whole lesson, not a patch. Does not publish, alter the route/goals, change files or assessments, or prove mastery. Only the last valid candidate becomes a proposal after normal completion; the user must explicitly accept it.',
+    parameters: Type.Unsafe<ReturnType<typeof lessonChangeSchema.parse>>(JSON.parse(JSON.stringify(lessonChangeSchema.toJSONSchema({ io: 'input' })))),
+    async execute(_id, args, signal) {
+      signal?.throwIfAborted();
+      candidate = lessonChangeSchema.parse(args);
+      return { content: [{ type: 'text', text: '完整课件候选已暂存；回复正常完成后供用户审阅接受，当前课件未改变。' }], details: {} };
+    },
+  }];
+  return { tools, candidate: () => candidate };
 }
 
 export function createLessonReadTools(learning: Learning, input: FrozenContext) {

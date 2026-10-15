@@ -13,6 +13,8 @@ export interface Unit {
   hasLesson?: boolean
   started?: boolean
   active?: boolean
+  historicalPass?: import('@teach-me-coding/contracts').UnitDetail['historicalPass']
+  lessonRevision?: number
   lessonKey: string
   lastAdvice?: string[]
 }
@@ -115,6 +117,8 @@ export interface AssessmentRecord {
   toVerify: string[]
   valid?: boolean
   verification?: string
+  lessonRevision?: number
+  specRevision?: number
   q2Kind?: 'code' | 'reasoning'
   execution?: CodeExecution
 }
@@ -195,12 +199,15 @@ export type LessonBlock =
   | { type: 'diagram-move' }
 
 export interface Lesson {
+  title?: string
   intro: string
   blocks: LessonBlock[]
   content?: string
 }
 
 export interface AssessmentSpec {
+  revision?: number
+  stale?: boolean
   abilities: string[]
   q2Kind?: 'code' | 'reasoning'
   execution?: CodePlan

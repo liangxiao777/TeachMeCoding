@@ -98,11 +98,14 @@ export function ResultView() {
   const unverified = record.result === 'unverified'
   const expired = ['non-execution', 'execution-verified'].includes(record.verification ?? '') && record.valid === false
   const unit = findUnit(space, record.unitId)
+  const historicalPass = record.valid === false && passed && unit?.historicalPass?.recordId === record.id
+  const deferredPass = historicalPass && unit?.status === 'learning'
   const next = nextUnit(space, record.unitId)
   const isLatest = [...space.records].reverse().find((r) => r.unitId === record.unitId)?.id === record.id
   const ask = (text: string) => setQuote({ source: 'advice', label: `${record.unitTitle} · 测评`, text })
   const execution = record.execution && executionFeedback(record.execution)
-  const nextStep = expired ? '回到当前单元，核对最新题目后重新作答。'
+  const nextStep = historicalPass ? deferredPass ? '旧版通过记录仍保留，但不是新版的有效测评证据。可以继续学习路线，也可自愿测评新版。' : '旧版通过记录仍保留，但不是当前版本的有效证据；请结合新版测评反馈决定下一步。'
+    : expired ? '回到当前单元，核对最新题目后重新作答。'
     : unverified ? execution?.nextStep ?? '当前题目没有可用的代码运行结果。重新出题后运行代码，再提交测评。'
     : passed ? next ? '可以继续下一单元，也可以回看本次作答。' : '可以回看本次作答，或返回学习路线。'
     : execution?.nextStep ?? '根据下面的建议修改回答，再重新测评。'
@@ -130,10 +133,10 @@ export function ResultView() {
               </div>
               <div className="flex flex-col gap-1">
                 <Badge variant={passed ? 'default' : 'secondary'} className="w-fit">
-                  {expired ? '历史结论 · 来源已变化' : unverified ? '暂无法判断' : passed ? '通过' : '需要修改'}
+                  {historicalPass ? '旧版已通过' : expired ? '历史结论 · 来源已变化' : unverified ? '暂无法判断' : passed ? '通过' : '需要修改'}
                 </Badge>
                 <CardTitle className="text-2xl tracking-tight">
-                  {expired ? '此结果基于旧版本，请重新测评' : unverified ? '本次代码检查未完成' : passed ? '本次测评通过' : '这次还有需要修改的地方'}
+                  {historicalPass ? `旧版已通过 / ${deferredPass ? '新版尚未测评' : '请查看新版测评状态'}` : expired ? '此结果基于旧版本，请重新测评' : unverified ? '本次代码检查未完成' : passed ? '本次测评通过' : '这次还有需要修改的地方'}
                 </CardTitle>
               </div>
             </div>
@@ -144,12 +147,12 @@ export function ResultView() {
         </Card>
 
         <div className="flex flex-wrap items-center gap-3">
-          {passed && !expired && next && isLatest ? (
+          {passed && (!expired && isLatest || deferredPass) && next ? (
             <Button size="lg" onClick={goNextUnit}>
               进入下一单元：{next.title}
               <ArrowRight data-icon="inline-end" />
             </Button>
-          ) : (!passed || expired) && isLatest ? (
+          ) : (!passed || expired && !historicalPass) && isLatest ? (
             <>
               <Button size="lg" onClick={startAssessment}>
                 <RotateCcw data-icon="inline-start" />
@@ -161,6 +164,7 @@ export function ResultView() {
               </Button>
             </>
           ) : null}
+          {historicalPass && <Button size="lg" variant="outline" onClick={startAssessment}>自愿测评新版</Button>}
           <Button size="lg" variant="ghost" onClick={() => (isLatest && passed && !next ? setView('route') : backToStudy())}>
             {isLatest && passed && !next ? '查看学习路线' : '返回单元'}
           </Button>
@@ -176,6 +180,9 @@ export function ResultView() {
 
         <Section icon={Quote} title={unverified ? '作答反馈（仅供修改参考）' : '为什么是这个结果'} items={record.evidence} tone="muted" />
         <Section icon={CircleAlert} title="下一步怎么改" items={record.concerns} tone="accent" onAsk={ask} />
+        {(record.lessonRevision !== undefined || record.specRevision !== undefined) && <p className="text-xs leading-relaxed text-muted-foreground" data-testid="assessment-record-source">
+          本次记录来源：{record.lessonRevision !== undefined ? `课件第 ${record.lessonRevision} 版` : '课件版本未记录'}{record.specRevision !== undefined ? ` · 测评题第 ${record.specRevision} 版` : ''}。以下作答及代码运行结果仅对应本次记录，不是之后的课件或编辑器草稿。
+        </p>}
         {record.execution && <ExecutionResult execution={record.execution} showSummary={record.summary !== execution?.summary} />}
         {(record.mastered.length > 0 || record.toVerify.length > 0) && <Collapsible className="result-disclosure rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">

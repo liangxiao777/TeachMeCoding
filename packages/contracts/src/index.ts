@@ -10,3 +10,4 @@ export * from './execution.js';
 export * from './preview.js';
 export * from './settings.js';
 export * from './library.js';
+export * from './lesson.js';

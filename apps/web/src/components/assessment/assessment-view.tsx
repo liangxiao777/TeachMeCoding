@@ -12,6 +12,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { CodeEditor, TermOutput } from '@/components/workbench/ide-panel'
 import { findUnit } from '@/app/selectors'
+import { pendingDecision } from '@/app/lesson-proposals'
 import { useApp, useSpace } from '@/app/context'
 import { codeCommands } from '@teach-me-coding/contracts'
 import { ExecutionResult } from './execution-result'
@@ -52,10 +53,10 @@ export function AssessmentView() {
     </div>
   )
   const spec = getAssessment(unit)
-  const canRun = !!spec && capabilities.assessment && capabilities.terminal && (!persistence || !!spec.execution)
+  const canRun = !!spec && !spec.stale && capabilities.assessment && capabilities.terminal && (!persistence || !!spec.execution)
   const execution = persistence?.execution
   const executing = !!execution && ['pending', 'running'].includes(execution.state)
-  const storageBusy = !!persistence && (!persistence.ready || persistence.busy)
+  const storageBusy = !!persistence && (!persistence.ready || persistence.busy || pendingDecision(persistence))
   const task = persistence?.tasks.filter((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind)).at(-1)
   const activeTask = task && ['pending', 'running'].includes(task.state)
 
@@ -110,7 +111,7 @@ export function AssessmentView() {
           <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm" role="status">
             <span className="flex-1">{activeTask ? task.kind === 'evaluation'
               ? spec?.execution ? '正在运行并评估固定提交；你可以继续编辑新草稿。' : '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
-              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : spec?.execution ? '提交测评将执行固定代码，并绑定本次执行证据。' : '代码题仅作静态评估，不代表运行通过。'}</span>
+              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : spec?.stale ? '课件已更新，旧题和答案仍保留。请根据最新课件重新出题后测评新版。' : spec?.execution ? '提交测评将执行固定代码，并绑定本次执行证据。' : '代码题仅作静态评估，不代表运行通过。'}</span>
             <RunContext runId={task?.id} />
             {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>停止任务</Button> : <>
               {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>重试原任务</Button>}
@@ -188,6 +189,7 @@ export function AssessmentView() {
                 </div>}
                 {persistence && execution && <div className="mt-4 space-y-2">
                   {execution.code !== draft.q2 && <p role="status" className="text-xs text-muted-foreground">以下输出属于较早的固定代码；当前新草稿尚未运行。</p>}
+                  {execution.specRevision !== spec?.revision && <p role="status" className="text-xs text-muted-foreground">以下运行基于旧测评题第 {execution.specRevision} 版，不是当前题目或新版课件的运行证据。</p>}
                   <ExecutionResult execution={execution} />
                   {executing && <Button size="sm" variant="outline" onClick={() => persistence.stopExecution(execution.id)}>停止代码运行</Button>}
                 </div>}
@@ -210,7 +212,7 @@ export function AssessmentView() {
                   保存答案草稿
                 </Button>
               )}
-              <Button size="lg" onClick={submitAssessment} disabled={!spec || !capabilities.assessment || storageBusy || executing || !!activeTask || !draft.q1.trim()}>
+              <Button size="lg" onClick={submitAssessment} disabled={!spec || spec.stale || !capabilities.assessment || storageBusy || executing || !!activeTask || !draft.q1.trim()}>
                 <Send data-icon="inline-start" />
                 提交测评
               </Button>

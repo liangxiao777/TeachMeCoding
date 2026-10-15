@@ -3,6 +3,8 @@ import type { CodeFile, Session, Space, SpaceView, Unit } from './types'
 
 export const allUnits = (space: Space): Unit[] => space.stages.flatMap((stage) => stage.units)
 export const findUnit = (space: Space, id: string | null): Unit | undefined => allUnits(space).find((unit) => unit.id === id)
+export const needsLearning = (unit: Unit) => unit.status !== 'passed' && unit.status !== 'skipped'
+  && !(unit.status === 'learning' && unit.historicalPass)
 export function availableUnitIds(space: Space): Set<string> {
   const units = allUnits(space)
   return unlockedUnitIds(units, new Set(units.filter((unit) => unit.hasLesson ?? unit.contentState === 'ready').map((unit) => unit.id)),
@@ -18,7 +20,7 @@ export function recommendedUnit(space: Space): Unit | undefined {
   const available = availableUnitIds(space), units = allUnits(space)
   // Recommendation follows learning progress, not the unit currently viewed.
   return unpublishedGap(units, available)
-    ?? units.find((unit) => available.has(unit.id) && unit.status !== 'passed' && unit.status !== 'skipped')
+    ?? units.find((unit) => available.has(unit.id) && needsLearning(unit))
 }
 export function canAccessView(space: Space, view: SpaceView, unitId: string | null): boolean {
   if (!['unit', 'assessment', 'result'].includes(view)) return true
@@ -31,7 +33,7 @@ export function nextUnit(space: Space, id: string): Unit | undefined {
   const available = availableUnitIds(space)
   const gap = unpublishedGap(units, available)
   return gap && gap.id !== id ? gap
-    : units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => available.has(unit.id) && unit.status !== 'passed' && unit.status !== 'skipped')
+    : units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => available.has(unit.id) && needsLearning(unit))
 }
 export function relativeTime(ts: number): string {
   const min = Math.floor((Date.now() - ts) / 60000)

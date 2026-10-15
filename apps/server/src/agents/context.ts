@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Message, Tool } from '@earendil-works/pi-ai';
-import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, ModelSelection, Proposal, QuestionRound, Quote, RequirementState, ResearchDossier, RouteContent, UnitDetail, UnitProgress, Workspace } from '@teach-me-coding/contracts';
+import type { ActionProposal, AssessmentRecord, AssessmentSpec, LearningConclusion, LessonProposal, ModelSelection, Proposal, QuestionRound, Quote, RequirementState, ResearchDossier, RouteContent, UnitDetail, UnitProgress, Workspace } from '@teach-me-coding/contracts';
 import type { FixedAssessment } from '../modules/assessments.js';
 import type { LessonReference } from '../modules/learning.js';
 
@@ -22,6 +22,8 @@ export interface FrozenContext {
   progress?: UnitProgress[];
   /** Reference only. The applied route, not this rejected draft, is the baseline. */
   rejectedProposal?: Proposal;
+  /** Reference only for this unit. New work always starts from the applied lesson. */
+  rejectedLessonProposal?: LessonProposal;
   references: Quote[];
   conclusions?: LearningConclusion[];
   publicAssessment?: AssessmentSpec | null;
@@ -34,7 +36,7 @@ export interface FrozenContext {
 }
 export interface HistoryGroup { id: string; messages: Message[] }
 export const contextVersion = '1';
-export const compilerVersion = '13';
+export const compilerVersion = '14';
 export const hash = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 
 export function xmlText(text: string) {
@@ -58,10 +60,11 @@ export function compileContext(input: FrozenContext) {
     ...(input.route && input.scenario !== 'lesson' ? [{ kind: 'route', id: input.spaceId, revision: input.route.revision, value: input.route }] : []),
     ...(input.progress ? [{ kind: 'learning-progress', id: input.spaceId, revision: hash(input.progress), value: input.progress }] : []),
     ...(input.rejectedProposal ? [{ kind: 'rejected-route-proposal', id: input.rejectedProposal.id, revision: input.rejectedProposal.baseRevision, value: input.rejectedProposal }] : []),
+    ...(input.rejectedLessonProposal?.state === 'rejected' && input.rejectedLessonProposal.unitId === input.unitId ? [{ kind: 'rejected-lesson-proposal', id: input.rejectedLessonProposal.id, revision: input.rejectedLessonProposal.baseRevision, value: input.rejectedLessonProposal }] : []),
     ...(input.unit ? [{ kind: 'unit', id: input.unit.id, revision: input.route?.revision ?? 0, value: input.unit }] : []),
     ...(input.lesson ? [{ kind: 'lesson', id: input.unitId!, revision: hash(input.lesson), value: input.lesson }] : []),
-    ...(input.conclusions ?? []).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
-    ...(input.evidence ?? []).map((value) => ({ kind: 'valid-assessment', id: value.id, revision: value.specRevision ?? 0, value })),
+    ...(input.conclusions ?? []).filter((value) => value.adopted && value.valid).map((value) => ({ kind: 'adopted-conclusion', id: value.id, revision: value.revision, value })),
+    ...(input.evidence ?? []).filter((value) => value.valid).map((value) => ({ kind: 'valid-assessment', id: value.id, revision: value.specRevision ?? 0, value })),
     ...(input.actions ?? []).map((value) => ({ kind: 'local-action', id: value.id, revision: hash(value), value })),
     ...(input.publicAssessment ? [{ kind: 'public-assessment', id: input.unitId!, revision: input.publicAssessment.revision ?? 0, value: input.publicAssessment }] : []),
     ...input.references.map((value, index) => ({ kind: 'reference', id: `${input.sessionId}:${index}`, revision: hash(value), value })),

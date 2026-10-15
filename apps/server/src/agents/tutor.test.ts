@@ -10,7 +10,7 @@ import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { McpService } from '../extensions/mcp.js';
 import { TeachingRuntime } from './runtime.js';
-import { populated, reply, response, syntheticSource } from './test-support.js';
+import { approveLesson, populated, reply, response, syntheticSource } from './test-support.js';
 import { readTools } from './read-tools.js';
 
 test('a large lesson tool call reaches the final reply and commits the complete lesson', async () => {
@@ -141,7 +141,7 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments:
       { title: 'Markdown lesson', content: mode === 'blank' ? '  \r\n ' : '## Arguments\n\n```python\nprint(13)\n```' },
     }], 'toolUse'));
-    if (mode === 'late') l.saveLesson(space.id, unit, { title: 'user replacement', content: 'newer valid text' });
+    if (mode === 'late') approveLesson(l, space.id, unit, { title: 'user replacement', content: 'newer valid text' });
     return response(reply([{ type: 'text', text: 'done' }], mode === 'fail' ? 'error' : 'stop'));
   } });
   try {
@@ -151,10 +151,15 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
     assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1 }), /已有/);
     await runtime.idle(task.id);
     assert.equal(runtime.get(space.id, task.id).state, 'succeeded');
+    assert.deepEqual(l.unit(space.id, unit).lesson, { ...legacy, revision: 1 }, 'Regeneration keeps the applied version readable until explicit acceptance.');
+    const proposal = l.space(space.id).lessonProposals.at(-1)!;
+    assert.deepEqual(proposal.source, { kind: 'task', id: task.id });
+    assert.deepEqual(proposal.baseLesson, { ...legacy, revision: 1 });
+    l.applyLessonProposal(space.id, proposal.id);
     assert.equal(l.unit(space.id, unit).lesson?.revision, 2);
     assert.equal(l.unit(space.id, unit).lesson?.content, '## Arguments\n\n```python\nprint(13)\n```');
     assert.equal(l.unit(space.id, unit).lesson?.blocks, undefined);
-    assert.equal(l.space(space.id).sessions.length, 2);
+    assert.equal(l.space(space.id).sessions.length, 3, 'Task proposals create a saved unit session for review/follow-up.');
     assert.equal((db.prepare('SELECT COUNT(*) AS n FROM messages').get() as { n: number }).n, 0);
     for (mode of ['blank', 'fail', 'late']) {
       const task = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 2 });
@@ -176,6 +181,7 @@ test('unit order crosses stage boundaries and advances only after successful les
   ] });
   l.applyProposal(initial.space.id, proposal.id);
   const space = initial.space.id, first = units[0]!.id, second = units[1]!.id;
+  l.saveAssessmentDraft(space, units[3]!.id, { revision: 0, q1: 'Imported later learning activity', q2: '' });
   l.saveLesson(space, units[3]!.id, { title: 'Pre-existing later lesson', content: 'Does not fill earlier gaps.' });
   db.prepare("UPDATE units SET status='skipped' WHERE space_id=? AND id=?").run(space, first);
   let mode = 'error', taskId = '';
@@ -288,7 +294,7 @@ test('lesson tools expose plan order and real progress, and read complete fixed-
       for (const required of ['Legacy', 'LEGACY-CONTENT', 'LEGACY-INTRO', 'Legacy heading', 'Legacy paragraph',
         '## Legacy Markdown\n\nKeep raw Markdown.', 'First list item', 'Second list item', 'Legacy tip', 'Legacy caution',
         'sample.ts', '  const fence = "```";\n', 'Legacy code caption', 'Legacy exercise', 'Explain the boundary.']) assert.ok(textOf(last.content).includes(required), required);
-      l.saveLesson(a.space.id, a.units[1]!.id, { title: 'Newer lesson', content: 'LATEST-BODY-MUST-NOT-LEAK' });
+      approveLesson(l, a.space.id, a.units[1]!.id, { title: 'Newer lesson', content: 'LATEST-BODY-MUST-NOT-LEAK' });
       return call('read_reference_lesson', { unitId: a.units[1]!.id });
     }
     if (requests === 6) {
@@ -323,7 +329,7 @@ test('lesson publication depends only on references actually read, not other pub
     if (last?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'reference', name: 'read_reference_lesson', arguments: { unitId: units[0]!.id } }], 'toolUse'));
     if (last.toolName === 'read_reference_lesson') {
       assert.equal(last.isError, false); assert.match(JSON.stringify(last.content), new RegExp(`Original-${units[0]!.id}`));
-      learning.saveLesson(space.id, units[1]!.id, { title: 'Updated unread lesson', content: 'UNREAD-CHANGED-BODY' });
+      approveLesson(learning, space.id, units[1]!.id, { title: 'Updated unread lesson', content: 'UNREAD-CHANGED-BODY' });
       return response(reply([{ type: 'toolCall', id: 'submit', name: 'submit_lesson', arguments: lesson }], 'toolUse'));
     }
     return response(reply([]));
@@ -344,6 +350,7 @@ test('lesson retries reject changed baselines, missing snapshots and unavailable
     if (change === 'unread' || change === 'unread-history') {
       const route = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [...units, unread] }] };
       l.applyProposal(space.id, l.proposeRoute(space.id, routeSession, route).id);
+      l.saveAssessmentDraft(space.id, unread.id, { revision: 0, q1: 'Imported later activity', q2: '' });
       l.saveLesson(space.id, unread.id, { title: 'Unread', content: 'Other published material' });
     }
     let fail = true;
@@ -363,8 +370,9 @@ test('lesson retries reject changed baselines, missing snapshots and unavailable
     try {
       const task = runtime.generate(space.id, units[1]!.id, randomUUID(), { kind: 'lesson', revision: 0 });
       await runtime.idle(task.id); assert.equal(runtime.get(space.id, task.id).state, 'failed'); fail = false;
-      if (change === 'reference' || change === 'current') l.saveLesson(space.id, units[change === 'current' ? 1 : 0]!.id, { title: 'Replacement', content: 'Changed material' });
-      if (change === 'unread') l.saveLesson(space.id, unread.id, { title: 'Unread replacement', content: 'Changed unread material' });
+      if (change === 'reference') approveLesson(l, space.id, units[0]!.id, { title: 'Replacement', content: 'Changed material' });
+      if (change === 'current') l.saveLesson(space.id, units[1]!.id, { title: 'Replacement', content: 'Changed material' });
+      if (change === 'unread') approveLesson(l, space.id, unread.id, { title: 'Unread replacement', content: 'Changed unread material' });
       if (change === 'requirement') l.saveRequirement(space.id, { ...l.space(space.id).requirement, value: { rows: [{ question: 'Goal?', answer: 'Changed goal' }] } });
       if (change === 'route' || change === 'locked') {
         const content = structuredClone(l.space(space.id).route.content!);
@@ -430,7 +438,7 @@ test('only same-space adopted valid conclusions enter new sessions; revoke and s
     l.decideConclusion(a.space.id, c.id, { revision: 1, adopted: false });
     await ask(a.space.id, a.units[1]!.id, 'next'); assert.ok(!saw.includes('ADOPTED-ARGUMENT-FACT'));
     l.decideConclusion(a.space.id, c.id, { revision: 2, adopted: true });
-    l.saveLesson(a.space.id, a.units[0]!.id, { title: 'changed source', content: 'changed' });
+    approveLesson(l, a.space.id, a.units[0]!.id, { title: 'changed source', content: 'changed' });
     await ask(a.space.id, a.units[1]!.id, 'next'); assert.ok(!saw.includes('ADOPTED-ARGUMENT-FACT'));
   } finally { await runtime.close(); db.close(); }
 });

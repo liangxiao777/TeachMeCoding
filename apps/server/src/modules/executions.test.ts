@@ -8,7 +8,7 @@ import { openDataDirectory } from '../storage/data-directory.js';
 import { Learning } from './learning.js';
 import { Assessments } from './assessments.js';
 import { Executions } from './executions.js';
-import { populated, reply, response, syntheticSource } from '../agents/test-support.js';
+import { approveLesson, populated, reply, response, syntheticSource } from '../agents/test-support.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { executionFeedback, type CodePlan } from '@teach-me-coding/contracts';
 
@@ -55,9 +55,10 @@ test('fixed real submission survives new drafts and failed-model retry without r
     assert.deepEqual(result.execution?.results.map((r) => r.result.stdout), ['11\n', '0\n']);
     assert.equal(f.l.unit(f.space, f.unit).draft.q2, 'new code not executed');
     assert.equal(readFileSync(marker, 'utf8'), 'once\nonce\n'); assert.equal(f.executions.list(f.space, f.unit).length, 1);
-    f.l.saveLesson(f.space, f.unit, { title: '新课件', content: 'changed' });
+    approveLesson(f.l, f.space, f.unit, { title: '新课件', content: 'changed' });
     assert.equal(f.l.unit(f.space, f.unit).records[0]!.valid, false);
     assert.notEqual(f.l.unit(f.space, f.unit).status, 'passed');
+    assert.deepEqual(f.l.unit(f.space, f.unit).historicalPass, { recordId: result.id, lessonRevision: 1 });
   } finally { await runtime.close(); await f.close(); }
 });
 

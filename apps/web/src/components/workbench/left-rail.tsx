@@ -26,6 +26,7 @@ export function LeftRail() {
   const space = useSpace()
   const { viewRecord, lesson: getLesson, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
+  const reviewing = persistence?.lessonProposals.some((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
   const lesson = unit && unit.contentState === 'ready' ? getLesson(unit) : null
   const content = lesson?.content, blocks = content === undefined ? lesson?.blocks : undefined
   const headings = useMemo(() => content !== undefined ? lessonHeadings(content)
@@ -36,7 +37,7 @@ export function LeftRail() {
     <aside className="h-full min-w-0 bg-sidebar" aria-label="单元材料">
       <ScrollArea className="h-full">
         <div className="flex flex-col gap-3 p-2">
-          <details open className={cn(space.ideFullscreen && 'hidden')}>
+          <details open className={cn((space.ideFullscreen || reviewing) && 'hidden')}>
             <summary className="cursor-pointer px-2 py-2 text-xs font-medium text-muted-foreground">本单元目录</summary>
             {headings.length ? (
               <ul className="flex flex-col">
@@ -61,7 +62,7 @@ export function LeftRail() {
             )}
           </details>
 
-          {!space.ideFullscreen && <Separator />}
+          {!space.ideFullscreen && !reviewing && <Separator />}
           <ProjectTree />
           {!space.ideFullscreen && <Separator />}
 
@@ -84,7 +85,7 @@ export function LeftRail() {
                           variant={r.result === 'pass' ? 'default' : 'secondary'}
                           className={cn(r.result !== 'pass' && 'bg-accent text-accent-foreground')}
                         >
-                          {r.result === 'unverified' ? '未验证' : r.result === 'pass' ? '通过' : '加强'}
+                          {r.result === 'unverified' ? '未验证' : r.result === 'pass' ? r.valid === false ? '历史通过' : '通过' : r.valid === false ? '历史加强' : '加强'}
                         </Badge>
                       </span>
                       <span className="text-xs text-muted-foreground">

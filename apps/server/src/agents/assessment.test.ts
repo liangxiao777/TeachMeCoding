@@ -6,7 +6,7 @@ import { openDatabase } from '../storage/database.js';
 import { Learning } from '../modules/learning.js';
 import { Assessments } from '../modules/assessments.js';
 import { TeachingRuntime } from './runtime.js';
-import { populated, reply, response, syntheticSource } from './test-support.js';
+import { approveLesson, populated, reply, response, syntheticSource } from './test-support.js';
 
 const spec = { public: { q1: '解释参数的来源', q2: '读取参数并显示数量', starter: '', q2Kind: 'code' as const },
   rubric: { q1: { answer: 'PRIVATE-RUBRIC-ONE', criteria: ['明确调用者'] }, q2: { answer: 'PRIVATE-RUBRIC-TWO', criteria: ['排除程序名'] } } };
@@ -38,7 +38,7 @@ test('private rubric is separated from public unit, tutor context and task event
       stream.push({ type: 'done', reason: 'toolUse', message: partial });
       return stream;
     }
-    if (late) l.saveLesson(space.id, unit, { title: 'updated', content: '新的课件' });
+    if (late) approveLesson(l, space.id, unit, { title: 'updated', content: '新的课件' });
     return response(reply([
       { type: 'thinking', thinking: 'PRIVATE-RUBRIC reasoning must remain private', thinkingSignature: 'PRIVATE-SIGNATURE' },
       { type: 'text', text: 'PRIVATE-RUBRIC must never stream to browser' },
@@ -188,7 +188,7 @@ test('immutable submissions grade original answers, never clear newer drafts, an
     assert.equal(a.grade(space.id, unit, fixed, { ...grade, result: 'needs_work' }).result, 'pass');
     const next = a.submit(space.id, unit, { kind: 'evaluation', revision: 1, specRevision: 1, q1: '第二提交', q2: '不同答案' });
     assert.equal(next.submission.attempt, 2);
-    l.saveLesson(space.id, unit, { title: 'new', content: 'changed goals' });
+    approveLesson(l, space.id, unit, { title: 'new', content: 'changed explanations' });
     assert.equal(a.grade(space.id, unit, next, grade).valid, false);
     assert.equal(l.unit(space.id, unit).draft.q1, 'NEW-DRAFT');
     assert.ok(l.unit(space.id, unit).records.every((r) => !r.valid));

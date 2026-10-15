@@ -42,6 +42,8 @@ export const lessonBlockSchema = z.discriminatedUnion('type', [
 ]);
 export const lessonSubmissionSchema = z.object({ title, content: text.min(1).refine((value) => value.trim().length > 0, 'Lesson content must not be blank.') }).strict();
 export const lessonSchema = z.object({ title, content: text.default(''), intro: text.optional(), blocks: z.array(lessonBlockSchema).optional() }).strict();
+export const lessonChangeSchema = lessonSubmissionSchema.extend({ note: text.default('') });
+export const rejectLessonProposalSchema = rejectRouteProposalSchema;
 export const conclusionSchema = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
 export const conclusionDecisionSchema = z.object({ revision: z.number().int().nonnegative(), adopted: z.boolean() }).strict();
 export const generationInputSchema = z.discriminatedUnion('kind', [
@@ -79,6 +81,16 @@ export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema>
   valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }
 export interface Proposal { id: string; sessionId: string; runId: string | null; baseRevision: number; requirementRevision: number | null;
   state: 'pending' | 'applied' | 'rejected' | 'superseded'; feedback: string; content: RouteContent; intake?: IntakeMetadata | null }
+export interface LessonProposal {
+  id: string; unitId: string; sessionId: string;
+  source: { kind: 'run'; id: string } | { kind: 'task'; id: string };
+  /** The immutable lesson version being reviewed, not the latest body. */
+  baseRevision: number; requirementRevision: number; routeRevision: number;
+  state: Proposal['state']; feedback: string; note: string;
+  content: z.infer<typeof lessonSubmissionSchema>;
+  baseLesson: Lesson;
+  references: { unitId: string; revision: number }[];
+}
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
@@ -90,6 +102,7 @@ export interface RunEvent { runId: string; seq: number; data: AgentEventData }
 export interface RunEvents { run: AgentRun; events: RunEvent[] }
 export interface RunSubmission { run: AgentRun; session: SessionDetail }
 export interface ProposalRejection { workspace: Workspace; session: SessionDetail; run: AgentRun | null; followupError: string | null }
+export interface LessonProposalApplication { workspace: Workspace; unit: UnitDetail }
 
 // One run's ordered display projection. Callers discard seq <= their saved cursor
 // before applying events; hydration starts empty, never from Message.text.
@@ -133,6 +146,7 @@ export interface Workspace extends SpaceSummary {
   route: { revision: number; content: RouteContent | null; intake?: IntakeMetadata | null };
   sessions: SessionSummary[];
   proposals: Proposal[];
+  lessonProposals: LessonProposal[];
   tasks: WorkStatus[];
   runs: WorkStatus[];
   conclusions: LearningConclusion[];
@@ -143,10 +157,14 @@ export interface UnitDetail {
   /** Actual saved learning activity, not merely an empty session or draft. */
   started: boolean;
   lesson: Lesson | null; assessment: AssessmentSpec | null; draft: AssessmentDraft;
+  /** Public source versions of the current questions; private rubric is never exposed. */
+  assessmentSources?: { requirement: number; lesson: number } | null;
   records: AssessmentRecord[];
+  /** Historical verified pass from an older lesson under the same learning requirement; not current evidence. */
+  historicalPass?: { recordId: string; lessonRevision: number } | null;
   nextAttempt?: number;
 }
-export type UnitProgress = Pick<UnitDetail, 'id' | 'status' | 'started'> & { hasLesson: boolean; active: boolean };
+export type UnitProgress = Pick<UnitDetail, 'id' | 'status' | 'started' | 'historicalPass'> & { hasLesson: boolean; active: boolean };
 
 // Courseware advances the sequential prefix. Inserting a prerequisite never
 // relocks published, already-started or currently-running learning activity.

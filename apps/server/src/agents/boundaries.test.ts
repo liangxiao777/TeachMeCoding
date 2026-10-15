@@ -23,7 +23,7 @@ test('real scene and task tool sets never include side effects, cross-scene arti
       lesson: ['read_learning_route', 'read_reference_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'] } as const;
     for (const scenario of Object.keys(expected) as (keyof typeof expected)[]) {
       const frozen = { ...input, scenario };
-      const tools = ['intake', 'roadmap', 'tutor'].includes(scenario) ? createScenario(l, frozen, randomUUID(), '/synthetic/cwd').tools : createTask(l, frozen).tools;
+      const tools = ['intake', 'roadmap', 'tutor'].includes(scenario) ? createScenario(l, frozen, randomUUID(), '/synthetic/cwd').tools : createTask(l, frozen, randomUUID()).tools;
       assert.deepEqual(tools.map((t) => t.name), expected[scenario]);
       assert.equal(XMLValidator.validate(systemPrompt(scenario)), true);
     }
@@ -35,7 +35,7 @@ test('lesson submission validates bounded text without enforcing Markdown layout
   const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning);
   const unit = units[0]!;
   const task = createTask(learning, { spaceId: space.id, sessionId: null, unitId: unit.id, scenario: 'lesson',
-    requirement: space.requirement, route: space.route, unit, lesson: null, lessonRefs: [], references: [] });
+    requirement: space.requirement, route: space.route, unit, lesson: null, lessonRefs: [], references: [] }, randomUUID());
   const submit = task.tools.find((tool) => tool.name === 'submit_lesson')!;
   try {
     for (const content of [undefined, 123, '', '  \r\n ', 'x'.repeat(100_001)]) {

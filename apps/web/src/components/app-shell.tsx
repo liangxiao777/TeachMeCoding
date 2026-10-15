@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useApp } from '@/app/context'
+import { LessonDrawerProvider } from '@/app/lesson-drawer'
 import { uiMotion, uiMotionVariables } from '@/lib/motion'
 
 const agentWidths = new Map<string, number>()
@@ -145,7 +146,7 @@ export function AppShell() {
             <div inert={settingsOpen || libraryOpen} aria-hidden={settingsOpen || libraryOpen}>
               <Activity mode={libraryOpen || settingsCovered && settingsOpen ? 'hidden' : 'visible'}>
                 <div className="app-layout" data-fixture={!persistence || undefined}>
-                  {current ? <SpaceBody key={current.id} /> : <SpaceList />}
+                  {current ? <LessonDrawerProvider key={current.id}><SpaceBody /></LessonDrawerProvider> : <SpaceList />}
                   {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
                     <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
                       {persistence.error ? (

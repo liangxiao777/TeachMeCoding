@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE } from 'hono/streaming';
 import { createSpaceSchema, researchRefSchema } from '@teach-me-coding/contracts';
+import { z } from 'zod';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Projects } from '../modules/projects.js';
 import { TeachingRuntime } from '../agents/runtime.js';
@@ -137,6 +138,14 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     const { space, proposal } = c.req.param(), input: unknown = await c.req.json(), key = c.req.header('Idempotency-Key') ?? '';
     // Decision recording remains available even when no teaching model is configured.
     return c.json(decisions.rejectProposal(space, proposal, key, input));
+  });
+  api.post('/spaces/:space/lesson-proposals/:proposal/apply', async (c) => {
+    const { space, proposal } = c.req.param(), input = z.object({}).strict().parse(await c.req.json());
+    return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.applyLessonProposal(space, proposal)));
+  });
+  api.post('/spaces/:space/lesson-proposals/:proposal/reject', async (c) => {
+    const { space, proposal } = c.req.param();
+    return c.json(decisions.rejectLessonProposal(space, proposal, c.req.header('Idempotency-Key') ?? '', await c.req.json()));
   });
   api.post('/spaces/:space/conclusions/:conclusion', async (c) => {
     const input: unknown = await c.req.json();

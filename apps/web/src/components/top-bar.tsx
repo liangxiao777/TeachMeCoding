@@ -12,7 +12,7 @@ import {
   PanelLeft,
   Plus,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { LessonReader } from '@/components/workbench/lesson-reader'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Brand } from '@/components/shared'
@@ -41,7 +41,9 @@ import { Separator } from '@/components/ui/separator'
 import { Toggle } from '@/components/ui/toggle'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { findUnit } from '@/app/selectors'
+import { pendingDecision } from '@/app/lesson-proposals'
 import { useApp, useSpace } from '@/app/context'
+import { useLessonDrawer } from '@/app/lesson-drawer'
 import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
 
@@ -91,11 +93,21 @@ function SpaceSwitcher() {
 export function TopBar() {
   const space = useSpace()
   const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
-  const [lessonOpen, setLessonOpen] = useState(false)
+  const { open: lessonOpen, setOpen: setLessonOpen } = useLessonDrawer()
   const unit = findUnit(space, space.currentUnitId)
+  const proposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
+  const awaitingDecision = !!persistence && !!pendingDecision(persistence)
   const onRoute = space.view === 'route'
   const hasDraft = space.draft && space.draft.unitId === unit?.id
   const canAssess = capabilities.assessment || !!(unit && assessment(unit))
+
+  useEffect(() => {
+    const review = (event: Event) => {
+      if (space.ideFullscreen && (event as CustomEvent<{ space: string }>).detail.space === space.id) setLessonOpen(true)
+    }
+    window.addEventListener('lesson-proposal-review', review)
+    return () => window.removeEventListener('lesson-proposal-review', review)
+  }, [space.id, space.ideFullscreen, setLessonOpen])
 
   useEffect(() => {
     if (!space.ideFullscreen) {
@@ -115,7 +127,7 @@ export function TopBar() {
     }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
-  }, [space.ideFullscreen, lessonOpen, toggleIde])
+  }, [space.ideFullscreen, lessonOpen, toggleIde, setLessonOpen])
 
   if (space.ideFullscreen && space.view === 'unit')
     return (
@@ -138,9 +150,9 @@ export function TopBar() {
           <ThemeToggle />
           <Button variant="ghost" size="sm" onClick={() => setLessonOpen(true)}>
             <BookOpen data-icon="inline-start" />
-            查看课件
+            {proposal ? '查看课件变化' : '查看课件'}
           </Button>
-          <Toggle pressed={space.agentOpen} onPressedChange={() => toggleAgent()} aria-label="Agent">
+          <Toggle pressed={space.agentOpen} disabled={awaitingDecision} onPressedChange={() => toggleAgent()} aria-label="Agent">
             <MessageSquare />
             Agent
           </Toggle>
@@ -150,15 +162,16 @@ export function TopBar() {
             返回学习
           </Button>
         </div>
-        <Sheet open={lessonOpen} onOpenChange={setLessonOpen}>
+        <Sheet modal={!proposal} open={lessonOpen} onOpenChange={setLessonOpen}>
           <SheetContent
             side="left"
+            showOverlay={!proposal}
             className="dark w-[720px]! max-w-[80vw]! gap-0 bg-background text-foreground"
-            aria-describedby="ide-lesson-description"
+            aria-describedby={proposal ? undefined : 'ide-lesson-description'}
           >
             <SheetHeader className="border-b">
-              <SheetTitle>当前课件</SheetTitle>
-              <SheetDescription id="ide-lesson-description">查阅后关闭，继续编写代码。</SheetDescription>
+              <SheetTitle>{proposal ? '课件修改预览' : '当前课件'}</SheetTitle>
+              {!proposal && <SheetDescription id="ide-lesson-description">查阅后关闭，继续编写代码。</SheetDescription>}
             </SheetHeader>
             <LessonReader inDrawer onAsk={() => setLessonOpen(false)} />
           </SheetContent>
@@ -248,7 +261,7 @@ export function TopBar() {
               </TooltipTrigger>
               <TooltipContent>{capabilities.terminal ? '显示或收起 IDE 与终端' : '显示或收起 IDE · 终端暂不可用'}</TooltipContent>
             </Tooltip>
-            <Button onClick={startAssessment} disabled={!canAssess || persistence?.busy} className="ml-1.5">
+            <Button onClick={startAssessment} disabled={!canAssess || persistence?.busy || awaitingDecision} className="ml-1.5">
               <ClipboardCheck data-icon="inline-start" />
               {!canAssess ? '测评暂不可用' : hasDraft ? '继续测评' : '开始单元测评'}
             </Button>
@@ -260,6 +273,7 @@ export function TopBar() {
             render={
               <Toggle
                 pressed={space.agentOpen}
+                disabled={awaitingDecision}
                 onPressedChange={() => toggleAgent()}
                 aria-label="Agent"
                 className="px-2.5"

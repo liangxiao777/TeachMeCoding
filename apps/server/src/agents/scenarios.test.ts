@@ -386,12 +386,18 @@ test('pending and running lesson activity protects IDs and goals at publication 
   try {
     const removed = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [units[1]!] }] };
     const proposal = learning.proposeRoute(space.id, routeSession, removed);
+    const before = learning.space(space.id);
+    assert.throws(() => runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 }), /先接受或拒绝/);
+    assert.deepEqual(learning.space(space.id), before, 'Pending review prevents starting an independent task.');
+    const reviewSession = learning.createSession(space.id, { scope: 'unit', unitId: unit.id, title: 'Review' });
+    learning.saveSessionDraft(space.id, reviewSession.id, { revision: 0, text: 'Saved learning activity during review', quote: null, routeSuggestion: '' });
+    assert.throws(() => learning.applyProposal(space.id, proposal.id), /不能移除/);
+    learning.saveSessionDraft(space.id, reviewSession.id, { revision: 1, text: '', quote: null, routeSuggestion: '' });
+    learning.rejectProposal(space.id, proposal.id, {});
     const task = runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 });
     assert.equal(task.state, 'pending');
     assert.equal(learning.unit(space.id, unit.id).started, false, 'An empty active task is protected but has not yet saved learning content.');
     assert.equal(learning.progress(space.id).find((progress) => progress.id === unit.id)!.active, true);
-    assert.throws(() => learning.applyProposal(space.id, proposal.id), /不能移除/);
-    learning.rejectProposal(space.id, proposal.id, {});
     assert.throws(() => learning.proposeRoute(space.id, routeSession, removed), /不能移除/);
     await entered; assert.equal(runtime.get(space.id, task.id).state, 'running');
     const retargeted = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [{ ...unit, goals: ['Replacement objective'] }, units[1]!] }] };

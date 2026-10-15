@@ -7,7 +7,7 @@ import { assessmentArtifactSchema, Assessments, evaluationArtifactSchema } from 
 import { createLessonReadTools } from './lesson-tools.js';
 
 export const baseline = (input: FrozenContext) => ({ requirement: input.requirement.revision, route: input.route!.revision, lesson: input.lesson?.revision ?? 0 });
-export function createTask(learning: Learning, input: FrozenContext): ScenarioRun {
+export function createTask(learning: Learning, input: FrozenContext, taskId: string): ScenarioRun {
   if (input.scenario === 'assessment') {
     let artifact: ReturnType<typeof assessmentArtifactSchema.parse> | undefined;
     return { tools: [{ name: 'submit_assessment', label: '生成测评题目', description: 'Submit public questions separately from private grading rubric. Never expose private answers in public fields. Omitted starter defaults to an empty string; omitted q2Kind defaults to code. Code questions require public.execution with a supported language and public test cases; reasoning questions do not.',
@@ -39,7 +39,7 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
   }
   let lesson: ReturnType<typeof lessonSubmissionSchema.parse> | undefined;
   const references = createLessonReadTools(learning, input);
-  return { tools: [...references.tools, { name: 'submit_lesson', label: '生成课件', description: 'Submit the complete lesson as a title and Markdown content. Write explanations, headings, examples and exercises naturally; do not supply block or heading IDs. Code fences may include file=demo.py. Optional > [!TIP] / > [!WARNING] callouts and ::::practice containers with :::hint / :::solution enrich teaching; none are mandatory. Does not run code or mark assessments passed.',
+  return { tools: [...references.tools, { name: 'submit_lesson', label: '生成课件', description: 'Submit the complete lesson as a title and Markdown content. First courseware publishes after normal completion; replacing existing courseware stages a proposal requiring explicit user acceptance. Write explanations, headings, examples and exercises naturally; do not supply block or heading IDs. Code fences may include file=demo.py. Optional > [!TIP] / > [!WARNING] callouts and ::::practice containers with :::hint / :::solution enrich teaching; none are mandatory. Does not run code or mark assessments passed.',
     parameters: Type.Unsafe<ReturnType<typeof lessonSubmissionSchema.parse>>(JSON.parse(JSON.stringify(lessonSubmissionSchema.toJSONSchema()))),
     async execute(_id, args) {
       lesson = lessonSubmissionSchema.parse(args);
@@ -49,6 +49,7 @@ export function createTask(learning: Learning, input: FrozenContext): ScenarioRu
     if (!lesson) throw new BusinessError(422, '模型没有提交有效课件；旧课件保持不变。');
     learning.assertUnitUnlocked(input.spaceId, input.unitId!);
     learning.checkLessonReferences(input.spaceId, references.consumed());
-    learning.saveLesson(input.spaceId, input.unitId!, lesson, baseline(input));
+    if (input.lesson) learning.proposeLesson(input.spaceId, input.unitId!, lesson, baseline(input), { kind: 'task', id: taskId }, references.consumed());
+    else learning.saveLesson(input.spaceId, input.unitId!, lesson, baseline(input));
   } };
 }

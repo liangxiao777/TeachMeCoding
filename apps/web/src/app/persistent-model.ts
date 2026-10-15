@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
-import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, ProjectEntry, ProjectFile, Proposal, ProposalRejection, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, LessonProposalApplication, ProjectEntry, ProjectFile, ProposalRejection, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { access, api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel, RequirementDraft } from './context'
-import { activeSession, availableUnitIds, canAccessView, fileLanguage, nextUnit, sessionScope, sessionUnitId } from './selectors'
+import { activeSession, availableUnitIds, canAccessView, fileLanguage, needsLearning, nextUnit, sessionScope, sessionUnitId } from './selectors'
+import { assessmentNeedsRefresh, lessonProposalStale, lessonView, mergeProposals, mergeUnitDetail, pendingDecision } from './lesson-proposals'
 import { useUnsavedWarning } from './request-state'
-import type { AssessmentDraft, LessonBlock, Session, Space, SpaceView } from './types'
+import type { AssessmentDraft, Session, Space, SpaceView } from './types'
 import { LocalTerminal } from '@/lib/terminal'
 
 interface StoredSpace {
@@ -45,14 +46,6 @@ function mergeQuestions(known: QuestionRound[] = [], fresh: QuestionRound[] = []
   }
   return [...rounds.values()]
 }
-function mergeProposals(known: Proposal[], fresh: Proposal[]) {
-  const proposals = new Map(known.map((proposal) => [proposal.id, proposal]))
-  for (const proposal of fresh) {
-    const old = proposals.get(proposal.id)
-    if (!old || old.state === 'pending') proposals.set(proposal.id, proposal)
-  }
-  return [...proposals.values()]
-}
 function mergeSession(known: SessionDetail | undefined, fresh: SessionDetail, acceptQuestions = true): SessionDetail {
   if (!known) return { ...fresh, questions: acceptQuestions ? fresh.questions : [] }
   const messages = new Map(known.messages.map((message) => [message.id, message]))
@@ -65,6 +58,23 @@ const supersedeQuestions = (sessions: StoredSpace['sessions']) => Object.fromEnt
 const requirementDirty = (s: StoredSpace) => !!s.requirementDraft && (!same(
   { ...s.requirementDraft, intake: undefined }, s.saved.requirement.value)
   || s.requirementDraft.intake !== undefined && !same(s.requirementDraft.intake, s.saved.requirement.intake ?? null))
+
+function unitState(detail: UnitDetail, saved: Workspace, executions: CodeExecution[]) {
+  const task = saved.tasks.findLast((t) => t.unitId === detail.id && t.kind === 'lesson')
+  return { status: detail.status,
+    // Regeneration never removes the applied reading surface, even on failure.
+    contentState: detail.lesson ? 'ready' as const : task && ['pending', 'running'].includes(task.state) ? 'generating' as const
+      : task && ['failed', 'interrupted'].includes(task.state) ? 'failed' as const : 'none' as const,
+    hasLesson: !!detail.lesson, started: detail.started, historicalPass: detail.historicalPass, lessonRevision: detail.lesson?.revision,
+    active: [...saved.tasks, ...saved.runs].some((work) => work.unitId === detail.id && ['pending', 'running'].includes(work.state))
+      || executions.some((execution) => execution.unitId === detail.id && ['pending', 'running'].includes(execution.state)),
+    lessonKey: detail.id, lastAdvice: detail.records.find((record) => record.valid !== false)?.concerns }
+}
+function unitRecords(units: Record<string, UnitDetail>, stages: Space['stages']) {
+  const metadata = stages.flatMap((stage) => stage.units)
+  return Object.values(units).flatMap((unit) => unit.records.map((record) => ({ ...record,
+    unitTitle: metadata.find((m) => m.id === unit.id)?.title ?? '历史单元' }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
+}
 
 function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
   const entries = tree.map((e) => ({ id: e.path, name: e.path.split('/').at(-1)!, parentId: e.path.includes('/') ? e.path.slice(0, e.path.lastIndexOf('/')) : null, kind: e.kind }))
@@ -111,13 +121,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       q2Output: null, q2Running: false, attempt: unit.nextAttempt ?? Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]
   }))
   const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => {
-    const task = saved.tasks.filter((t) => t.unitId === unit.id && t.kind === 'lesson').at(-1)
-    return { ...unit, status: details[unit.id]!.status, contentState: task && ['pending', 'running'].includes(task.state) ? 'generating' as const
-      : task && ['failed', 'interrupted'].includes(task.state) ? 'failed' as const : details[unit.id]!.lesson ? 'ready' as const : 'none' as const,
-      hasLesson: !!details[unit.id]!.lesson, started: details[unit.id]!.started,
-      active: [...saved.tasks, ...saved.runs].some((work) => work.unitId === unit.id && ['pending', 'running'].includes(work.state))
-        || executionGroups.flat().some((execution) => execution.unitId === unit.id && ['pending', 'running'].includes(execution.state)),
-      lessonKey: unit.id, lastAdvice: details[unit.id]!.records[0]?.concerns }
+    return { ...unit, ...unitState(details[unit.id]!, saved, executionGroups.flat()) }
   }) })) ?? []
   const selectedSessions: Record<string, string> = {}
   for (const session of sessions) {
@@ -129,7 +133,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
       routeNote: saved.route.content?.note ?? '', stages,
-      currentUnitId: units.find((unit) => !unit.lesson)?.id ?? units.find((unit) => unit.status !== 'passed' && unit.status !== 'skipped')?.id ?? units[0]?.id ?? null,
+      currentUnitId: units.find((unit) => !unit.lesson)?.id ?? stages.flatMap((stage) => stage.units).find(needsLearning)?.id ?? units[0]?.id ?? null,
       // Older successful runs may have left an explicit proposal; keep it reachable.
       view: saved.route.content || latestPlan(saved)?.state === 'succeeded' ? 'route' : latestPlan(saved) ? 'planning' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
       ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
@@ -193,6 +197,10 @@ export function usePersistentModel(): AppModel {
       env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' })), () => unsavedFiles(cache.current[id]!).length === 0))
   }
   const localTerminal = current ? terminals.current.get(current.id) : undefined
+  const needsAssessment = (space: string, unit: string) => {
+    const entry = cache.current[space]!
+    return assessmentNeedsRefresh(entry.units[unit]!, entry.saved.requirement.revision)
+  }
 
   useEffect(() => {
     if (booted.current) return
@@ -272,7 +280,7 @@ export function usePersistentModel(): AppModel {
   }, [ready, current?.id, current?.view, viewedUnitId, current?.stages])
   const editSession = (patch: SessionEdit) => {
     if (!current) return
-    if (cache.current[current.id]!.saved.proposals.some((proposal) => proposal.state === 'pending')) return
+    if (pendingDecision(cache.current[current.id]!.saved)) return
     if (sessionScope(current) === 'unit' && (!viewedUnitId || !availableUnitIds(current).has(viewedUnitId))) return
     const space = current.id, key = sessionKey(current)
     if (session) {
@@ -300,7 +308,8 @@ export function usePersistentModel(): AppModel {
       const saved = await api<Workspace>(`/spaces/${space}`)
       // Fence the route before dependent reads: an older snapshot may contain
       // units that the accepted proposal has already retired.
-      if (!currentTicket() || saved.route.revision < cache.current[space]!.saved.route.revision) return
+      if (!currentTicket() || saved.route.revision < cache.current[space]!.saved.route.revision
+        || saved.requirement.revision < cache.current[space]!.saved.requirement.revision) return
       loaded = await loadSpace(saved)
     } catch (error) {
       // A decision can supersede a refresh while its child reads are in flight.
@@ -328,16 +337,17 @@ export function usePersistentModel(): AppModel {
       }
       const runs = mergeWork(s.saved.runs, loaded.saved.runs), tasks = mergeWork(s.saved.tasks, loaded.saved.tasks)
       const proposals = mergeProposals(s.saved.proposals, loaded.saved.proposals)
+      const lessonProposals = mergeProposals(s.saved.lessonProposals ?? [], loaded.saved.lessonProposals)
       const sessions = Object.fromEntries(Object.entries(s.sessions).filter(([, session]) => !session.unitId || unitIds.has(session.unitId)))
       for (const [id, fresh] of Object.entries(loaded.sessions))
         if (!fresh.unitId || unitIds.has(fresh.unitId)) sessions[id] = mergeSession(sessions[id], fresh, freshIntake)
       const units = { ...(freshRoute ? loaded.units : s.units) }
       for (const [id, fresh] of Object.entries(units)) {
-        const known = s.units[id]?.draft
-        if (known && known.revision > fresh.draft.revision) units[id] = { ...fresh, draft: known }
+        units[id] = mergeUnitDetail(s.units[id], fresh)
       }
       const drafts = Object.fromEntries(Object.entries(freshRoute ? loaded.drafts : s.drafts).map(([id, fresh]) =>
-        [id, { ...fresh, ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }]))
+        [id, { ...((s.units[id]?.lesson?.revision ?? 0) > (loaded.units[id]?.lesson?.revision ?? 0) ? s.drafts[id] ?? fresh : fresh),
+          ...(s.drafts[id] ? answers(s.drafts[id]!) : {}) }]))
       const actions = loaded.actions.map((fresh) => {
         const known = s.actions.find((p) => p.id === fresh.id)
         return known && (!['pending', 'running'].includes(known.state) || known.state === 'running' && fresh.state === 'pending') ? known : fresh
@@ -363,13 +373,16 @@ export function usePersistentModel(): AppModel {
           updatedAt: Math.max(old.updatedAt, next.updatedAt) }
       })
       const currentUnitId = s.ui.currentUnitId && unitIds.has(s.ui.currentUnitId) ? s.ui.currentUnitId : loaded.ui.currentUnitId
-      return { ...s, actions, executions, saved: { ...s.saved, requirement, readiness, route, proposals, runs, tasks,
+      const saved = { ...s.saved, requirement, readiness, route, proposals, lessonProposals, runs, tasks }
+      const stages = (freshRoute ? loaded.ui.stages : s.ui.stages).map((stage) => ({ ...stage,
+        units: stage.units.map((unit) => ({ ...unit, ...unitState(units[unit.id]!, saved, executions) })) }))
+      return { ...s, actions, executions, saved: { ...saved,
         sessions: Object.values(sessions), conclusions: freshRoute && freshIntake ? loaded.saved.conclusions : s.saved.conclusions }, units, drafts, taskParts: { ...loaded.taskParts, ...s.taskParts },
         runContexts,
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? null : null,
-          ...(freshRoute ? { completed: loaded.ui.completed, stages: loaded.ui.stages, routeNote: loaded.ui.routeNote, records: loaded.ui.records } : {}),
+          ...(freshRoute ? { completed: Object.values(units).every((unit) => unit.status === 'passed' || unit.status === 'skipped'), stages, routeNote: loaded.ui.routeNote, records: unitRecords(units, stages) } : {}),
           ...(s.ui.view === 'planning' && route.content ? { view: 'route', agentOpen: false } : {}),
-          ...(proposals.some((proposal) => proposal.state === 'pending') ? { agentOpen: true } : {}),
+          ...(pendingDecision(saved) ? { agentOpen: true } : {}),
           currentUnitId, requirement: requirement.value, sessions: uiSessions,
         },
       }
@@ -487,8 +500,8 @@ export function usePersistentModel(): AppModel {
   }
   const inputAllowed = (route = false) => {
     if (!selected) return false
-    if (selected.saved.proposals.some((proposal) => proposal.state === 'pending')) {
-      setError('请先接受或拒绝当前路线提案，再继续对话。'); return false
+    if (pendingDecision(cache.current[selected.saved.id]!.saved)) {
+      setError('请先接受或拒绝当前路线或课件提案，再继续对话。'); return false
     }
     if (route && selected.saved.runs.some((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))) {
       setError('正在生成路线调整，请等待完成或停止当前生成。'); return false
@@ -503,6 +516,7 @@ export function usePersistentModel(): AppModel {
     if (!input.text.trim() && !input.quote) return Promise.resolve(false)
     let submission: RunSubmission | undefined, saved: SessionDetail | undefined, applied = false
     return run(`session:${id}`, async () => {
+      if (!submission && !saved && pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
       if (capabilities.agent) submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input)
       saved ??= submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
       // Explicit messages and structured answers never consume the composer. A
@@ -519,6 +533,7 @@ export function usePersistentModel(): AppModel {
     const snapshot = structuredClone(input)
     let submission: RunSubmission | undefined, applied = false
     return run(`session:${id}`, async () => {
+      if (!submission && pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
       submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/questions/${round}/answer`, snapshot)
       if (!applied) { acceptSession(space, submission.session, submission.run); applied = true }
       watchRun(space, submission.run)
@@ -640,10 +655,11 @@ export function usePersistentModel(): AppModel {
   const generateLesson = (space: string, unit: string) => {
     const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
     void run(`lesson:${space}:${unit}`, async () => {
+      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再生成课件。')
       if (!availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision })
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] },
-        ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit ? { ...u, contentState: 'generating' } : u) })) } }))
+        ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit && !s.units[unit]?.lesson ? { ...u, contentState: 'generating' } : u) })) } }))
       watchRun(space, task)
     })
   }
@@ -652,30 +668,48 @@ export function usePersistentModel(): AppModel {
     const input = kind === 'assessment' ? { kind, revision: detail.assessment?.revision ?? 0 }
       : { kind, revision: detail.draft.revision, specRevision: detail.assessment?.revision, ...answers(draft), execute: detail.assessment?.q2Kind === 'code' && !!detail.assessment.execution }
     void run(`${kind}:${space}:${unit}`, async () => {
+      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再开始新的测评任务。')
+      if (kind === 'evaluation' && needsAssessment(space, unit)) throw new Error('课件已更新，请先根据最新课件重新出题；原答案草稿会保留。')
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, input)
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] } }))
-      await refreshBusiness(space)
       watchRun(space, task)
+      await refreshBusiness(space)
     })
   }
   const retryTask = (space: string, id: string) => {
     void run(`task-retry:${id}`, async () => {
+      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再重试生成。')
       const unit = cache.current[space]!.saved.tasks.find((task) => task.id === id)?.unitId
       if (!unit || !availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
       const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
-      await refreshBusiness(space); watchRun(space, task)
+      watchRun(space, task)
+      await refreshBusiness(space)
     })
   }
   const enterUnit = (id: string) => {
     if (!navigate('unit', id) || !current) return
     const entry = cache.current[current.id]!
-    if (capabilities.agent && !entry.units[id]?.lesson && !entry.saved.tasks.some((task) => task.unitId === id && task.kind === 'lesson')) generateLesson(current.id, id)
+    if (capabilities.agent && !pendingDecision(entry.saved) && !entry.units[id]?.lesson && !entry.saved.tasks.some((task) => task.unitId === id && task.kind === 'lesson')) generateLesson(current.id, id)
   }
   const acceptDecision = (space: string, saved: Workspace) => {
     invalidateBusiness(space)
     change(space, (s) => ({ ...s, saved: { ...s.saved,
       route: saved.route.revision >= s.saved.route.revision ? saved.route : s.saved.route,
-      proposals: mergeProposals(s.saved.proposals, saved.proposals) } }))
+      proposals: mergeProposals(s.saved.proposals, saved.proposals),
+      lessonProposals: mergeProposals(s.saved.lessonProposals ?? [], saved.lessonProposals) } }))
+  }
+  const acceptLesson = (space: string, receipt: LessonProposalApplication) => {
+    acceptDecision(space, receipt.workspace)
+    change(space, (s) => {
+      const unit = mergeUnitDetail(s.units[receipt.unit.id], receipt.unit)
+      const units = { ...s.units, [unit.id]: unit }
+      const stages = s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((old) => old.id === unit.id
+        ? { ...old, ...unitState(unit, s.saved, s.executions) } : old) }))
+      const draft = { ...s.drafts[unit.id]!, attempt: unit.nextAttempt ?? Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }
+      return { ...s, units, drafts: { ...s.drafts, [unit.id]: draft }, ui: { ...s.ui, stages, records: unitRecords(units, stages),
+        completed: Object.values(units).every((detail) => detail.status === 'passed' || detail.status === 'skipped'),
+        draft: s.ui.draft?.unitId === unit.id ? draft : s.ui.draft } }
+    })
   }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
@@ -690,20 +724,11 @@ export function usePersistentModel(): AppModel {
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null
-      if (!lesson.blocks) return { intro: lesson.intro ?? '', blocks: [], content: lesson.content }
-      // Earlier model output stored entire Markdown sections as h2.text. Split
-      // only the display model, preserving saved content and stable TOC anchors.
-      return { intro: lesson.intro ?? '', blocks: lesson.blocks.flatMap((block): LessonBlock[] => {
-        if (block.type !== 'h2') return [block]
-        const [heading = '', ...lines] = block.text.split(/\r\n?|\n/)
-        const body = lines.join('\n')
-        return [{ ...block, text: heading.replace(/^#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').trim() },
-          ...(body.trim() ? [{ type: 'markdown' as const, text: body }] : [])]
-      }) }
+      return lessonView(lesson)
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment
-      return spec ? { abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
+      return spec ? { revision: spec.revision, stale: current ? needsAssessment(current.id, unit.id) : false, abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
     },
     goHome: () => { setCurrentId(null); setGlobalView('home') },
     goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
@@ -770,6 +795,7 @@ export function usePersistentModel(): AppModel {
     },
     retryReply: (id) => { if (!current || !inputAllowed(selected?.saved.runs.find((work) => work.id === id)?.kind === 'roadmap')) return; const space = current.id
       void run(`retry:${id}`, async () => {
+        if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
         acceptSession(space, submission.session, submission.run)
         change(space, (s) => ({ ...s, planningError: null }))
@@ -789,7 +815,7 @@ export function usePersistentModel(): AppModel {
       changeUi(current.id, (s) => ({ ...s, activeSessionIds: { ...s.activeSessionIds, [key]: id } })); sessionStorage.setItem(`session:${current.id}:${key}`, id)
     },
     toggleAgent: (open) => { if (current) changeUi(current.id, (s) => ({ ...s,
-      agentOpen: cache.current[current.id]!.saved.proposals.some((proposal) => proposal.state === 'pending') || (open ?? !s.agentOpen) })) },
+      agentOpen: !!pendingDecision(cache.current[current.id]!.saved) || (open ?? !s.agentOpen) })) },
     toggleIde: (open) => { if (current) changeUi(current.id, (s) => ({ ...s, ideOpen: open ?? !s.ideOpen, ideFullscreen: false })) },
     setIdeFullscreen: (full) => { if (current) changeUi(current.id, (s) => ({ ...s, ideFullscreen: full, ideOpen: true })) },
     toggleExplorer: () => { if (current) changeUi(current.id, (s) => ({ ...s, explorerOpen: !s.explorerOpen })) },
@@ -830,7 +856,8 @@ export function usePersistentModel(): AppModel {
     terminalCommand: (command) => { localTerminal?.send('input', { data: `${command}\r` }) },
     startAssessment: () => { if (!recordUnit || !current) return
       if (!navigate('assessment', recordUnit)) return
-      if (capabilities.assessment && !selected?.units[recordUnit]?.assessment) assessmentTask(current.id, recordUnit, 'assessment')
+      if (capabilities.assessment && !pendingDecision(cache.current[current.id]!.saved) && needsAssessment(current.id, recordUnit)
+        && !cache.current[current.id]!.saved.tasks.some((task) => task.unitId === recordUnit && task.kind === 'assessment' && ['pending', 'running'].includes(task.state))) assessmentTask(current.id, recordUnit, 'assessment')
     },
     updateDraft: (patch) => { if (!current?.draft) return; const unit = current.draft.unitId
       change(current.id, (s) => { const draft = { ...s.drafts[unit]!, ...patch }; return { ...s, drafts: { ...s.drafts, [unit]: draft }, ui: { ...s.ui, draft } } })
@@ -913,6 +940,59 @@ export function usePersistentModel(): AppModel {
         change(current.id, (s) => ({ ...s, disk: null, files: { ...s.files, [disk.path]: disk }, ui: { ...s.ui, files: s.ui.files.map((file) => file.id === disk.path && !keepLocal ? { ...file, content: disk.content } : file) } }))
       },
       proposals: selected?.saved.proposals ?? [],
+      lessonProposals: selected?.saved.lessonProposals ?? [],
+      lessonVersions: Object.fromEntries(Object.entries(selected?.units ?? {}).map(([id, unit]) => [id, unit.lesson?.revision ?? 0])),
+      reviewLessonProposal: (id) => {
+        if (!current) return
+        const proposal = cache.current[current.id]!.saved.lessonProposals?.find((proposal) => proposal.id === id)
+        if (!proposal || !availableUnitIds(cache.current[current.id]!.ui).has(proposal.unitId)) {
+          setError('提案的目标单元已不在可用路线中。请拒绝后重新调整。'); return
+        }
+        // No generation, session retargeting, buffer writes or fullscreen reset.
+        changeUi(current.id, (s) => ({ ...s, view: 'unit', currentUnitId: proposal.unitId, agentOpen: true }))
+        window.dispatchEvent(new CustomEvent('lesson-proposal-review', { detail: { space: current.id, proposal: id } }))
+      },
+      applyLessonProposal: (id) => {
+        if (!current) return
+        const space = current.id
+        let receipt: LessonProposalApplication | undefined, applied = false
+        void run(`lesson-proposal:${id}`, async () => {
+          if (!receipt) {
+            const entry = cache.current[space]!, proposal = entry.saved.lessonProposals?.find((proposal) => proposal.id === id)
+            const versions = Object.fromEntries(Object.entries(entry.units).map(([id, unit]) => [id, unit.lesson?.revision ?? 0]))
+            // A refresh may learn the lost POST already applied. Recover its
+            // idempotent receipt rather than treating that as a stale new choice.
+            if (!proposal || !['pending', 'applied'].includes(proposal.state) || proposal.state === 'pending' && lessonProposalStale(proposal, entry.saved.requirement.revision,
+              entry.saved.route.revision, entry.saved.requirement.confirmed, versions, entry.ui.stages.some((stage) => stage.units.some((unit) => unit.id === proposal.unitId))))
+              throw new Error('需求、路线或课件来源已变化，不能接受这份提案。请拒绝后重新调整。')
+            receipt = await api<LessonProposalApplication>(`/spaces/${space}/lesson-proposals/${id}/apply`, {})
+          }
+          if (!applied) { acceptLesson(space, receipt); applied = true }
+          await refreshBusiness(space)
+        })
+      },
+      rejectLessonProposal: (id, feedback) => {
+        if (!current) return Promise.resolve(false)
+        const space = current.id
+        let receipt: ProposalRejection | undefined, applied = false
+        return run(`lesson-proposal:${id}`, async () => {
+          receipt ??= await api<ProposalRejection>(`/spaces/${space}/lesson-proposals/${id}/reject`, { feedback })
+          if (!applied) {
+            acceptDecision(space, receipt.workspace)
+            acceptSession(space, receipt.session, receipt.run ?? undefined)
+            if (receipt.run) {
+              const key = `unit:${receipt.session.unitId}`
+              changeUi(space, (s) => ({ ...s, agentOpen: true, activeSessionIds: { ...s.activeSessionIds, [key]: receipt!.session.id } }))
+              sessionStorage.setItem(`session:${space}:${key}`, receipt.session.id)
+              watchRun(space, receipt.run)
+            }
+            applied = true
+          }
+          await refreshBusiness(space)
+          if (receipt.followupError) setError(receipt.followupError)
+          return true
+        }).then(Boolean)
+      },
       routeRevision: selected?.saved.route.revision ?? 0,
       requirementRevision: selected?.saved.requirement.revision ?? 0,
       routeAdjustmentRun: selected?.saved.runs.findLast((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state)),

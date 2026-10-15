@@ -30,6 +30,7 @@
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
     "cn": "0.4.0",
+    "diff": "8.0.4",
     "katex": "0.16.47",
     "lucide-react": "1.17.0",
     "mdast-util-to-string": "4.0.0",

@@ -147,15 +147,58 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     const previousResult = context.messages.find((m) => m.role === 'toolResult' && m.toolName === 'read_reference_lesson');
     if (previous && !previousResult) return call('read_reference_lesson', { unitId: previous.unitId });
     if (previousResult?.role === 'toolResult' && previousResult.isError) throw new Error('Expected a readable previous lesson');
+    const regenerating = context.messages.some((message) => message.role === 'user'
+      && (typeof message.content === 'string' ? message.content : message.content.filter((part) => part.type === 'text').map((part) => part.text).join(''))
+        .includes('<source kind="lesson"'));
+    if (regenerating) await new Promise((resolve) => setTimeout(resolve, 500));
     return call('submit_lesson', {
-      title: units[index]!.title, content: [
+      title: units[index]!.title + (regenerating ? '（重新生成）' : ''), content: [
         previous ? '承接前一单元介绍的命令行参数，继续理解输入的边界。' : '从一个小工具开始理解命令行参数。',
         '## 参数从哪里来\n\n命令行参数是启动程序时由调用者提供的字符串。',
         '```python file=args.py\nimport sys\nprint(sys.argv[1:])\n```',
         '> [!TIP]\n> 本示例尚未在本机执行。可以带入 IDE 后自行尝试。',
         '::::practice\n比较传入零个参数与两个参数时的差异。\n\n:::hint\n先观察 `sys.argv[1:]` 如何排除程序名。\n:::\n\n:::solution\n零个参数得到空列表，两个参数得到包含两个字符串的列表。\n:::\n::::',
+        ...(regenerating ? ['## 重新整理\n\n本次重新生成将作为课件提案，接受前原课件保持生效。'] : []),
       ].join('\n\n'),
     });
+  }
+  if (has('propose_lesson_change') && ['课件提案 A', '从生效课件细化', '只改课件标题', '课件引用基线', '课件隐性改动'].some((request) => text.includes(request))) {
+    const turn = context.messages.slice(context.messages.findLastIndex((message) => message.role === 'user') + 1);
+    const read = turn.find((message) => message.role === 'toolResult' && message.toolName === 'read_current_lesson');
+    if (!read || read.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'read-applied-lesson', name: 'read_current_lesson', arguments: {} }], 'toolUse'));
+    if (read.isError || turn.some((message) => message.role === 'toolResult' && message.isError)) throw new Error('Lesson review fixture tool failed');
+    const applied = read.content.filter((part) => part.type === 'text').map((part) => part.text).join('');
+    const split = applied.indexOf('\n\n'), title = applied.slice('课件：'.length, split), content = applied.slice(split + 2);
+    const revised = text.includes('从生效课件细化');
+    if (revised && content.includes('只在课件提案 A 中存在')) throw new Error('Rejected candidate became the applied baseline');
+    if (!turn.some((message) => message.role === 'toolResult' && message.toolName === 'propose_lesson_change')) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const supplement = [
+        '## 补充讲解 A', '只在课件提案 A 中存在。',
+        '| 输入情况 | 应对方式 |\n| --- | --- |\n| 缺失参数 | 显示错误提示 |',
+        '$$\nf(x) = x + 1\n$$',
+        '```mermaid\nflowchart LR\nRead --> Validate --> Explain\n```',
+      ].join('\n\n');
+      const change = {
+        title: text.includes('只改课件标题') ? '参数与输入：边界详解' : revised ? '参数与输入：分步练习' : title,
+        content: text.includes('只改课件标题') ? content : content.replace('命令行参数是启动程序时由调用者提供的字符串。',
+          '命令行参数由调用者在启动程序时传入；读取、验证和错误提示需要分开处理。')
+          + (revised ? '\n\n## 分步练习\n\n1. 先读取一个参数。\n2. 比较空输入与两个参数。\n3. 为缺失参数显示错误提示。\n'
+            : `\n\n${supplement}\n`),
+        note: text.includes('只改课件标题') ? '仅修改课件标题，正文、示例和练习保持不变。'
+          : revised ? '保留已生效示例，从原课件补充读取、验证与错误提示的三步练习。' : '细化参数说明，新增一个补充小节，原示例和练习保留。',
+      };
+      if (text.includes('课件引用基线')) {
+        change.content = `${content}\n\n## 资料与格式\n\n[参数说明](https://docs.example.org/args/v1 "旧说明")\n\n**保留正文**\n\n末段保持不变。`;
+        change.note = '补充参考链接与格式示例。';
+      } else if (text.includes('课件隐性改动')) {
+        change.content = content.replace('https://docs.example.org/args/v1 "旧说明"', 'https://docs.example.org/args/v2 "新说明"')
+          .replace('## 资料与格式\n\n', '## 资料与格式\n\n\n').replace('**保留正文**', '__保留正文__') + '\r\n';
+        change.note = '只调整链接地址、悬停说明、Markdown 标记、段落间隔与末尾换行，正文措辞不变。';
+      }
+      return response(reply([{ type: 'toolCall', id: 'propose-lesson-review', name: 'propose_lesson_change', arguments: change }], 'toolUse'));
+    }
+    return response(reply([{ type: 'text', text: '课件修改已提议，请在课件中核对变化，然后接受或拒绝。' }]));
   }
   if (last?.role !== 'toolResult') {
     if (has('propose_command') && text.includes('本机提案')) return response(reply([{ type: 'toolCall', id: 'local-proposal',

@@ -12,7 +12,10 @@ import {
   SquareTerminal,
   Target,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lessonMarkdown, type LessonProposal } from '@teach-me-coding/contracts'
+import { toString } from 'mdast-util-to-string'
+import type { PluggableList } from 'unified'
 import { createHighlighterCore } from 'shiki/core'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
 import { bundledLanguages, type BundledLanguage } from 'shiki/langs'
@@ -27,14 +30,17 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia } from '@/comp
 import { findUnit } from '@/app/selectors'
 import type { LessonBlock } from '@/app/types'
 import { useApp, useSpace } from '@/app/context'
-import { lessonAllowedTags, lessonHeadingId, lessonRemarkPlugins } from '@/lib/lesson-markdown'
+import { lessonAllowedTags, lessonHeadingId, lessonHeadings, lessonRemarkPlugins, scopedLessonHeadings } from '@/lib/lesson-markdown'
+import { diffLesson, lessonDiffAllowedTags, lessonDiffRemark } from '@/lib/lesson-diff'
+import { pendingDecision } from '@/app/lesson-proposals'
+import { cn } from '@/lib/utils'
 
 const scrollMemory = new Map<string, number>()
 const lessonHighlighter = createHighlighterCore({
   themes: [bundledThemes['github-dark']], langs: [], engine: createJavaScriptRegexEngine(),
 })
 
-function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> }) {
+function CodeBlock({ block, readOnly = false }: { block: Extract<LessonBlock, { type: 'code' }>; readOnly?: boolean }) {
   const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
   const [highlighted, setHighlighted] = useState<{ code: string; language: string; html: string } | null>(null)
@@ -76,7 +82,7 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
             {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
             {copied ? '已复制' : '复制'}
           </Button>
-          <Button size="xs" disabled={persistence && (!persistence.ready || persistence.busy)} onClick={() => bringToIde(block.code, block.file)}>
+          <Button size="xs" disabled={readOnly || (persistence && (!persistence.ready || persistence.busy))} onClick={() => { if (!readOnly) bringToIde(block.code, block.file) }}>
             <SquareTerminal data-icon="inline-start" />
             带入 IDE
           </Button>
@@ -91,7 +97,7 @@ function CodeBlock({ block }: { block: Extract<LessonBlock, { type: 'code' }> })
   )
 }
 
-function Practice({ question, children, onAsk }: { question: string; children?: ReactNode; onAsk?: () => void }) {
+function Practice({ question, children, onAsk, readOnly = false }: { question: string; children?: ReactNode; onAsk?: () => void; readOnly?: boolean }) {
   const space = useSpace()
   const { setQuote, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
@@ -99,8 +105,8 @@ function Practice({ question, children, onAsk }: { question: string; children?: 
     <section aria-label="动手试试" className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
       <header className="flex items-center justify-between gap-3">
         <p className="flex items-center gap-2 text-sm font-medium"><Target className="size-4 text-primary" aria-hidden />动手试试</p>
-        <Button variant="outline" size="xs" disabled={!question.trim() || (persistence && (!persistence.ready || persistence.busy))}
-          onClick={() => { setQuote({ source: 'lesson', label: `${unit?.title ?? '课件'} · 练习`, text: question }); onAsk?.() }}>
+        <Button variant="outline" size="xs" disabled={readOnly || !question.trim() || (persistence && (!persistence.ready || persistence.busy))}
+          onClick={() => { if (readOnly) return; setQuote({ source: 'lesson', label: `${unit?.title ?? '课件'} · 练习`, text: question }); onAsk?.() }}>
           <MessageSquareQuote data-icon="inline-start" />就此提问
         </Button>
       </header>
@@ -110,14 +116,28 @@ function Practice({ question, children, onAsk }: { question: string; children?: 
 }
 
 type TeachingProps = ExtraProps & { children?: ReactNode }
-function LessonText({ text, enhanced = false, inDrawer = false, onAsk }: { text: string; enhanced?: boolean; inDrawer?: boolean; onAsk?: () => void }) {
-  return <RichText text={text}
-    remarkPlugins={enhanced ? lessonRemarkPlugins : undefined}
-    allowedTags={enhanced ? lessonAllowedTags : undefined}
+function LessonText({ text, enhanced = false, inDrawer = false, onAsk, readOnly = false, scope, diffPlugins }: {
+  text: string; enhanced?: boolean; inDrawer?: boolean; onAsk?: () => void; readOnly?: boolean; scope?: string; diffPlugins?: PluggableList
+}) {
+  return <RichText key={`${scope ?? 'normal'}:${inDrawer}:${readOnly}`} text={text} renderMermaid={enhanced}
+    remarkPlugins={enhanced ? [...lessonRemarkPlugins, ...(scope ? [[scopedLessonHeadings, { scope, inDrawer }]] as PluggableList : []), ...(diffPlugins ?? [])] : undefined}
+    allowedTags={enhanced ? { ...lessonAllowedTags, ...lessonDiffAllowedTags } : undefined}
     normalizeHtmlIndentation={enhanced ? false : undefined}
     components={enhanced ? {
-      h2: ({ node, children }) => <h2 id={node?.position?.start.offset !== undefined ? lessonHeadingId(node.position.start.offset, inDrawer) : undefined}
+      h2: ({ node, children }) => <h2 id={typeof node?.properties.id === 'string' ? node.properties.id : node?.position?.start.offset !== undefined ? lessonHeadingId(node.position.start.offset, inDrawer) : undefined}
         className="scroll-mt-6 pt-4 text-xl font-semibold tracking-tight">{children}</h2>,
+      'lesson-change': ({ node, children }: TeachingProps) => {
+        const change = String(node?.properties.change)
+        return <section data-change={change} data-side={node?.properties.side} className={cn('min-w-0 space-y-3 rounded-lg px-4 py-3',
+          change === 'removed' ? 'border-l-4 border-red-500 bg-red-500/10' : change === 'added' ? 'border-l-4 border-green-500 bg-green-500/10' : 'px-0')}>
+          {change !== 'unchanged' && <p className={cn('text-xs font-medium', change === 'removed' ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300')}>{change === 'removed' ? '− 删除 · 原课件' : '+ 新增 · 提议课件'}</p>}
+          {children}
+        </section>
+      },
+      'lesson-change-note': ({ node, children }: TeachingProps) => <aside data-testid="lesson-change-note" className="space-y-2 rounded-md border bg-background/70 px-3 py-2 text-xs leading-relaxed text-muted-foreground [&_code]:break-all [&_code]:whitespace-pre-wrap">
+        <p className="font-medium text-foreground">{String(node?.properties.label ?? '变化说明')}</p>
+        {children}
+      </aside>,
       'lesson-callout': ({ node, children }: TeachingProps) => {
         const warning = node?.properties.kind === 'warning'
         return <Alert className={warning ? 'border-accent-foreground/25 bg-accent/50' : 'border-primary/25 bg-primary/5'}>
@@ -126,12 +146,12 @@ function LessonText({ text, enhanced = false, inDrawer = false, onAsk }: { text:
           <AlertDescription className="min-w-0 space-y-3 leading-relaxed">{children}</AlertDescription>
         </Alert>
       },
-      'lesson-practice': ({ node, children }: TeachingProps) => <Practice question={String(node?.properties.question ?? '')} onAsk={onAsk}>{children}</Practice>,
-      'lesson-hint': ({ children }: TeachingProps) => <details className="rounded-lg border bg-muted/30 px-4 py-3">
+      'lesson-practice': ({ node, children }: TeachingProps) => <Practice question={String(node?.properties.question ?? '')} onAsk={onAsk} readOnly={readOnly}>{children}</Practice>,
+      'lesson-hint': ({ children }: TeachingProps) => <details open={readOnly || undefined} className="rounded-lg border bg-muted/30 px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium">查看提示</summary>
         <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
       </details>,
-      'lesson-solution': ({ children }: TeachingProps) => <details className="rounded-lg border bg-muted/30 px-4 py-3">
+      'lesson-solution': ({ children }: TeachingProps) => <details open={readOnly || undefined} className="rounded-lg border bg-muted/30 px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium">参考讲解</summary>
         <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
       </details>,
@@ -139,8 +159,46 @@ function LessonText({ text, enhanced = false, inDrawer = false, onAsk }: { text:
     renderCode={(code, language, meta) => {
       const extensions: Record<string, string> = { rust: 'rs', python: 'py', typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js', json: 'json', bash: 'sh', sh: 'sh' }
       const file = /(?:^|\s)file=(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(meta)
-      return <CodeBlock block={{ type: 'code', code, language, file: file?.[1] ?? file?.[2] ?? file?.[3] ?? `example.${extensions[language] ?? 'txt'}` }} />
+      return <CodeBlock readOnly={readOnly} block={{ type: 'code', code, language, file: file?.[1] ?? file?.[2] ?? file?.[3] ?? `example.${extensions[language] ?? 'txt'}` }} />
     }} />
+}
+
+function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposal; inDrawer: boolean }) {
+  const before = useMemo(() => lessonMarkdown(proposal.baseLesson), [proposal.baseLesson])
+  const after = proposal.content.content
+  const diff = useMemo(() => diffLesson(before, after), [before, after])
+  const headings = useMemo(() => {
+    if (diff.fallback) return [...lessonHeadings(before, inDrawer, `${proposal.id}-before`), ...lessonHeadings(after, inDrawer, `${proposal.id}-after`)]
+    return diff.rows.flatMap((row) => {
+      const side = row.change === 'removed' ? 'before' : 'after'
+      const node = (side === 'before' ? row.before : row.after)?.node
+      return node?.type === 'heading' && node.depth === 2 ? [{ id: lessonHeadingId(node.position!.start.offset!, inDrawer, `${proposal.id}-${side}`),
+        text: `${row.change === 'removed' ? '− ' : row.change === 'added' ? '+ ' : ''}${toString(node)}` }] : []
+    })
+  }, [before, after, diff, proposal.id, inDrawer])
+  const title = (side: 'before' | 'after', changed = false) => <div className={cn('rounded-lg p-4', changed && (side === 'before' ? 'border-l-4 border-red-500 bg-red-500/10' : 'border-l-4 border-green-500 bg-green-500/10'))}>
+    {(changed || diff.fallback) && <p className="mb-2 text-xs text-muted-foreground">{side === 'before' ? '− 原课件标题' : '+ 修改后标题'}</p>}
+    <h1 id={`${lessonHeadingId(0, inDrawer, `${proposal.id}-${side}`)}-title`} className="text-balance text-3xl font-semibold tracking-tight" data-testid={`lesson-title-${side}`}>
+      {side === 'before' ? proposal.baseLesson.title : proposal.content.title}
+    </h1>
+  </div>
+  const renderDocument = (side: 'before' | 'after') => <section className={cn('min-w-0 space-y-5 rounded-lg border-l-4 p-4', side === 'before' ? 'border-red-500 bg-red-500/5' : 'border-green-500 bg-green-500/5')} data-side={side}>
+    {title(side)}
+    <LessonText text={side === 'before' ? before : after} enhanced readOnly inDrawer={inDrawer} scope={`${proposal.id}-${side}`} />
+  </section>
+  return <div className="min-h-0 flex-1 overflow-y-auto" data-testid="lesson-proposal-preview" data-proposal-id={proposal.id} data-location={inDrawer ? 'drawer' : 'main'}>
+    <article className="lesson-prose mx-auto flex max-w-3xl flex-col gap-5 px-8 py-8">
+      {headings.length > 0 && <nav aria-label="提案课件目录" data-testid="lesson-preview-toc"><details><summary className="cursor-pointer text-sm">课件目录</summary><ul className="mt-2 space-y-1">
+        {headings.map((heading) => <li key={heading.id}><a href={`#${heading.id}`} className="text-sm text-muted-foreground hover:text-foreground" onClick={(event) => {
+          event.preventDefault(); document.getElementById(heading.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }}>{heading.text}</a></li>)}
+      </ul></details></nav>}
+      {!diff.fallback && <>{proposal.baseLesson.title !== proposal.content.title ? <>{title('before', true)}{title('after', true)}</> : title('after')}</>}
+      {diff.fallback ? <><p role="status" className="text-sm text-muted-foreground">差异计算达到上限，以下在同一面板依次完整展示原课件和修改后课件，不省略内容。</p>{renderDocument('before')}{renderDocument('after')}</>
+        : <LessonText key="inline-diff" text={after} enhanced readOnly inDrawer={inDrawer} scope={`${proposal.id}-diff`}
+          diffPlugins={[[lessonDiffRemark, { diff, proposalId: proposal.id, inDrawer }]]} />}
+    </article>
+  </div>
 }
 
 function MoveDiagram() {
@@ -241,6 +299,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
   const space = useSpace()
   const { setQuote, retryGeneration, setView, viewRecord, lesson: getLesson, capabilities, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
+  const proposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [pop, setPop] = useState<{ x: number; y: number; text: string } | null>(null)
   const memKey = `${space.id}:${unit?.id}${inDrawer ? ':drawer' : ''}`
@@ -282,6 +341,8 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
   })()
   const lastRecord = [...space.records].reverse().find((r) => r.unitId === unit.id)
 
+  if (proposal) return <LessonProposalPreview key={proposal.id} proposal={proposal} inDrawer={inDrawer} />
+
   return (
     <div
       ref={scrollRef}
@@ -295,9 +356,10 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
         <header className="flex flex-col gap-4 pb-2">
           <p className="font-mono text-xs text-muted-foreground">{location}</p>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-balance text-4xl font-semibold tracking-tight">{unit.title}</h1>
+            <h1 className="text-balance text-4xl font-semibold tracking-tight">{lesson?.title ?? unit.title}</h1>
             <StatusPill status={unit.status} />
           </div>
+          {unit.historicalPass && unit.status !== 'passed' && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="lesson-historical-pass">旧版已通过 / {unit.status === 'needs_work' ? '新版测评建议加强' : '新版尚未测评'}。旧版记录仍可查看，可选择继续学习路线或自行测评新版。</p>}
           <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <Target className="size-3.5" aria-hidden />
@@ -370,7 +432,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent className="flex-row justify-center">
-              <Button disabled={!capabilities.agent || !!persistence?.busy} onClick={() => retryGeneration(unit.id)}>
+              <Button disabled={!capabilities.agent || !!persistence?.busy || !!persistence && !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>
                 <RotateCcw data-icon="inline-start" />
                 重新生成
               </Button>
@@ -388,7 +450,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               <EmptyDescription>当前单元尚无可读取的课件内容。你的学习路线、会话和代码不会受影响。</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              {persistence && capabilities.agent && <Button disabled={persistence.busy} onClick={() => retryGeneration(unit.id)}>生成课件</Button>}
+              {persistence && capabilities.agent && <Button disabled={persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>生成课件</Button>}
               <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
             </EmptyContent>
           </Empty>

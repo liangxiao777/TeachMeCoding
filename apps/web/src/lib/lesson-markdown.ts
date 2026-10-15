@@ -4,11 +4,13 @@ import remarkDirective from 'remark-directive'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { defaultRemarkPlugins } from 'streamdown'
+import { cjk } from '@streamdown/cjk'
+import { math } from '@streamdown/math'
 import { unified, type Plugin, type PluggableList } from 'unified'
 
 const plainMarkdown = unified().use(remarkParse).use(remarkGfm)
 
-export const lessonHeadingId = (offset: number, inDrawer = false) => `lesson-${inDrawer ? 'drawer' : 'main'}-${offset}`
+export const lessonHeadingId = (offset: number, inDrawer = false, scope?: string) => `lesson-${inDrawer ? 'drawer' : 'main'}-${scope ? `${scope}-` : ''}${offset}`
 
 // An incomplete or unknown teaching marker remains readable Markdown. Never
 // hide content merely because a model forgot a container's closing fence.
@@ -71,14 +73,28 @@ const teachingBlocks: Plugin<[], Root> = () => (tree, file) => {
 
 // The directory and renderer use the same grammar and fallback rules. Only
 // top-level h2 headings belong to the directory, not code or folded answers.
-const lessonParser = plainMarkdown().use(remarkDirective).use(teachingBlocks)
-export function lessonHeadings(content: string) {
-  const tree = lessonParser.runSync(lessonParser.parse(content), { value: content }) as Root
+export const lessonRemarkPlugins: PluggableList = [...Object.values(defaultRemarkPlugins), remarkDirective, teachingBlocks]
+const lessonParser = unified().use(remarkParse).use(cjk.remarkPluginsBefore).use(lessonRemarkPlugins).use(cjk.remarkPluginsAfter).use([math.remarkPlugin])
+export function parseLessonMarkdown(content: string): Root {
+  return lessonParser.runSync(lessonParser.parse(content), { value: content }) as Root
+}
+export function lessonHeadings(content: string, inDrawer = false, scope?: string) {
+  const tree = parseLessonMarkdown(content)
   return tree.children.flatMap((node) => node.type === 'heading' && node.depth === 2
-    ? [{ id: lessonHeadingId(node.position!.start.offset!), text: toString(node) }] : [])
+    ? [{ id: lessonHeadingId(node.position!.start.offset!, inDrawer, scope), text: toString(node) }] : [])
 }
 
-export const lessonRemarkPlugins: PluggableList = [...Object.values(defaultRemarkPlugins), remarkDirective, teachingBlocks]
+export const scopedLessonHeadings: Plugin<[{ scope: string; inDrawer: boolean }], Root> = ({ scope, inDrawer }) => (tree) => {
+  const visit = (node: Nodes) => {
+    if ('identifier' in node) node.identifier = `${scope}-${inDrawer ? 'drawer' : 'main'}-${node.identifier}`
+    if (node.type === 'heading') node.data = { ...node.data, hProperties: {
+      ...node.data?.hProperties, id: lessonHeadingId(node.position?.start.offset ?? 0, inDrawer, scope),
+    } }
+    if ('children' in node) node.children.forEach(visit)
+  }
+  tree.children.forEach(visit)
+}
+
 export const lessonAllowedTags = {
   'lesson-callout': ['kind'],
   'lesson-practice': ['question'],

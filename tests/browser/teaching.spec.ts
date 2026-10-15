@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AgentContext, AgentDisplayPart, RunEvent, SessionDetail } from '../../packages/contracts/src/workspace';
+import type { AgentContext, AgentDisplayPart, RunEvent, SessionDetail, UnitDetail } from '../../packages/contracts/src/workspace';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
 async function create(page: Page, goal: string) {
@@ -939,6 +939,320 @@ test('a silent event connection recovers the terminal state by polling every dur
   expect(saved.runs.filter((r: { kind: string }) => r.kind === 'roadmap')).toHaveLength(1);
 });
 
+test('lesson review gates all sessions, rejects from the applied baseline and accepts exactly once despite lost and stale responses', async ({ page }, info) => {
+  test.setTimeout(60000);
+  const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
+  const goal = `课件审阅 ${info.project.name}`;
+  await page.emulateMedia({ colorScheme: 'light' });
+  await create(page, goal);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  const original = await workspace(page, goal), unitId = original.route.content.stages[0].units[0].id;
+  const originalUnit = await readUnit(page, original.id, unitId);
+  expect(originalUnit.lesson?.revision).toBe(1); expect(original.lessonProposals).toEqual([]);
+  await expect(page.getByRole('region', { name: '动手试试', exact: true }).getByText('先观察', { exact: false })).toBeHidden();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const input = page.getByLabel('向 Agent 提问', { exact: true }), decision = page.getByTestId('lesson-decision');
+  const preview = page.getByTestId('lesson-proposal-preview');
+  await input.fill('课件提案 A：补充说明'); await input.press('Enter');
+  await input.fill('独立未发送输入');
+  await page.getByRole('region', { name: '动手试试', exact: true }).getByRole('button', { name: '就此提问', exact: true }).click();
+  await expect(preview).toContainText('只在课件提案 A 中存在');
+  await expect(decision.getByTestId('lesson-review')).toHaveCount(0);
+  await expect(input).toHaveCount(0);
+  await expect(preview.locator('[data-change="removed"]').filter({ hasText: '命令行参数是启动程序时由调用者提供的字符串。' })).toHaveCount(1);
+  await expect(preview.locator('[data-change="added"]').first()).toContainText('读取、验证和错误提示需要分开处理。');
+  await expect(preview.getByRole('region', { name: '动手试试', exact: true })).toHaveCount(1);
+  await expect(preview.getByText('先观察', { exact: false })).toBeVisible();
+  await expect(preview.getByText('零个参数得到空列表，两个参数得到包含两个字符串的列表。', { exact: true })).toBeVisible();
+  expect(await preview.getByRole('button', { name: '带入 IDE', exact: true }).evaluateAll((buttons) => buttons.every((button) => (button as HTMLButtonElement).disabled))).toBe(true);
+  await expect(preview.getByRole('button', { name: /^(正文变化|原课件|提议课件|源码差异|显示空白|复制原源码|复制提议源码)$/ })).toHaveCount(0);
+  await expect(preview.getByRole('heading', { name: '参数从哪里来', exact: true })).toHaveCount(1);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-diff-${info.project.name}.png`, animations: 'disabled' });
+  const toc = preview.getByTestId('lesson-preview-toc');
+  await toc.locator('summary').click();
+  await toc.getByRole('link', { name: '+ 补充讲解 A', exact: true }).click();
+  await expect.poll(() => preview.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(preview.getByRole('heading', { name: '补充讲解 A', exact: true })).toBeVisible();
+  await expect(preview.getByRole('cell', { name: '缺失参数', exact: true })).toBeVisible();
+  await expect(preview.locator('.katex')).toHaveCount(1);
+  const diagram = preview.locator('svg').filter({ hasText: 'Validate' });
+  await expect(diagram).toBeVisible();
+  await diagram.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-rich-${info.project.name}.png`, animations: 'disabled' });
+  await preview.getByRole('region', { name: '动手试试', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-exercise-${info.project.name}.png`, animations: 'disabled' });
+  await preview.evaluate((element) => { element.scrollTop = 0; });
+  await toc.locator('summary').click();
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await expect(decision.getByTestId('lesson-accept')).toBeInViewport();
+  await expect(decision.getByTestId('lesson-reject')).toBeInViewport();
+  await preview.evaluate((element) => element.scrollTo({ top: 0, behavior: 'instant' }));
+  await expect.poll(() => preview.evaluate((element) => element.scrollTop)).toBe(0);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-diff-compact-${info.project.name}.png`, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await decision.getByTestId('lesson-reject').click();
+  await expect(decision).toContainText('不会自动生成另一份提案');
+  await decision.getByTestId('lesson-reject-confirm').click();
+  await expect(decision).toHaveCount(0); await expect(input).toHaveValue('独立未发送输入');
+  await expect(page.getByRole('button', { name: '移除引用', exact: true })).toBeVisible();
+  expect((await readUnit(page, original.id, unitId)).lesson).toEqual(originalUnit.lesson);
+  await page.getByRole('button', { name: '移除引用', exact: true }).click();
+  await input.fill('再做课件提案 A'); await input.press('Enter'); await input.fill('第二份独立草稿');
+  await expect(preview).toContainText('只在课件提案 A 中存在');
+  const aId = await preview.getAttribute('data-proposal-id');
+  await page.getByRole('button', { name: '新建会话', exact: true }).click();
+  await expect(input).toHaveCount(0); await expect(decision).toHaveAttribute('data-proposal-id', aId!);
+  const blocked = await page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const headers = { 'X-TMC-Token': token, 'Content-Type': 'application/json' };
+    const work = await (await fetch(`/api/spaces/${space}`, { headers })).json();
+    const attempts = [
+      [`/spaces/${space}/sessions/${work.sessions.find((session: { scope: string }) => session.scope === 'route').id}/runs`, { text: '连续做第二轮提案', quote: null, draftRevision: 0 }],
+      [`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision: 1 }],
+    ] as const;
+    return Promise.all(attempts.map(async ([path, body]) => {
+      const response = await fetch(`/api${path}`, { method: 'POST', headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() };
+    }));
+  }, { space: original.id, unit: unitId });
+  for (const response of blocked) { expect(response.status).toBe(409); expect(response.body.error).toContain('先接受或拒绝'); }
+  await decision.getByTestId('lesson-reject').click();
+  const feedback = '从生效课件细化：保留说明，补充三步练习';
+  await decision.getByTestId('lesson-rejection-feedback').fill(feedback);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-feedback-${info.project.name}.png`, animations: 'disabled' });
+  let rejectionDropped = false;
+  await page.route(`**/lesson-proposals/${aId}/reject`, async (route) => {
+    if (!rejectionDropped) { rejectionDropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await decision.getByTestId('lesson-reject-confirm').click();
+  await expect(page.getByRole('alert')).toBeVisible(); await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(preview).toContainText('分步练习'); await expect(preview).not.toContainText('只在课件提案 A 中存在');
+  const bId = await preview.getAttribute('data-proposal-id'), pending = await workspace(page, goal);
+  expect(pending.route).toEqual(original.route);
+  expect(pending.lessonProposals.filter((proposal: { state: string }) => proposal.state === 'pending')).toHaveLength(1);
+  expect(pending.lessonProposals.find((proposal: { id: string }) => proposal.id === aId).feedback).toBe(feedback);
+  expect((await readUnit(page, original.id, unitId)).lesson).toEqual(originalUnit.lesson);
+  // Rehydrate review in a second tab; do not confuse proposal recovery with
+  // persistence of the original tab's deliberately unsaved composer text.
+  const restored = await page.context().newPage();
+  try {
+    await restored.goto(page.url()); await restored.reload();
+    await expect(restored.getByTestId('lesson-decision')).toHaveAttribute('data-proposal-id', bId!);
+    await expect(restored.getByLabel('向 Agent 提问', { exact: true })).toHaveCount(0);
+  } finally { await restored.close(); }
+  await expect(decision.getByTestId('lesson-review')).toHaveCount(0);
+  await page.getByRole('button', { name: '学习路线', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(decision.getByTestId('lesson-review')).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-review-away-${info.project.name}.png`, animations: 'disabled' });
+  const otherUnit = original.route.content.stages[0].units[1];
+  await page.locator('li').filter({ has: page.locator('[data-slot="card-title"]').filter({ hasText: otherUnit.title }) })
+    .getByRole('button', { name: '进入', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(decision.getByTestId('lesson-review')).toBeVisible();
+  await decision.getByTestId('lesson-review').click();
+  await expect(preview).toContainText('分步练习');
+  await expect(decision.getByTestId('lesson-review')).toHaveCount(0);
+  let applyDropped = false;
+  const keys: string[] = [];
+  await page.route(`**/lesson-proposals/${bId}/apply`, async (route) => {
+    keys.push(route.request().headers()['idempotency-key']!);
+    if (!applyDropped) { applyDropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  let release!: () => void, captured!: () => void, heldOnce = false;
+  const held = new Promise<void>((resolve) => { release = resolve; }), received = new Promise<void>((resolve) => { captured = resolve; });
+  await page.route(`**/api/spaces/${original.id}/units/${unitId}`, async (route) => {
+    if (!heldOnce) { heldOnce = true; const response = await route.fetch(); captured(); await held; await route.fulfill({ response }); }
+    else await route.continue();
+  });
+  try {
+    await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await received;
+    await decision.getByTestId('lesson-accept').click();
+    await expect(page.getByRole('alert')).toBeVisible();
+    // Another read can learn that the lost apply response already committed.
+    // Recovering its receipt must not reject this known terminal decision.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(decision).toHaveCount(0); await expect(page.getByRole('heading', { name: '参数与输入：分步练习', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '重试', exact: true }).click();
+    await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
+    release(); await page.waitForTimeout(500);
+    await expect(decision).toHaveCount(0); await expect(input).toHaveValue('第二份独立草稿');
+    const applied = await readUnit(page, original.id, unitId), work = await workspace(page, goal);
+    expect(applied.lesson?.revision).toBe(2); expect(applied.lesson?.content).toContain('3. 为缺失参数显示错误提示。');
+    expect(applied.lesson?.content).not.toContain('只在课件提案 A 中存在');
+    expect(work.route).toEqual(original.route); expect(work.lessonProposals.find((proposal: { id: string }) => proposal.id === bId).state).toBe('applied');
+    expect(keys).toHaveLength(2); expect(new Set(keys).size).toBe(1); expect(errors).toEqual([]);
+    await page.screenshot({ path: `.amp/in/artifacts/lesson-applied-${info.project.name}.png`, animations: 'disabled' });
+  } finally { release(); }
+});
+
+test('lesson review preserves historical passes and answers, permits continuation and reloads voluntary assessment with current sources', async ({ page }, info) => {
+  test.setTimeout(60000);
+  const goal = `纯推理 课件历史 ${info.project.name}`;
+  await create(page, goal);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  const original = await workspace(page, goal), unit = original.route.content.stages[0].units[0].id;
+  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
+  await page.getByLabel('你的回答', { exact: true }).fill('参数由调用者在启动时传入。');
+  await page.getByLabel('分析题回答', { exact: true }).fill('零个参数得到空列表，两个参数得到两个字符串。');
+  await page.getByRole('button', { name: '保存答案草稿', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存答案草稿', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '提交测评', exact: true }).click();
+  await expect(page.getByText('本次测评通过', { exact: true })).toBeVisible({ timeout: 15000 });
+  const passed = await readUnit(page, original.id, unit);
+  await page.getByRole('button', { name: '返回单元', exact: true }).click();
+  if (!await page.getByLabel('向 Agent 提问', { exact: true }).isVisible()) await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await page.getByLabel('向 Agent 提问', { exact: true }).fill('从生效课件细化：增加三步练习');
+  await page.getByLabel('向 Agent 提问', { exact: true }).press('Enter');
+  await page.getByTestId('lesson-accept').click();
+  await expect(page.getByTestId('lesson-historical-pass')).toContainText('旧版已通过 / 新版尚未测评');
+  const changed = await readUnit(page, original.id, unit);
+  expect(changed.lesson?.revision).toBe(2); expect(changed.draft).toEqual(passed.draft);
+  expect(changed.records[0]?.valid).toBe(false); expect(changed.historicalPass?.recordId).toBe(passed.records[0]?.id);
+  await page.locator('summary').filter({ hasText: /^测评记录/ }).click();
+  await page.getByRole('complementary', { name: '单元材料', exact: true }).getByRole('button', { name: /第 1 次/ }).click();
+  await expect(page.getByText('旧版已通过 / 新版尚未测评', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^进入下一单元/ })).toBeEnabled();
+  await expect(page.getByTestId('assessment-record-source')).toContainText('课件第 1 版 · 测评题第 1 版');
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-historical-pass-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^进入下一单元/ })).toBeEnabled();
+  await page.getByRole('button', { name: '自愿测评新版', exact: true }).click();
+  await expect(page.getByLabel('你的回答', { exact: true })).toHaveValue(passed.draft.q1);
+  await expect(page.getByRole('button', { name: '提交测评', exact: true })).toBeEnabled();
+  expect((await readUnit(page, original.id, unit)).assessmentSources).toEqual({ requirement: original.requirement.revision, lesson: 2 });
+  await page.reload(); await expect(page.getByRole('button', { name: '提交测评', exact: true })).toBeEnabled();
+  await expect(page.getByLabel('分析题回答', { exact: true })).toHaveValue(passed.draft.q2);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-new-assessment-${info.project.name}.png`, animations: 'disabled' });
+});
+
+test('lesson review of independent regeneration keeps the applied document readable until explicit acceptance', async ({ page }, info) => {
+  const goal = `课件重新生成 ${info.project.name}`;
+  await create(page, goal);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  const work = await workspace(page, goal), unit = work.route.content.stages[0].units[0].id;
+  const applied = await readUnit(page, work.id, unit);
+  const generated = await page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    const response = await fetch(`/api/spaces/${space}/units/${unit}/tasks`, { method: 'POST',
+      headers: { 'X-TMC-Token': token, 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ kind: 'lesson', revision: 1 }) });
+    return { status: response.status, task: await response.json() };
+  }, { space: work.id, unit });
+  expect(generated.status).toBe(200);
+  expect(generated.task.unitId).toBe(unit);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  const preview = page.getByTestId('lesson-proposal-preview');
+  await expect(preview).toContainText('重新整理');
+  const proposal = (await workspace(page, goal)).lessonProposals.at(-1);
+  expect(proposal.source).toEqual({ kind: 'task', id: generated.task.id });
+  expect((await readUnit(page, work.id, unit)).lesson).toEqual(applied.lesson);
+  await expect(preview.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await expect(preview.locator('[data-change="unchanged"]').filter({ hasText: '命令行参数是启动程序时由调用者提供的字符串。' })).toHaveCount(1);
+  await expect(preview.locator('[data-change="added"]').filter({ hasText: '本次重新生成将作为课件提案' })).toHaveCount(1);
+  await page.getByTestId('lesson-accept').click();
+  await expect(page.getByTestId('lesson-decision')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: `${applied.lesson!.title}（重新生成）`, exact: true })).toBeVisible();
+  expect((await readUnit(page, work.id, unit)).lesson?.revision).toBe(2);
+  expect((await workspace(page, goal)).route).toEqual(work.route);
+});
+
+test('lesson review exposes link and whitespace changes inline without a source view and applies exact candidate bytes', async ({ page }, info) => {
+  const goal = `课件隐性变化 ${info.project.name}`;
+  await create(page, goal);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const input = page.getByLabel('向 Agent 提问', { exact: true }), preview = page.getByTestId('lesson-proposal-preview');
+  await input.fill('课件引用基线'); await input.press('Enter');
+  await expect(preview).toContainText('末段保持不变。');
+  await page.getByTestId('lesson-accept').click();
+  await expect(page.getByTestId('lesson-decision')).toHaveCount(0);
+  const original = await workspace(page, goal), unit = original.route.content.stages[0].units[0].id;
+  const before = await readUnit(page, original.id, unit);
+  expect(before.lesson?.revision).toBe(2);
+  await input.fill('课件隐性改动'); await input.press('Enter');
+  const notes = preview.getByTestId('lesson-change-note');
+  await expect(notes.filter({ hasText: 'https://docs.example.org/args/v1' })).toHaveCount(1);
+  await expect(notes.filter({ hasText: 'https://docs.example.org/args/v2' })).toHaveCount(1);
+  await expect(notes.filter({ hasText: 'Markdown / 空白调整' }).filter({ hasText: '**保留正文**' })).toHaveCount(1);
+  await expect(notes.filter({ hasText: 'Markdown / 空白调整' }).filter({ hasText: '__保留正文__' })).toHaveCount(1);
+  const spacing = notes.filter({ hasText: '段后空白' });
+  await expect(spacing).toHaveCount(2);
+  const finalLine = spacing.filter({ hasText: '␍↵' });
+  await expect(finalLine).toHaveCount(1);
+  await expect(preview.getByRole('heading', { name: '资料与格式', exact: true })).toHaveCount(1);
+  await expect(preview.getByRole('button', { name: /^(正文变化|原课件|提议课件|源码差异)$/ })).toHaveCount(0);
+  const proposal = (await workspace(page, goal)).lessonProposals.at(-1);
+  expect(proposal.content.content).toContain('末段保持不变。\r\n');
+  expect((await readUnit(page, original.id, unit)).lesson).toEqual(before.lesson);
+  await notes.filter({ hasText: 'https://docs.example.org/args/v1' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-inline-details-${info.project.name}.png`, animations: 'disabled' });
+  await finalLine.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-inline-format-${info.project.name}.png`, animations: 'disabled' });
+  await expect(page.getByTestId('lesson-accept')).toBeInViewport();
+  await page.getByTestId('lesson-accept').click();
+  await expect(page.getByTestId('lesson-decision')).toHaveCount(0);
+  const applied = await readUnit(page, original.id, unit);
+  expect(applied.lesson?.content).toBe(proposal.content.content);
+  expect(applied.lesson?.revision).toBe(3);
+});
+
+test('lesson review of title-only edits remains actionable in a readonly fullscreen IDE drawer', async ({ page }, info) => {
+  const goal = `课件标题审阅 ${info.project.name}`;
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await create(page, goal);
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  const original = await workspace(page, goal), unit = original.route.content.stages[0].units[0].id;
+  const before = await readUnit(page, original.id, unit);
+  await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
+  const editor = page.getByLabel('编辑 args.py', { exact: true }).filter({ visible: true });
+  await editor.fill('UNSAVED_BUFFER = 17\n');
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  if (!await page.getByLabel('向 Agent 提问', { exact: true }).isVisible()) await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  await page.getByLabel('向 Agent 提问', { exact: true }).fill('只改课件标题');
+  await page.getByLabel('向 Agent 提问', { exact: true }).press('Enter');
+  await expect(page.getByTestId('lesson-review')).toBeVisible();
+  await expect(page.getByTestId('lesson-proposal-preview').filter({ visible: true })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-review-ide-closed-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByTestId('lesson-review').click();
+  const preview = page.getByTestId('lesson-proposal-preview').filter({ visible: true });
+  await expect(preview).toHaveAttribute('data-location', 'drawer');
+  await expect(page.getByTestId('lesson-review')).toHaveCount(0);
+  await expect(preview.getByTestId('lesson-title-before')).toHaveText(before.lesson!.title);
+  await expect(preview.getByTestId('lesson-title-after')).toHaveText('参数与输入：边界详解');
+  expect((await workspace(page, goal)).lessonProposals.at(-1).content.content).toBe(before.lesson!.content);
+  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(preview).toHaveCount(0);
+  await expect(page.getByTestId('lesson-review')).toBeVisible();
+  await expect(editor).toHaveText('UNSAVED_BUFFER = 17\n', { useInnerText: true });
+  await page.getByTestId('lesson-review').click();
+  await expect(preview).toHaveAttribute('data-location', 'drawer');
+  await expect(page.getByTestId('lesson-review')).toHaveCount(0);
+  await expect(page.getByTestId('lesson-accept')).toBeVisible();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-ide-title-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByTestId('lesson-accept').click();
+  await expect(page.getByTestId('lesson-decision')).toHaveCount(0);
+  await expect(editor).toHaveText('UNSAVED_BUFFER = 17\n', { useInnerText: true });
+  expect((await readUnit(page, original.id, unit)).lesson?.title).toBe('参数与输入：边界详解');
+});
+
+async function readUnit(page: Page, space: string, unit: string): Promise<UnitDetail> {
+  return page.evaluate(async ({ space, unit }) => {
+    const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
+    return (await fetch(`/api/spaces/${space}/units/${unit}`, { headers: { 'X-TMC-Token': token } })).json();
+  }, { space, unit });
+}
+
 async function workspace(page: Page, name: string) {
   return page.evaluate(async (name) => {
     const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
@@ -1026,10 +1340,11 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(result).toContainText('程序报错，尚未完成这道题的运行检查。');
-  await expect(result.locator('pre')).toBeHidden();
+  await expect(result.locator('pre:visible')).toHaveCount(0);
   await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
-  await expect(result.locator('pre')).toContainText('SyntaxError');
-  const stderr = result.locator('pre');
+  await expect(result.getByLabel('本次运行的固定代码', { exact: true })).toHaveText('syntax error !');
+  const stderr = result.locator('pre').filter({ hasText: 'SyntaxError' }).first();
+  await expect(stderr).toContainText('SyntaxError');
   await expect.poll(() => stderr.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
   await stderr.evaluate((e) => { e.scrollTop = e.scrollHeight; });
   await expect.poll(() => stderr.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
@@ -1080,7 +1395,7 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await expect(page.getByText('本次提交符合题目要求。', { exact: true })).toHaveCount(0);
   expect(await page.getByRole('main').innerText()).not.toMatch(/SHA-256|执行 ID|succeeded|退出码/);
   await page.getByRole('button', { name: '查看我的回答', exact: true }).click();
-  await expect(page.getByText('console.log(2)', { exact: true })).toBeVisible();
+  await expect(page.getByText('console.log(2)', { exact: true }).filter({ visible: true })).toBeVisible();
   await page.getByRole('button', { name: '重新测评', exact: true }).click();
   await expect(code).toHaveText(correct, { useInnerText: true });
   await page.getByRole('button', { name: '提交测评', exact: true }).click();
@@ -1095,7 +1410,8 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   await expect(page.getByText('本次未覆盖', { exact: true })).toHaveCount(0);
   expect(await page.getByRole('main').innerText()).not.toMatch(/SHA-256|执行 ID|succeeded|退出码|还需验证边界输入/);
   await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
-  await expect(result.locator('pre').first()).toContainText("$ node answer.js 'red' 'blue'");
+  await expect(result.getByLabel('本次运行的固定代码', { exact: true })).toHaveText(correct);
+  await expect(result.locator('pre').filter({ hasText: "$ node answer.js 'red' 'blue'" })).toContainText('标准输出：\n2\n');
   await result.getByText('运行详情（命令与完整输出）', { exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1400 });
   await page.getByText('本次测评通过', { exact: true }).scrollIntoViewIfNeeded();

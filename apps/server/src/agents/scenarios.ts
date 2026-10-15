@@ -8,6 +8,7 @@ import { readTools } from './read-tools.js';
 import { createRouteTools } from './route-tools.js';
 import { baseline } from './tasks.js';
 import { createIntakeTools } from './intake-tools.js';
+import { createLessonChangeTools } from './lesson-tools.js';
 
 export function createScenario(learning: Learning, input: FrozenContext, runId: string, cwd?: string, actions?: Actions): ScenarioRun {
   if (input.scenario === 'intake') return createIntakeTools(learning, input, runId);
@@ -27,6 +28,7 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
     };
   }
   let conclusion: ReturnType<typeof conclusionSchema.parse> | undefined;
+  const lesson = input.lesson ? createLessonChangeTools(input) : undefined;
   const proposals: ActionProposal[] = [];
   const proposalTools: ScenarioRun['tools'] = actions ? [
     { name: 'propose_file_change', label: '提议修改文件', description: 'Propose full new content for one project file. Does not write; requires explicit user confirmation.',
@@ -42,7 +44,7 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
         return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
       } },
   ] : [];
-  return { tools: [...(cwd ? readTools(cwd) : []), ...proposalTools, {
+  return { tools: [...(cwd ? readTools(cwd) : []), ...proposalTools, ...(lesson?.tools ?? []), {
     name: 'submit_learning_conclusion', label: '整理学习结论', description: 'Stage a specific learning conclusion for user adoption; never infer mastery or assign a score.',
     parameters: Type.Unsafe<ReturnType<typeof conclusionSchema.parse>>(JSON.parse(JSON.stringify(conclusionSchema.toJSONSchema()))),
     async execute(_id, args) {
@@ -50,6 +52,8 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
       return { content: [{ type: 'text', text: '待用户采纳，不代表测评通过。' }], details: {} };
     },
   }], commit() {
+    const candidate = lesson?.candidate();
+    if (candidate) learning.proposeLesson(input.spaceId, input.unitId!, candidate, baseline(input), { kind: 'run', id: runId }, [], input.sessionId!);
     if (conclusion) learning.proposeConclusion(input.spaceId, input.unitId!, runId, conclusion, baseline(input));
     for (const proposal of proposals) actions!.save(input.spaceId, proposal);
   } };

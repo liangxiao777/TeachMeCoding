@@ -12,6 +12,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
 import { Progress } from '@/components/ui/progress'
 import { allUnits, availableUnitIds, recommendedUnit } from '@/app/selectors'
+import { pendingDecision } from '@/app/lesson-proposals'
 import { diffRoute, routeDiffSummary, type UnitDiff } from '@/app/route-diff'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
@@ -221,6 +222,7 @@ function UnitRow({ unit, index, isCurrent, isLast, locked }: { unit: Unit; index
             {isCurrent && <Badge variant="outline" className="border-primary/40 text-primary">当前单元</Badge>}
           </CardTitle>
           <CardDescription className="leading-relaxed">{unit.summary}</CardDescription>
+          {unit.historicalPass && unit.status !== 'passed' && <p className="text-xs leading-relaxed text-muted-foreground">旧版已通过 / {unit.status === 'needs_work' ? '新版测评建议加强' : '新版尚未测评'}</p>}
           <CardAction>
             <Button variant={isCurrent ? 'default' : 'outline'} size="sm" disabled={locked} onClick={() => enterUnit(unit.id)}>
               {locked ? '未解锁' : verb}
@@ -281,7 +283,7 @@ export function RouteView() {
 
   const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
   const adjusting = persistence?.routeAdjustmentRun?.state === 'pending' || persistence?.routeAdjustmentRun?.state === 'running'
-  const busy = sending || adjusting || !!persistence && (persistence.busy || !persistence.ready) || capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const busy = sending || adjusting || !!persistence && (persistence.busy || !persistence.ready || !!pendingDecision(persistence)) || capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
   const submitSuggestion = async () => {
     if (!suggestion.trim() || proposal || busy || sendingRef.current) return
     const submittedSessionId = session?.id

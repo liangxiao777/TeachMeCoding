@@ -5,6 +5,8 @@ import type { IntakeMetadata, RouteSubmission } from '@teach-me-coding/contracts
 import type { ModelSource } from '../models/service.js';
 import { randomUUID } from 'node:crypto';
 import type { Learning } from '../modules/learning.js';
+import type { FrozenContext } from './context.js';
+import { baseline } from './tasks.js';
 
 // Unrelated route/task tests use generic programming concepts, not verified technology claims.
 export const conceptIntake: IntakeMetadata = { researchRef: null };
@@ -18,6 +20,23 @@ export function populated(learning: Learning, name = 'Rust') {
   const p = learning.proposeRoute(space.id, routeSession, { note: 'Test route', stages: [{ id: randomUUID(), title: 'Stage', units }] });
   learning.applyProposal(space.id, p.id);
   return { space: learning.space(space.id), units, routeSession };
+}
+
+// Source work is a saved successful lesson task, not a bypass around review/version checks.
+export function stageLesson(learning: Learning, space: string, unit: string, input: unknown, refs: { unitId: string; revision: number }[] = []) {
+  const w = learning.space(space), id = randomUUID();
+  const frozen: FrozenContext = { spaceId: space, unitId: unit, sessionId: null, scenario: 'lesson',
+    requirement: w.requirement, route: w.route, unit: w.route.content!.stages.flatMap((s) => s.units).find((u) => u.id === unit)!,
+    lesson: learning.unit(space, unit).lesson, lessonRefs: learning.lessonReferences(space), references: [] };
+  return learning.db.transaction(() => {
+    learning.db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,'lesson','succeeded')").run(space, id, unit);
+    learning.db.prepare('INSERT INTO task_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify(frozen), Date.now());
+    return learning.proposeLesson(space, unit, input, baseline(frozen), { kind: 'task', id }, refs);
+  })();
+}
+export function approveLesson(learning: Learning, space: string, unit: string, input: unknown) {
+  const proposal = stageLesson(learning, space, unit, input);
+  return proposal ? learning.applyLessonProposal(space, proposal.id).unit.lesson! : learning.unit(space, unit).lesson!;
 }
 
 export const teachingModel = getBuiltinModel('openrouter', 'stealth/space-bunny-alpha');

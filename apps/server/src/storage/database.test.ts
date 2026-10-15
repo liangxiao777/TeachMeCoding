@@ -125,12 +125,15 @@ test('migration 12 preserves proposal history and applied routes, keeps only the
     assert.throws(() => migrate(db, [...migrations.slice(0, 11), `${migrations[11]}\nSELECT * FROM injected_missing_table;`]), /migration 12 failed/);
     assert.equal(db.pragma('user_version', { simple: true }), 11);
     assert.deepEqual(db.prepare('SELECT * FROM proposals ORDER BY rowid').all(), before, 'Failed rebuild must preserve all old rows and schema.');
-    migrate(db);
+    migrate(db, migrations.slice(0, 12));
     assert.equal(db.pragma('user_version', { simple: true }), 12);
     assert.deepEqual(db.prepare('SELECT * FROM routes ORDER BY rowid').all(), routes);
     const after = db.prepare('SELECT * FROM proposals ORDER BY rowid').all();
     assert.deepEqual(after, before.map((row) => ({ ...row, state: row.id === applied ? 'applied'
       : new Set<string>([latest, otherLatest]).has(row.id as string) ? 'pending' : 'superseded', run_id: null, feedback: '' })));
+    // The historical SQL assertions stay pinned to 12; current business code
+    // must use the full current schema, including later append-only migrations.
+    migrate(db);
     const learning = new Learning(db);
     for (const id of [older, staleRoute, staleRequirement, missingRequirement, allStale]) {
       const space = id === allStale ? spaces[2]! : spaces[0]!;
@@ -148,5 +151,44 @@ test('migration 12 preserves proposal history and applied routes, keeps only the
     migrate(db);
     assert.deepEqual(db.prepare('SELECT * FROM proposals ORDER BY rowid').all(), stable);
     assert.equal(learning.space(spaces[0]!).proposals.find((proposal) => proposal.id === applied)!.state, 'applied');
+  } finally { db.close(); }
+});
+
+test('migration 13 preserves every existing row and prevents concurrent route and lesson review at the storage boundary', () => {
+  const db = new Database(':memory:'); db.pragma('foreign_keys = ON');
+  migrate(db, migrations.slice(0, 12));
+  const body = JSON.stringify({ title: 'Legacy title', intro: '  Exact intro\r\n', blocks: [{ type: 'p', text: 'Original body' }] });
+  try {
+    db.prepare('INSERT INTO spaces VALUES (?,?,?)').run('space', 'Existing learning', 17);
+    db.prepare('INSERT INTO requirements VALUES (?,3,1,?,NULL)').run('space', '{"rows":[{"question":"Goal?","answer":"Learn"}]}');
+    db.prepare('INSERT INTO routes VALUES (?,2,?,NULL)').run('space', '{"note":"Existing","stages":[]}');
+    db.prepare("INSERT INTO units(space_id,id,status) VALUES (?,?,'passed')").run('space', 'unit');
+    db.prepare('INSERT INTO lessons VALUES (?,?,?,4)').run('space', 'unit', body);
+    db.prepare('INSERT INTO lesson_versions VALUES (?,?,4,?)').run('space', 'unit', body);
+    db.prepare("INSERT INTO sessions(space_id,id,scope,unit_id,title) VALUES (?,?,'unit',?,?)").run('space', 'session', 'unit', 'Saved conversation');
+    db.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?,?)').run('space', 'session', 'message', 'user', 'Saved question', null, 23);
+    db.prepare('INSERT INTO assessment_drafts VALUES (?,?,7,?)').run('space', 'unit', '{"q1":"Saved answer","q2":"print(17)\\n"}');
+    db.prepare('INSERT INTO assessments VALUES (?,?,?,1,?,?,29)').run('space', 'unit', 'record', '{"q1":"Prior answer","q2":""}', '{"result":"pass","summary":"Historical"}');
+    db.prepare("INSERT INTO tasks VALUES (?,?,?,NULL,'lesson','succeeded')").run('space', 'task', 'unit');
+    db.prepare("INSERT INTO proposals(space_id,id,session_id,base_revision,requirement_revision,content) VALUES (?,?,?,2,3,?)").run('space', 'route', 'session', '{"note":"Pending route","stages":[]}');
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
+    const before = tables.map(({ name }) => ({ name, rows: db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all() }));
+    assert.throws(() => migrate(db, [...migrations.slice(0, 12), `${migrations[12]}\nSELECT * FROM injected_missing_table;`]), /migration 13 failed/);
+    assert.equal(db.pragma('user_version', { simple: true }), 12);
+    assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='lesson_proposals'").get(), undefined);
+    migrate(db, migrations.slice(0, 13));
+    assert.equal(db.pragma('user_version', { simple: true }), 13);
+    for (const { name, rows } of before) assert.deepEqual(db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all(), rows, name);
+    const lesson = db.prepare(`INSERT INTO lesson_proposals(space_id,id,unit_id,session_id,task_id,base_revision,requirement_revision,route_revision,content)
+      VALUES ('space',?,'unit','session','task',4,3,2,'{"title":"New","content":"Complete replacement"}')`);
+    assert.throws(() => lesson.run('lesson'), /already pending/);
+    db.prepare("UPDATE proposals SET state='rejected' WHERE id='route'").run();
+    lesson.run('lesson');
+    assert.throws(() => lesson.run('another'), /UNIQUE constraint/);
+    assert.throws(() => db.prepare("UPDATE proposals SET state='pending' WHERE id='route'").run(), /already pending/);
+    db.prepare("UPDATE lesson_proposals SET state='rejected' WHERE id='lesson'").run();
+    db.prepare("UPDATE proposals SET state='pending' WHERE id='route'").run();
+    assert.throws(() => db.prepare("UPDATE lesson_proposals SET state='pending' WHERE id='lesson'").run(), /already pending/);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
   } finally { db.close(); }
 });

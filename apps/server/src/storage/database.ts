@@ -135,6 +135,29 @@ export const migrations = [
    DROP TABLE proposals;
    ALTER TABLE proposals_next RENAME TO proposals;
    CREATE UNIQUE INDEX one_pending_route_proposal ON proposals(space_id) WHERE state='pending';`,
+  `CREATE TABLE lesson_proposals (space_id TEXT NOT NULL REFERENCES spaces(id), id TEXT NOT NULL,
+     unit_id TEXT NOT NULL, session_id TEXT NOT NULL, run_id TEXT, task_id TEXT,
+     base_revision INTEGER NOT NULL CHECK(base_revision>0), requirement_revision INTEGER NOT NULL, route_revision INTEGER NOT NULL,
+     content TEXT NOT NULL CHECK(json_valid(content)), note TEXT NOT NULL DEFAULT '',
+     reference_versions TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(reference_versions)),
+     state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','rejected','superseded')), feedback TEXT NOT NULL DEFAULT '',
+     PRIMARY KEY(space_id,id), CHECK((run_id IS NOT NULL) != (task_id IS NOT NULL)),
+     FOREIGN KEY(space_id,unit_id,base_revision) REFERENCES lesson_versions(space_id,unit_id,revision),
+     FOREIGN KEY(space_id,session_id) REFERENCES sessions(space_id,id),
+     FOREIGN KEY(space_id,run_id) REFERENCES runs(space_id,id), FOREIGN KEY(space_id,task_id) REFERENCES tasks(space_id,id));
+   CREATE UNIQUE INDEX one_pending_lesson_proposal ON lesson_proposals(space_id) WHERE state='pending';
+   CREATE TRIGGER pending_lesson_insert BEFORE INSERT ON lesson_proposals
+     WHEN NEW.state='pending' AND EXISTS(SELECT 1 FROM proposals WHERE space_id=NEW.space_id AND state='pending')
+     BEGIN SELECT RAISE(ABORT, 'A content proposal is already pending'); END;
+   CREATE TRIGGER pending_lesson_update BEFORE UPDATE OF state,space_id ON lesson_proposals
+     WHEN NEW.state='pending' AND EXISTS(SELECT 1 FROM proposals WHERE space_id=NEW.space_id AND state='pending')
+     BEGIN SELECT RAISE(ABORT, 'A content proposal is already pending'); END;
+   CREATE TRIGGER pending_route_insert BEFORE INSERT ON proposals
+     WHEN NEW.state='pending' AND EXISTS(SELECT 1 FROM lesson_proposals WHERE space_id=NEW.space_id AND state='pending')
+     BEGIN SELECT RAISE(ABORT, 'A content proposal is already pending'); END;
+   CREATE TRIGGER pending_route_update BEFORE UPDATE OF state,space_id ON proposals
+     WHEN NEW.state='pending' AND EXISTS(SELECT 1 FROM lesson_proposals WHERE space_id=NEW.space_id AND state='pending')
+     BEGIN SELECT RAISE(ABORT, 'A content proposal is already pending'); END;`,
 ];
 
 export function migrate(db: Database.Database, versions: readonly string[] = migrations) {

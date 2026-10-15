@@ -6,6 +6,8 @@ import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
 import { RunContext } from '@/components/agent/run-context'
 import { RouteProposalDecision } from '@/components/agent/route-proposal-decision'
+import { LessonProposalDecision } from '@/components/agent/lesson-proposal-decision'
+import { pendingDecision } from '@/app/lesson-proposals'
 import { QuestionRoundCard, ResearchCard } from '@/components/intake-panel'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
 import { Message, MessageContent } from '@/components/ai-elements/message'
@@ -36,7 +38,7 @@ function RequirementCard() {
   const [saveError, setSaveError] = useState('')
   const savingRef = useRef(false)
   const req = space.requirement
-  const busy = saving || !!persistence && (persistence.busy || !persistence.ready || persistence.proposals.some((proposal) => proposal.state === 'pending'))
+  const busy = saving || !!persistence && (persistence.busy || !persistence.ready || !!pendingDecision(persistence))
   const validRows = !draft || draft.rows.every((row) => row.question.trim())
 
   const save = async () => {
@@ -183,8 +185,9 @@ function Chat() {
   const setText = persistence ? setComposerText : setPreviewText
   const { messages } = space.onboarding
   const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
+  const lessonProposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending')
   const replying = capabilities.agent && space.onboarding.agentTyping
-  const busy = !!proposal || replying || sending || !!persistence && (persistence.busy || !persistence.ready)
+  const busy = !!proposal || !!lessonProposal || replying || sending || !!persistence && (persistence.busy || !persistence.ready)
 
   useEffect(() => setSendError(''), [session?.id, messages.length])
 
@@ -240,7 +243,7 @@ function Chat() {
         <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label="滚动到最新消息" />
       </Conversation>
 
-      {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : <div className="flex shrink-0 flex-col gap-3 px-4 pt-4 pb-6 sm:px-6">
+      {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : lessonProposal ? <LessonProposalDecision key={lessonProposal.id} proposal={lessonProposal} /> : <div className="flex shrink-0 flex-col gap-3 px-4 pt-4 pb-6 sm:px-6">
         <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send(text, true)}>
             <label htmlFor="ob-input" className="sr-only">
               回复 Agent

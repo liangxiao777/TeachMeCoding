@@ -3,6 +3,7 @@
 import { Check, CircleDashed, CircleDot, RotateCcw, SkipForward } from 'lucide-react'
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import type { AgentDisplayPart } from '@teach-me-coding/contracts'
+import { defaultComponents } from 'streamdown'
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from '@/components/ai-elements/chain-of-thought'
 import { MessageResponse, type MessageResponseProps } from '@/components/ai-elements/message'
 import { RunContent } from '@/components/agent/run-content'
@@ -71,11 +72,13 @@ export function InlineText({ text }: { text: string }) {
 export function RichText({
   text,
   renderCode,
+  renderMermaid = false,
   components,
   ...markdownProps
 }: {
   text: string
   renderCode?: (code: string, lang: string, meta: string) => ReactNode
+  renderMermaid?: boolean
   components?: MessageResponseProps['components']
 } & Pick<MessageResponseProps, 'remarkPlugins' | 'allowedTags' | 'normalizeHtmlIndentation'>) {
   return (
@@ -92,6 +95,10 @@ export function RichText({
           const classes = code?.type === 'element' ? code.properties.className : undefined
           const language = Array.isArray(classes) ? classes.find((name) => String(name).startsWith('language-'))?.toString().slice(9) ?? '' : ''
           const meta = code?.type === 'element' && typeof code.properties.metastring === 'string' ? code.properties.metastring : ''
+          if (renderMermaid && language === 'mermaid' && code?.type === 'element') {
+            const MarkdownCode = defaultComponents.code
+            return <MarkdownCode node={code} className="language-mermaid" data-block="true">{value}</MarkdownCode>
+          }
           return renderCode ? renderCode(value.replace(/\n$/, ''), language, meta) : (
             <pre className="overflow-x-auto rounded-md bg-ide p-3 font-mono text-xs leading-relaxed text-ide-foreground">{value}</pre>
           )

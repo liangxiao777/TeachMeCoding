@@ -38,7 +38,7 @@ test('all six scenes retain their ordered business tools across independent Skil
         const input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
           scenario, requirement: space.requirement, route: initial ? { ...space.route, content: null } : space.route, unit: units[0]!, lesson: null, lessonRefs: [], references: [] };
         const base = ['intake', 'roadmap', 'tutor'].includes(scenario)
-          ? createScenario(learning, input, randomUUID(), '/synthetic/cwd', actions).tools : createTask(learning, input).tools;
+          ? createScenario(learning, input, randomUUID(), '/synthetic/cwd', actions).tools : createTask(learning, input, randomUUID()).tools;
         const mcp = tool('mcp__reference__lookup'), search = tool('web_search');
         const signal = new AbortController().signal;
         let cwdResolutions = 0;
@@ -146,7 +146,7 @@ test('all six scenes can list and read global documents and execute Bash by defa
       const runId = randomUUID(), input: FrozenContext = { spaceId: space.id, sessionId: space.sessions[0]!.id, unitId: units[0]!.id,
         scenario, requirement: space.requirement, route: space.route, unit: units[0]!, lesson: null, lessonRefs: [], references: [] };
       const base = ['intake', 'roadmap', 'tutor'].includes(scenario)
-        ? createScenario(learning, input, runId, root, actions).tools : createTask(learning, input).tools;
+        ? createScenario(learning, input, runId, root, actions).tools : createTask(learning, input, runId).tools;
       const prepared = await prepareTools({ scenarioTools: base, cwd: () => root, hasSkills: false, library, runId, signal: new AbortController().signal });
       const names = prepared.declarations.map((t) => t.name);
       for (const name of ['read', 'ls', 'find', 'grep', 'list_library_files', 'bash']) assert.ok(names.includes(name), `${scenario}: ${name}`);
