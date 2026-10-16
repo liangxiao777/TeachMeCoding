@@ -20,6 +20,12 @@ const LEVEL_LABELS: Record<string, string> = {
 }
 
 function ProviderAuth({ provider }: { provider: ProviderSummary }) {
+  if (provider.issue) return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-destructive">
+      <TriangleAlert className="size-3.5" aria-hidden="true" />
+      需要重新登录
+    </span>
+  )
   if (provider.configured)
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">

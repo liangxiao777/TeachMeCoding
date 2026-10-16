@@ -74,7 +74,7 @@ export interface AgentContext {
   /** This run's reported usage, including summary requests; not context occupancy. */
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | null;
 }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error' }
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: string }
 export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;

@@ -110,7 +110,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
       {msg.status === 'error' && (
         <Alert variant="destructive">
           <AlertCircle />
-          <AlertTitle>回复失败，你的问题已保留</AlertTitle>
+          <AlertTitle>{msg.error ?? '回复失败，你的问题已保留'}</AlertTitle>
           <AlertAction>
             <Button size="xs" variant="outline" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.id)}>
               <RotateCcw data-icon="inline-start" />

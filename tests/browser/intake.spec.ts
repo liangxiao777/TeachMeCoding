@@ -263,7 +263,7 @@ test('a failed continuation retains actual custom text and retry does not accept
   await page.getByRole('button', { name: '下一个', exact: true }).click();
   await page.getByRole('checkbox', { name: /测量内存/ }).check();
   await page.getByRole('button', { name: '提交全部回答', exact: true }).click();
-  await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: '模型响应未正常完成，未保存生成产物。' })).toBeVisible();
   await expect(page.getByRole('button', { name: '提交全部回答', exact: true })).toHaveCount(0);
   const before = (await business<SessionDetail>(page, `/spaces/${id}/sessions/${session}`)).value;
   expect(before.questions![0]!.state).toBe('answered');

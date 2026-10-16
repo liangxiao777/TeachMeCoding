@@ -155,6 +155,7 @@ export function usePersistentModel(): AppModel {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [capabilities, setCapabilities] = useState({ agent: false, terminal: false, assessment: false })
+  const refreshCapabilities = () => { void api<AppModel['capabilities']>('/capabilities').then(setCapabilities).catch(() => {}) }
   const subscriptions = useRef(new Map<string, AbortController>())
   const terminals = useRef(new Map<string, LocalTerminal>())
   const errorRef = useRef('')
@@ -435,6 +436,7 @@ export function usePersistentModel(): AppModel {
       }
       changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
         messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, parts, sequence: event.seq,
+          error: event.data.type === 'state' ? event.data.error ?? undefined : m.error,
           status: state === 'succeeded' ? 'done' : state === 'failed' ? 'error' : state === 'interrupted' ? 'stopped' : text ? 'streaming' : 'thinking' }),
       }) }))
     }
@@ -445,6 +447,7 @@ export function usePersistentModel(): AppModel {
             if (!terminal) await streamRun(`/spaces/${space}/runs/${work.id}`, cursor, controller.signal, receive)
             if (controller.signal.aborted) return
             if (terminal) {
+              refreshCapabilities()
               await refreshBusiness(space)
               if (work.kind === 'evaluation' || work.kind === 'roadmap') {
                 const final = await api<AgentRun>(`/spaces/${space}/runs/${work.id}`)
@@ -720,7 +723,7 @@ export function usePersistentModel(): AppModel {
   return {
     state: { spaces, currentSpaceId: currentId, globalView }, current: uiCurrent, session,
     capabilities, localTerminal,
-    refreshCapabilities: () => { void api<AppModel['capabilities']>('/capabilities').then(setCapabilities).catch(() => {}) },
+    refreshCapabilities,
     lesson: (unit) => {
       const lesson = selected?.units[unit.id]?.lesson
       if (!lesson) return null

@@ -21,6 +21,8 @@ export interface ProviderSummary {
   configured: { type: AuthMethod; source?: string } | null;
   /** Credential saved by this app, if any. */
   stored: AuthMethod | null;
+  /** A known authentication rejection; configured credentials may still be present. */
+  issue?: string;
   models: number;
 }
 export interface ModelSummary {
@@ -34,7 +36,7 @@ export interface ModelSummary {
 }
 export interface ModelSettings {
   selection: ModelSelection | null;
-  /** True when the selected model exists, the level is supported and its provider is configured. */
+  /** Configured and not known to require reauthentication; does not probe the provider. */
   ready: boolean;
   issue: string | null;
   providers: ProviderSummary[];

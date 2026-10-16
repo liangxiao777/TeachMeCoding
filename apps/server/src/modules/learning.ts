@@ -130,16 +130,22 @@ export class Learning {
          WHERE m.space_id=? AND m.session_id=? ORDER BY e.run_id,e.seq`, space, id);
       const parts = new Map<string, AgentDisplayPart[]>();
       const contexts = new Map<string, AgentContext>();
+      const errors = new Map<string, string>();
       for (const event of events) {
         const data = JSON.parse(event.value) as AgentEventData;
         parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [], { runId: event.runId, seq: event.seq, data }));
         if (data.type === 'context') contexts.set(event.runId, data.context);
+        if (data.type === 'state') {
+          if (data.error) errors.set(event.runId, data.error);
+          else errors.delete(event.runId);
+        }
       }
       return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
         draft: { ...JSON.parse(row.draft), revision: row.revision },
         messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
           ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
           ...(contexts.has(m.id) ? { context: contexts.get(m.id) } : {}),
+          ...(errors.has(m.id) ? { error: errors.get(m.id) } : {}),
         })),
         ...(row.scope === 'intake' ? { questions: this.intake.questions(space, id) } : {}),
       };

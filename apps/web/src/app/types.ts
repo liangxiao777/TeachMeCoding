@@ -51,6 +51,7 @@ export interface Message {
   full?: string
   quote?: Quote
   status?: MessageStatus
+  error?: string
   sequence?: number
   inAssessment?: boolean
   action?: RouteAction

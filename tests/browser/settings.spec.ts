@@ -237,6 +237,42 @@ test('filtering a long model catalog reveals the first match without selecting i
   await expect(panel.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
 });
 
+test('rejected ChatGPT credentials show reconnection instead of configured, and login clears the issue', async ({ page }, info) => {
+  const issue = 'ChatGPT 登录已失效，请在应用设置中重新登录。';
+  const settings: ModelSettings = {
+    selection: { provider: 'openai', model: 'gpt-6.1-sol', thinkingLevel: 'high' }, ready: false, issue,
+    providers: [{ id: 'openai', name: 'OpenAI', models: 1, stored: 'oauth', configured: { type: 'oauth', source: 'OAuth' }, issue,
+      auth: { oauth: { name: 'OpenAI (ChatGPT subscription)', label: 'Sign in with ChatGPT', subscription: true } } }],
+  };
+  const models: ModelSummary[] = [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', reasoning: true, thinkingLevels: ['high'], contextWindow: 128000, maxTokens: 8192, input: ['text'] }];
+  const login: LoginSession = { id: '00000000-0000-4000-8000-000000000003', providerId: 'openai', type: 'oauth', state: 'succeeded', events: [], error: null, prompt: null };
+  await page.route('**/api/settings/**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/settings/model') return route.fulfill({ json: settings });
+    if (path.endsWith('/models')) return route.fulfill({ json: models });
+    if (path.endsWith('/login') && route.request().method() === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({ type: 'oauth' });
+      settings.ready = true; settings.issue = null; delete settings.providers[0]!.issue;
+      return route.fulfill({ json: login });
+    }
+    if (path.endsWith(`/login/${login.id}`)) return route.fulfill({ json: login });
+    return route.fulfill({ status: 404, json: { error: 'Unexpected settings request' } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  const panel = page.getByRole('tabpanel', { name: '模型配置', exact: true });
+  await expect(panel.getByText(issue, { exact: true })).toBeVisible();
+  await expect(panel.getByText('需要重新登录', { exact: true })).toBeVisible();
+  await expect(panel.getByText('已配置 · OAuth', { exact: true })).toHaveCount(0);
+  await panel.screenshot({ path: `.amp/in/artifacts/oauth-settings-rejected-${info.project.name}.png`, animations: 'disabled' });
+  await panel.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
+  await expect(panel.getByText('需要重新登录', { exact: true })).toHaveCount(0);
+  await expect(panel.getByText(issue, { exact: true })).toHaveCount(0);
+  await expect(panel.getByText('已配置 · OAuth', { exact: true })).toBeVisible();
+  await panel.screenshot({ path: `.amp/in/artifacts/oauth-settings-recovered-${info.project.name}.png`, animations: 'disabled' });
+});
+
 test('settings cancellation waits for its terminal state and credential removal uses POST', async ({ page }, info) => {
   let cancelled = false;
   const methods: string[] = [];

@@ -206,6 +206,9 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
       arguments: text.includes('文件') ? { path: 'proposal.sh', content: 'printf "CONFIRMED_47\\n"\n', reason: '添加可运行练习' }
         : { command: text.includes('等待') ? 'sleep 30; touch must-not-exist' : 'bash proposal.sh; echo once >> confirmations', reason: '运行已保存练习' },
     }], 'toolUse'));
+    if (text.includes('OAuth 续期失效')) return response({ ...reply([], 'error'),
+      errorMessage: `OAuth refresh failed for ${_model.provider}: OpenAI OAuth token request failed (400): {"error":"invalid_grant","private":"PRIVATE-OAUTH-TOKEN"}`,
+    });
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }
     if (has('submit_assessment') && all.includes('轻量测评验收')) return response(reply([{ type: 'toolCall', id: 'minimal-assessment', name: 'submit_assessment', arguments: {

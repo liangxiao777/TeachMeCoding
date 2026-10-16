@@ -500,6 +500,45 @@ test('exhausted retries, authentication, billing, context overflow and final tex
   }
 });
 
+test('OAuth renewal errors give durable, actionable feedback without retaining provider bodies', async () => {
+  const model = builtinModels().getModel('openai', 'gpt-6.1-sol')!;
+  const selection = { provider: model.provider, model: model.id, thinkingLevel: 'high' as const };
+  const source: ModelSource = { ...syntheticSource, current: () => ({ selection, model }), resolve: () => model };
+  for (const [reason, expected, category] of [
+    ['OAuth refresh failed for openai: OpenAI OAuth token request failed (400): {"error":"invalid_grant","detail":"PRIVATE-REFRESH-TOKEN"}',
+      'ChatGPT 登录已失效，请在应用设置中重新登录。', 'oauth_reauth_required'],
+    ['OAuth refresh failed for openai: OpenAI OAuth token request failed (503): {"error":"server_error","detail":"invalid_grant PRIVATE-REFRESH-TOKEN"}',
+      'ChatGPT 登录暂时无法续期，请稍后重试。', 'oauth_refresh_failed'],
+    ['400 {"error":"invalid_grant","detail":"PRIVATE-REFRESH-TOKEN"}',
+      '模型响应未正常完成，未保存生成产物。', null],
+  ] as const) {
+    const { db, learning, a, sa } = setup();
+    const runtime = new TeachingRuntime(learning, source, { retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
+      stream: () => response({ ...reply([], 'error'), errorMessage: reason }),
+    });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('解释一个概念'));
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(a.id, run.id).state, 'failed');
+      assert.equal(runtime.get(a.id, run.id).error, expected);
+      const events = runtime.events(a.id, run.id).events;
+      assert.ok(events.some((event) => event.data.type === 'state' && event.data.error === expected));
+      const session = learning.session(a.id, sa);
+      assert.equal(session.messages.at(-1)?.error, expected);
+      const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests WHERE request=1').get() as { value: string }).value);
+      assert.equal(manifest.transport.failure?.category ?? null, category);
+      if (category === 'oauth_reauth_required') {
+        assert.equal(manifest.transport.failure.code, 'invalid_grant');
+        assert.equal(manifest.transport.failure.status, 400);
+      }
+      assert.match(manifest.transport.errorFingerprint, /^[a-f0-9]{64}$/);
+      const retained = db.prepare('SELECT value FROM agent_messages').all();
+      const checkpoint = db.prepare('SELECT input FROM agent_runs').all();
+      assert.doesNotMatch(JSON.stringify({ events, session, manifest, retained, checkpoint }), /PRIVATE-REFRESH-TOKEN|"detail"/);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
 test('stop and shutdown interrupt retry backoff without another request or commit', async () => {
   for (const cause of ['stop', 'shutdown']) {
     const { db, learning, a, sa } = setup();

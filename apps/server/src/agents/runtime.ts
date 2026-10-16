@@ -7,6 +7,7 @@ import { AgentSession, convertToLlm, createExtensionRuntime, SettingsManager, ty
 import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
+import { classifyModelFailure } from '../models/failure.js';
 import { compileRequest, hash, retainedMessage, xmlText, type FrozenContext } from './context.js';
 import { defaultHttpIdleTimeoutMs, defaultRetryPolicy, failureStream, providerStream } from './model.js';
 import { createModelTransport } from './model-transport.js';
@@ -119,7 +120,7 @@ export class TeachingRuntime {
   }
   generate(space: string, unit: string, key: string, raw: unknown): AgentRun {
     const input = generationInputSchema.parse(raw);
-    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    if (this.closing || !this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用。');
     const id = this.learning.once(key, `task:${space}:${unit}`, input, () => {
       this.learning.assertAgentInputAllowed(space);
       const w = this.learning.space(space), u = this.learning.unit(space, unit);
@@ -158,7 +159,7 @@ export class TeachingRuntime {
   retryTask(space: string, previousId: string, key: string): AgentRun {
     const previous = this.get(space, previousId);
     if (previous.sessionId || !['failed', 'interrupted'].includes(previous.state)) throw new BusinessError(409, '只能重试失败或中断的独立任务。');
-    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    if (this.closing || !this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用。');
     const id = this.learning.once(key, `retry-task:${space}:${previousId}`, null, () => {
       this.learning.assertAgentInputAllowed(space);
       this.learning.assertUnitUnlocked(space, previous.unitId!);
@@ -201,7 +202,7 @@ export class TeachingRuntime {
   }
   plan(space: string, key: string, raw: unknown): RunSubmission {
     const input = saveRequirementSchema.parse(raw);
-    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    if (this.closing || !this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用。');
     const text = '请根据已确认需求生成完整学习路线，调用路线工具提交阶段、单元及安排说明。';
     const id = this.learning.once(key, `plan:${space}`, input, () => {
       this.learning.saveRequirement(space, { ...input, confirmed: true });
@@ -274,7 +275,7 @@ export class TeachingRuntime {
   answer(space: string, session: string, round: string, key: string, raw: unknown): RunSubmission {
     idSchema.parse(round);
     const input = questionAnswerSchema.parse(raw);
-    if (this.closing || !this.available) throw new BusinessError(503, '教学模型不可用。');
+    if (this.closing || !this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用。');
     const id = this.learning.once(key, `answer:${space}:${session}:${round}`, input, () => {
       const saved = this.learning.session(space, session);
       if (saved.scope !== 'intake') throw new BusinessError(422, '此会话不是需求确认会话。');
@@ -295,7 +296,7 @@ export class TeachingRuntime {
   private begin(space: string, session: string, key: string, raw: unknown, retryOf?: string): RunSubmission {
     const input = messageInputSchema.parse(raw);
     if (this.closing) throw new BusinessError(503, '服务正在关闭。');
-    if (!this.available) throw new BusinessError(503, '教学模型不可用，请在应用设置中检查模型与凭据。');
+    if (!this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用，请在应用设置中检查模型与凭据。');
     const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => this.recordRun(space, session, input, retryOf));
     this.launch(space, id, input.text);
     return { run: this.get(space, id), session: this.learning.session(space, session) };
@@ -392,6 +393,7 @@ export class TeachingRuntime {
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
     let failure = '', request = 0, nativeSeq = 0;
+    let modelFailure: ReturnType<typeof classifyModelFailure>;
     let completion: AssistantMessage | undefined;
     let phase: AgentContext['phase'] = 'ready', compaction: AgentContext['compaction'];
     let usage: AgentContext['usage'] = null;
@@ -481,12 +483,14 @@ export class TeachingRuntime {
               entry.controller.signal.aborted || options?.signal?.aborted);
           }
           responses.push(stream.result().then((message) => {
+            modelFailure = message.stopReason === 'error' ? classifyModelFailure(model.provider, message.errorMessage) : undefined;
             const known = (message.stopReason !== 'error' && message.stopReason !== 'aborted') || message.usage.totalTokens > 0;
             if (known) usage = { input: (usage?.input ?? 0) + message.usage.input, output: (usage?.output ?? 0) + message.usage.output,
               cacheRead: (usage?.cacheRead ?? 0) + message.usage.cacheRead, cacheWrite: (usage?.cacheWrite ?? 0) + message.usage.cacheWrite,
               cost: (usage?.cost ?? 0) + message.usage.cost.total };
             const diagnostic = { ...transport, elapsedMs: Date.now() - transport.startedAt,
               responseId: message.responseId ?? null, stopReason: message.stopReason, rawStopReason: message.rawStopReason ?? null,
+              failure: modelFailure ?? null,
               errorFingerprint: message.errorMessage ? createHash('sha256').update(message.errorMessage).digest('hex') : null };
             this.learning.db.prepare(`UPDATE ${tables.manifests} SET value=json_set(value,'$.actualUsage',json(?),'$.transport',json(?)) WHERE space_id=? AND run_id=? AND request=?`)
               .run(JSON.stringify(known ? message.usage : null), JSON.stringify(diagnostic), space, id, currentRequest);
@@ -583,12 +587,13 @@ export class TeachingRuntime {
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
       if (completion?.stopReason !== 'stop') throw new BusinessError(422,
-        completion?.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
-          : '模型响应未正常完成，未保存生成产物。');
+        modelFailure?.message ?? (completion?.stopReason === 'length' ? '模型输出被截断，未保存生成产物。'
+          : '模型响应未正常完成，未保存生成产物。'));
       // Pi feeds tool errors back to the model; the scenario validates publishable artifacts.
       this.learning.db.transaction(() => { scenario.commit(); persistSession!(); emitContext(); this.finish(space, id, 'succeeded', null); })();
     } catch (error) {
-      this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message : '生成产物或模型运行无效，请重试。'))();
+      this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message
+        : modelFailure?.message ?? '生成产物或模型运行无效，请重试。'))();
     } finally {
       await Promise.all(responses);
       if (this.get(space, id).state !== 'succeeded') persistSession?.();

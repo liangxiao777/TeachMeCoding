@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createProvider, InMemoryCredentialStore } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, createProvider, InMemoryCredentialStore, normalizeContext } from '@earendil-works/pi-ai';
 import { openDatabase } from '../storage/database.js';
 import { ModelService } from './service.js';
 import { BusinessError } from '../modules/learning.js';
@@ -47,6 +47,83 @@ test('readiness reports the exact missing piece instead of a bare unavailable', 
   assert.equal(lost.models.current(), null);
   assert.match((await lost.models.settings()).issue!, /目录/);
   db.close(); lost.db.close();
+});
+
+test('OAuth refresh rejection changes readiness without deleting credentials, and a new login restores it', async () => {
+  for (const [detail, rejected] of [
+    ['OpenAI OAuth token request failed (400): {"error":"invalid_grant","private":"synthetic-refresh-secret"}', true],
+    ['OpenAI OAuth token request failed (401): {"error":{"code":"refresh_token_invalidated"}}', true],
+    ['OpenAI OAuth token request failed (400): {"error":"invalid_client"}', true],
+    ['OpenAI OAuth token request failed (503): {"error":"invalid_grant"}', false],
+    ['OpenAI OAuth token request failed (400): {"error":"unknown","message":"invalid_grant"}', false],
+    ['fetch failed', false],
+  ] as const) {
+    const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
+    const original = { type: 'oauth' as const, access: 'synthetic-access-secret', refresh: 'synthetic-refresh-secret', expires: 0 };
+    await credentials.modify('openai', async () => original);
+    const models = new ModelService(db, { env, credentials, fallback: { provider: 'openai', model: 'gpt-6.1-sol' } });
+    const provider = models.models.getProvider('openai')!;
+    models.models.setProvider({ ...provider, auth: { ...provider.auth, oauth: { ...provider.auth.oauth!,
+      refresh: async () => { throw new Error(detail); },
+      login: async () => ({ ...original, access: 'synthetic-new-access', refresh: 'synthetic-new-refresh', expires: Date.now() + 3_600_000 }),
+    } } });
+    try {
+      await models.refresh();
+      const model = models.current()!.model;
+      const result = await (await models.stream(model, normalizeContext({ messages: [] }))).result();
+      assert.equal(result.stopReason, 'error');
+      const settings = await models.settings();
+      assert.equal(settings.ready, !rejected);
+      assert.equal(models.current() === null, rejected);
+      assert.equal(!!settings.providers.find((p) => p.id === 'openai')?.issue, rejected);
+      assert.deepEqual(await credentials.read('openai'), original, 'Rejected credentials are preserved for explicit recovery');
+      assert.doesNotMatch(JSON.stringify(settings), /synthetic-.*secret|"private"/);
+      await models.refresh();
+      assert.equal(models.ready, !rejected, 'A presence-only refresh must not erase a known rejection');
+      if (!rejected) continue;
+      assert.equal(settings.issue, 'ChatGPT 登录已失效，请在应用设置中重新登录。');
+      await models.select({ ...stealth, thinkingLevel: 'high' });
+      assert.equal(models.ready, true, 'The failure is scoped to its provider');
+      await models.select({ provider: 'openai', model: model.id, thinkingLevel: 'high' });
+      assert.equal(models.ready, false, 'Reselecting a model is not reauthentication');
+      const login = models.login('openai', { type: 'oauth' });
+      await waitFor(() => models.getLogin(login.id), (s) => s.state === 'succeeded', 'OAuth reconnection');
+      await models.refresh();
+      assert.equal(models.ready, true);
+      assert.equal((await models.settings()).providers.find((p) => p.id === 'openai')?.issue, undefined);
+      assert.equal((await credentials.read('openai'))?.type, 'oauth');
+    } finally { models.close(); db.close(); }
+  }
+});
+
+test('an older successful request cannot clear a known OAuth refresh rejection', async () => {
+  const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
+  const credential = { type: 'oauth' as const, access: 'synthetic-access', refresh: 'synthetic-refresh', expires: Date.now() + 3_600_000 };
+  await credentials.modify('openai', async () => credential);
+  const models = new ModelService(db, { env: noenv, credentials, fallback: { provider: 'openai', model: 'gpt-6.1-sol' } });
+  const provider = models.models.getProvider('openai')!, held = createAssistantMessageEventStream();
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const stream = () => { entered(); return held; };
+  models.models.setProvider({ ...provider, stream, streamSimple: stream, auth: { ...provider.auth, oauth: { ...provider.auth.oauth!,
+    toAuth: async (saved) => ({ apiKey: saved.access }),
+    refresh: async () => { throw new Error('OpenAI OAuth token request failed (400): {"error":"invalid_grant"}'); },
+  } } });
+  try {
+    await models.refresh();
+    const model = models.current()!.model, context = normalizeContext({ messages: [] });
+    const old = await models.stream(model, context);
+    await started;
+    await credentials.modify('openai', async () => ({ ...credential, expires: 0 }));
+    const rejected = await (await models.stream(model, context)).result();
+    assert.equal(rejected.stopReason, 'error');
+    assert.equal(models.ready, false);
+    const { errorMessage: _error, ...metadata } = rejected;
+    held.push({ type: 'done', reason: 'stop', message: { ...metadata, stopReason: 'stop', content: [{ type: 'text', text: 'Earlier response.' }] } });
+    assert.equal((await old.result()).stopReason, 'stop');
+    assert.equal((await models.settings()).ready, false, 'Success with an earlier access token does not repair its rejected refresh token');
+    assert.equal(models.issue, 'ChatGPT 登录已失效，请在应用设置中重新登录。');
+  } finally { models.close(); db.close(); }
 });
 
 test('selection validation rejects unknown providers, unknown models and unsupported levels', async () => {

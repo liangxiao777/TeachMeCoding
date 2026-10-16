@@ -324,12 +324,14 @@ test('stream survives page reload and session switching; stop and model failure 
   await page.getByRole('menuitem', { name: /^学习需求/ }).click();
   await page.getByRole('button', { name: '停止', exact: true }).click();
   await expect(page.getByText(/^已停止生成/)).toBeVisible();
-  await send(page, '模型失败');
-  await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
-  await page.screenshot({ path: `.amp/in/artifacts/teaching-failure-${info.project.name}.png`, animations: 'disabled' });
+  await send(page, 'OAuth 续期失效');
+  const failure = page.getByRole('alert').filter({ hasText: 'openrouter 登录已失效，请在应用设置中重新登录。' });
+  await expect(failure).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('PRIVATE-OAUTH-TOKEN');
+  await failure.screenshot({ path: `.amp/in/artifacts/oauth-conversation-failure-${info.project.name}.png`, animations: 'disabled' });
   await page.reload();
-  await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
-  await expect(page.getByText('模型失败', { exact: true })).toHaveCount(1);
+  await expect(failure).toBeVisible();
+  await expect(page.getByText('OAuth 续期失效', { exact: true })).toHaveCount(1);
 });
 
 test('reasoning assessment failure retries the same attempt; expired evidence stays historical', async ({ page }, info) => {
@@ -491,7 +493,7 @@ test('empty requirements are editable and late intake cannot replace saved or un
       await expect(page.getByLabel('回答 2', { exact: true })).toHaveValue('只会 SQL');
       await page.screenshot({ path: `.amp/in/artifacts/intake-manual-${info.project.name}.png`, animations: 'disabled' });
       await page.getByRole('button', { name: '保存', exact: true }).click();
-    } else await expect(page.getByText('回复失败，你的问题已保留', { exact: true })).toBeVisible();
+    } else await expect(page.getByRole('alert').filter({ hasText: '需求已改变，本轮问题和资料未发布。' })).toBeVisible();
     await expect(page.locator('td, dd').filter({ hasText: /^手动指定：分析日志文件$/ })).toBeVisible();
     await page.reload();
     await expect(page.locator('td, dd').filter({ hasText: /^只会 SQL$/ })).toBeVisible();

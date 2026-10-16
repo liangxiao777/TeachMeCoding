@@ -12,10 +12,12 @@ import { loginAnswerSchema, loginStartSchema, modelSelectionSchema, type LoginEv
   type ModelSettings, type ModelSummary, type ProviderSummary } from '@teach-me-coding/contracts';
 import type { EnvLookup } from '../config/model.js';
 import { BusinessError } from '../modules/learning.js';
+import { classifyModelFailure } from './failure.js';
 
 export interface ModelChoice { selection: ModelSelection; model: Model<Api> }
 /** What the teaching runtime needs: the frozen choice for new work and model lookup for saved work. */
 export interface ModelSource {
+  readonly issue?: string | null;
   current(): ModelChoice | null;
   resolve(selection: ModelSelection): Model<Api> | undefined;
   sessionRuntime(model: Model<Api>): Promise<ModelRuntime>;
@@ -38,7 +40,9 @@ type Live = LoginSession & { controller: AbortController; answer?: (value: strin
 export class ModelService implements ModelSource {
   readonly models: MutableModels;
   private credentials: CredentialStore;
-  private status = { ready: false, issue: '正在检查模型配置。' as string | null };
+  private configurationIssue: string | null = '正在检查模型配置。';
+  private authIssues = new Map<string, string>();
+  private authEpochs = new Map<string, number>();
   private logins = new Map<string, Live>();
   constructor(private db: Database.Database | null, private options: {
     env: EnvLookup; credentials?: CredentialStore; fallback?: { provider: string; model: string } | null;
@@ -46,8 +50,24 @@ export class ModelService implements ModelSource {
     this.credentials = options.credentials ?? new InMemoryCredentialStore();
     this.models = builtinModels({ credentials: this.credentials, authContext: authContext(options.env) });
   }
-  readonly stream: StreamFn = (model, context, options) => this.models.streamSimple(model, context, options);
-  get ready() { return this.status.ready; }
+  readonly stream: StreamFn = async (model, context, options) => {
+    const epoch = this.authEpochs.get(model.provider) ?? 0;
+    const stream = this.models.streamSimple(model, context, options);
+    void stream.result().then((message) => {
+      // A request using old credentials must not invalidate a later login.
+      if (epoch !== (this.authEpochs.get(model.provider) ?? 0)) return;
+      const failure = message.stopReason === 'error' ? classifyModelFailure(model.provider, message.errorMessage) : undefined;
+      if (failure?.category === 'oauth_reauth_required') this.authIssues.set(model.provider, failure.message);
+    }, () => {});
+    return stream;
+  };
+  get issue() { return this.configurationIssue ?? this.authIssues.get(this.selection()?.provider ?? '') ?? null; }
+  get ready() { return this.issue === null; }
+
+  private resetAuthIssue(provider: string) {
+    this.authEpochs.set(provider, (this.authEpochs.get(provider) ?? 0) + 1);
+    this.authIssues.delete(provider);
+  }
 
   async sessionRuntime(model: Model<Api>) {
     const provider = this.models.getProvider(model.provider);
@@ -84,7 +104,7 @@ export class ModelService implements ModelSource {
   resolve(selection: ModelSelection) { return this.models.getModel(selection.provider, selection.model); }
   current(): ModelChoice | null {
     const selection = this.selection(), model = selection && this.resolve(selection);
-    return this.status.ready && selection && model ? { selection, model } : null;
+    return this.ready && selection && model ? { selection, model } : null;
   }
   /** Recompute availability. Auth checks never refresh OAuth or reveal credentials. */
   async refresh() {
@@ -94,7 +114,7 @@ export class ModelService implements ModelSource {
     else if (!model) issue = '所选模型不在 pi-ai 模型目录中，请重新选择。';
     else if (!getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) issue = '所选模型不支持当前推理强度，请重新选择。';
     else if (!await this.models.checkAuth(selection.provider).catch(() => undefined)) issue = '所选 Provider 尚未配置凭据，请在设置中登录或配置 API Key。';
-    this.status = { ready: issue === null, issue };
+    this.configurationIssue = issue;
   }
 
   async settings(): Promise<ModelSettings> {
@@ -104,13 +124,14 @@ export class ModelService implements ModelSource {
       return {
         id: p.id, name: p.name, models: this.models.getModels(p.id).length, stored: stored.get(p.id) ?? null,
         configured: check ? { type: check.type, ...(check.source ? { source: check.source } : {}) } : null,
+        ...(this.authIssues.has(p.id) ? { issue: this.authIssues.get(p.id)! } : {}),
         auth: {
           ...(p.auth.apiKey ? { apiKey: { name: p.auth.apiKey.name, login: !!p.auth.apiKey.login } } : {}),
           ...(p.auth.oauth ? { oauth: { name: p.auth.oauth.name, ...(p.auth.oauth.loginLabel ? { label: p.auth.oauth.loginLabel } : {}), subscription: !!p.auth.oauth.isSubscription } } : {}),
         },
       };
     }));
-    return { selection: this.selection(), ready: this.status.ready, issue: this.status.issue, providers };
+    return { selection: this.selection(), ready: this.ready, issue: this.issue, providers };
   }
   modelsOf(provider: string): ModelSummary[] {
     if (!this.models.getProvider(provider)) throw new BusinessError(404, 'Provider 不存在。');
@@ -168,7 +189,7 @@ export class ModelService implements ModelSource {
       for (const s of [signal, session.controller.signal]) s?.addEventListener('abort', () => { clear(); reject(new Error('Login cancelled.')); }, { once: true });
     });
     void this.models.login(providerId, type, { signal: session.controller.signal, prompt, notify }, { getDeviceId: () => this.deviceId() })
-      .then(() => { session.state = 'succeeded'; })
+      .then(() => { this.resetAuthIssue(providerId); session.state = 'succeeded'; })
       .catch((error: unknown) => {
         session.state = session.controller.signal.aborted ? 'cancelled' : 'failed';
         // Provider errors are shown; any secret typed in this session is redacted first.
@@ -202,6 +223,7 @@ export class ModelService implements ModelSource {
   async logout(providerId: string) {
     if (!this.models.getProvider(providerId)) throw new BusinessError(404, 'Provider 不存在。');
     await this.models.logout(providerId);
+    this.resetAuthIssue(providerId);
     await this.refresh();
     return this.settings();
   }
