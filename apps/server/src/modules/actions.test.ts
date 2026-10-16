@@ -31,7 +31,11 @@ test('immutable proposals require confirmation, fence stale files, and never rep
     const saved = file('exact content'); actions.save(space.id, saved);
     decide(saved, 'confirm'); decide(saved, 'confirm'); await actions.idle(saved.id);
     assert.equal(projects.read(space.id, 'sample.txt').content, 'exact content');
-    assert.equal(learning.session(space.id, session).messages.length, 2);
+    const receipts = learning.session(space.id, session).messages;
+    assert.equal(receipts.length, 2);
+    assert.match(receipts[0]!.text, /文件修改.*已拒绝.*sample\.txt/);
+    assert.match(receipts[1]!.text, /文件修改.*已完成.*sample\.txt/);
+    assert.ok(receipts.every((m) => !m.text.includes(p.id) && !m.text.includes(saved.id) && !m.text.includes(projects.root(space.id))));
     const stale = file('must not overwrite'); actions.save(space.id, stale);
     writeFileSync(join(projects.root(space.id), 'sample.txt'), 'external');
     assert.throws(() => decide(stale, 'confirm'), /版本已变化/);
@@ -51,6 +55,10 @@ test('immutable proposals require confirmation, fence stale files, and never rep
     assert.equal(actions.get(space.id, once.id).result?.exitCode, 7);
     assert.equal(actions.get(space.id, once.id).result?.output, 'actual-output\n');
     assert.equal(actions.get(space.id, once.id).state, 'failed');
+    const receipt = learning.session(space.id, session).messages.at(-1)!.text;
+    assert.match(receipt, /命令执行失败.*退出码 7/);
+    assert.match(receipt, /actual-output/);
+    assert.equal(receipt.includes(once.id), false);
     const staleCommand = command('touch stale-command'); actions.save(space.id, staleCommand);
     writeFileSync(join(projects.root(space.id), 'sample.txt'), 'changed again');
     assert.throws(() => decide(staleCommand, 'confirm'), /项目已变化/);
@@ -80,7 +88,7 @@ test('Pi proposes without side effects, discards failed turns and gets original-
   const runtime = new TeachingRuntime(learning, syntheticSource, { actions, projectDirectory: (s) => projects.root(s), stream: async (_m, context) => {
     if (context.messages.at(-1)?.role === 'toolResult') return response(reply([{ type: 'text', text: '请确认。' }], failed ? 'error' : 'stop'));
     evidence = JSON.stringify(context.messages);
-    return response(reply([{ type: 'toolCall', id: randomUUID(), name: 'propose_command', arguments: { command: 'echo verified > proof', reason: '验证提案' } }], 'toolUse'));
+    return response(reply([{ type: 'toolCall', id: randomUUID(), name: 'propose_file_change', arguments: { path: 'proof', content: 'verified\n', reason: '验证提案' } }], 'toolUse'));
   } });
   try {
     const submit = () => runtime.submit(space.id, session, randomUUID(), { text: 'propose', quote: null, draftRevision: learning.session(space.id, session).draft.revision }).run;

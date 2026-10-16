@@ -87,9 +87,8 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   const terminalInput = page.getByRole('textbox', { name: '本机终端输入', exact: true });
   const terminalPanel = ide.locator('[data-slot="resizable-panel"]').filter({ has: terminalInput });
   await code.fill('fn main() {\n    println!("local project");\n}\n');
-  await page.getByRole('button', { name: '保存文件', exact: true }).click();
   await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toHaveCount(0);
   const tree = await box(page.getByRole('complementary', { name: '单元材料' }));
   const editor = await box(code);
   const terminal = await box(terminalPanel);
@@ -147,7 +146,7 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await spaceCard(page, '存储验收 Rust').getByRole('button', { name: '继续学习', exact: true }).click();
   await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');
-  await expect(ide.getByRole('status').filter({ hasText: /^未保存$/ })).toBeVisible();
+  await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
   await expect(page.getByLabel('会话草稿状态', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存会话', exact: true })).toHaveCount(0);
   await expect.poll(async () => (await box(ide)).height).toBeCloseTo(normalHeight, 0);

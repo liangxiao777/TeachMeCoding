@@ -201,10 +201,8 @@ export const agentTransport: StreamFn = async (_model, context, options) => {
     return response(reply([{ type: 'text', text: '课件修改已提议，请在课件中核对变化，然后接受或拒绝。' }]));
   }
   if (last?.role !== 'toolResult') {
-    if (has('propose_command') && text.includes('本机提案')) return response(reply([{ type: 'toolCall', id: 'local-proposal',
-      name: text.includes('文件') ? 'propose_file_change' : 'propose_command',
-      arguments: text.includes('文件') ? { path: 'proposal.sh', content: 'printf "CONFIRMED_47\\n"\n', reason: '添加可运行练习' }
-        : { command: text.includes('等待') ? 'sleep 30; touch must-not-exist' : 'bash proposal.sh; echo once >> confirmations', reason: '运行已保存练习' },
+    if (has('propose_file_change') && text.includes('本机提案文件')) return response(reply([{ type: 'toolCall', id: 'local-proposal', name: 'propose_file_change',
+      arguments: { path: 'proposal.sh', content: text.includes('替换') ? '# Use the caller input\nprintf "UPDATED_83\\n"\n' : 'printf "CONFIRMED_47\\n"\n', reason: '添加可运行练习' },
     }], 'toolUse'));
     if (text.includes('失败')) return response(reply([], 'error'));
     if (has('submit_evaluation') && all.includes('FAIL-ONCE') && !evaluationFailed) { evaluationFailed = true; return response(reply([], 'error')); }

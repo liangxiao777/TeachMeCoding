@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { actionDecisionSchema, commandProposalSchema, fileProposalSchema, idSchema, type ActionProposal, type CommandResult } from '@teach-me-coding/contracts';
+import { actionDecisionSchema, actionReceipt, commandProposalSchema, fileProposalSchema, idSchema, type ActionProposal, type CommandResult } from '@teach-me-coding/contracts';
 import { hash } from '../agents/context.js';
 import { BusinessError, type Learning } from './learning.js';
 import type { Projects } from './projects.js';
@@ -45,7 +45,7 @@ export class Actions {
   private finish(space: string, p: ActionProposal, state: ActionProposal['state'], result: CommandResult | null) {
     this.learning.db.transaction(() => {
       this.update(space, { ...p, state, result });
-      const text = `本机操作 ${p.id}：${state}。${result ? `退出码 ${result.exitCode ?? '无'}；${result.status}。\n${result.output}` : '没有执行。'}\n取消或中断不代表撤销已有修改。`;
+      const text = actionReceipt({ ...p, state, result });
       this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent',?,NULL,?)").run(space, p.sessionId, randomUUID(), text, Date.now());
     })();
   }

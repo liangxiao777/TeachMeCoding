@@ -1,6 +1,6 @@
 'use client'
 
-import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, RefreshCw, Save, TerminalSquare, Trash2, X } from 'lucide-react'
+import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { CodeEditor, type EditorPosition } from '@/components/code-editor'
@@ -129,7 +129,6 @@ export function IdePanel() {
   const termEnd = useRef<HTMLDivElement>(null)
   const activeTab = useRef<HTMLButtonElement>(null)
   const file = space.files.find((f) => f.id === space.activeFileId)
-  const disk = file && persistence?.disk?.path === entryPath(space, file.id) ? persistence.disk : null
   const positions = useRef(new Map<string, EditorPosition>())
   if (file && !positions.current.has(file.id)) positions.current.set(file.id, { start: 0, end: 0, top: 0, left: 0 })
   const terminal = usePanelRef()
@@ -212,34 +211,10 @@ export function IdePanel() {
             })}
         </div>
         {!space.ideFullscreen && <EnvChip />}
-        {persistence && (
-          <>
-            {file && (
-              <span role="status" className="shrink-0 text-[10px] text-muted-foreground">
-                {persistence.fileDirty ? '未保存' : '已保存'}
-              </span>
-            )}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="保存文件"
-              title="保存文件"
-              disabled={!persistence.ready || persistence.busy || !file || !persistence.fileDirty}
-              onClick={persistence.saveFile}
-            >
-              <Save />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="读取磁盘版本"
-              title="读取磁盘版本"
-              disabled={!persistence.ready || persistence.busy || !file}
-              onClick={persistence.compareFile}
-            >
-              <RefreshCw />
-            </Button>
-          </>
+        {persistence && file && (
+          <span role="status" title={persistence.fileSaveError ?? undefined} className="shrink-0 text-[10px] text-muted-foreground">
+            {persistence.fileSaveError ? '保存失败' : persistence.fileDirty ? '正在保存…' : '已保存'}
+          </span>
         )}
         <Separator orientation="vertical" className="h-5" />
         {file && (
@@ -289,7 +264,7 @@ export function IdePanel() {
           if (meta.isUserInteraction) terminalSizes.current[space.ideFullscreen ? 'full' : 'normal'] = layout.terminal!
         }}
       >
-        <ResizablePanel id="editor" minSize="30%" className={cn('flex min-h-0 flex-col', disk && 'flex-row')}>
+        <ResizablePanel id="editor" minSize="30%" className="flex min-h-0 flex-col">
           {file ? (
             <CodeEditor
               key={file.id}
@@ -297,6 +272,7 @@ export function IdePanel() {
               label={`编辑 ${file.name}`}
               filename={file.name}
               value={file.content}
+              disabled={persistence?.fileRenaming}
               position={positions.current.get(file.id)}
               onChange={(v) => updateFile(file.id, v)}
               onSelectText={setSelected}
@@ -322,30 +298,6 @@ export function IdePanel() {
                 </Button>
               </EmptyContent>
             </Empty>
-          )}
-          {disk && persistence && (
-            <section aria-label="磁盘版本比较" className="flex w-1/2 min-w-0 flex-col gap-3 overflow-auto border-l p-3">
-              <h3 className="text-xs font-medium text-muted-foreground">磁盘版本（左侧为本地编辑）</h3>
-              <pre className="flex-1 whitespace-pre-wrap break-words font-mono text-xs">{disk.content}</pre>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-auto whitespace-normal py-2"
-                disabled={!persistence.ready || persistence.busy}
-                onClick={() => persistence.resolveFile(true)}
-              >
-                保留编辑，基于此版本继续
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-auto whitespace-normal py-2"
-                disabled={!persistence.ready || persistence.busy}
-                onClick={() => persistence.resolveFile(false)}
-              >
-                放弃编辑，采用磁盘内容
-              </Button>
-            </section>
           )}
         </ResizablePanel>
         <ResizableHandle aria-label="调整终端大小" />

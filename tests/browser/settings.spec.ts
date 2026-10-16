@@ -303,7 +303,7 @@ test('settings cancellation waits for its terminal state and credential removal 
   expect(methods).toEqual(['POST cancel', 'POST logout']);
 });
 
-test('settings preserves the current unit, unsaved code, conversation input and PTY connection', async ({ page }, info) => {
+test('settings preserves the current unit, autosaved code, conversation input and PTY connection', async ({ page }, info) => {
   const seed = JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
   // Other browser tests rename seeded files and stop their shell; use a dedicated file and restart if needed.
   writeFileSync(join(seed.root, 'projects', seed.spaceId, 'settings-navigation.rs'), '// saved settings fixture');
@@ -340,7 +340,7 @@ test('settings preserves the current unit, unsaved code, conversation input and 
   await settingsPage.getByRole('button', { name: '返回', exact: true }).click();
   await expect(editor).toHaveText('// unsaved settings navigation', { useInnerText: true });
   await expect(composer).toHaveValue('保留本单元未发送的问题');
-  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
+  await expect.poll(() => readFileSync(join(seed.root, 'projects', seed.spaceId, 'settings-navigation.rs'), 'utf8')).toBe('// unsaved settings navigation');
   await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
   await expect(page).toHaveURL(url);
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();

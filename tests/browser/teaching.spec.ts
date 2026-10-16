@@ -755,8 +755,7 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   await expect(groups.last().getByRole('button', { name: '工具调用', exact: true })).toHaveAttribute('aria-expanded', 'false');
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   await expect(page.getByLabel('编辑 agent_example.py', { exact: true })).toHaveText('print("hello")', { useInnerText: true });
-  await page.getByRole('button', { name: '保存文件', exact: true }).click();
-  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
+  await expect(page.getByRole('region', { name: 'IDE 与终端', exact: true }).getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
   const code = await page.evaluate(async () => {
     const { token } = await (await fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } })).json();
     const space = new URL(location.href).searchParams.get('space');
@@ -1263,7 +1262,7 @@ async function workspace(page: Page, name: string) {
   }, name);
 }
 
-test('local proposals require confirmation, recover pending cards and return real execution to their session', async ({ page }, info) => {
+test('file proposals require confirmation, recover pending cards and preserve autosave and retry protections', async ({ page }, info) => {
   test.setTimeout(60000);
   await create(page, `确认本机操作 ${info.project.name}`);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
@@ -1274,28 +1273,56 @@ test('local proposals require confirmation, recover pending cards and return rea
   const ask = async (text: string) => { await page.getByLabel('向 Agent 提问', { exact: true }).fill(text); await page.getByRole('button', { name: '发送', exact: true }).click(); };
   const last = page.getByTestId('local-action').last();
   await ask('本机提案文件');
-  await expect(last).toContainText('待确认');
+  await expect(last.getByRole('heading')).toHaveText('文件修改');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeEnabled();
   await expect(page.getByRole('treeitem', { name: 'proposal.sh', exact: true })).toHaveCount(0);
-  await last.getByText('查看完整修改前后内容', { exact: true }).click();
-  await expect(last.locator('pre').last()).toHaveText('printf "CONFIRMED_47\\n"');
+  await expect(last.locator('[data-change="added"] code')).toHaveText('printf "CONFIRMED_47\\n"');
+  await expect(last.locator('[data-change="removed"]')).toHaveCount(0);
+  expect(await last.innerText()).not.toMatch(/工作目录|提案|沙箱|权限|KiB|UUID/);
   await last.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `.amp/in/artifacts/action-file-pending-${info.project.name}.png` });
   await page.reload();
-  await expect(last).toContainText('待确认');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeEnabled();
   await last.getByRole('button', { name: '拒绝', exact: true }).click();
   await expect(last).toContainText('已拒绝');
   await expect(page.getByRole('treeitem', { name: 'proposal.sh', exact: true })).toHaveCount(0);
   await ask('本机提案文件');
-  await expect(last).toContainText('待确认');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeEnabled();
   await last.getByRole('button', { name: '确认执行', exact: true }).click();
-  await expect(last).toContainText('成功');
+  await expect(last.getByRole('status')).toHaveText('已修改');
   await page.getByRole('treeitem', { name: 'proposal.sh', exact: true }).click();
   await expect(page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true })).toHaveText('printf "CONFIRMED_47\\n"\n', { useInnerText: true });
-  await ask('本机提案命令');
-  await expect(last).toContainText('待确认');
+  await ask('本机提案文件替换');
+  await expect(last.locator('[data-change="removed"] code')).toHaveText('printf "CONFIRMED_47\\n"');
+  await expect(last.locator('[data-change="added"] code')).toHaveText(['# Use the caller input', 'printf "UPDATED_83\\n"']);
+  await expect(last.locator('[data-change]')).toHaveCount(3);
+  await expect(last.locator('[data-change="added"]').last().getByText('2', { exact: true })).toBeVisible();
+  await expect.poll(() => last.locator('[data-change="added"] code').last().evaluate((el) =>
+    new Set([...el.querySelectorAll('span')].map((token) => getComputedStyle(token).color)).size)).toBeGreaterThan(1);
+  await last.screenshot({ path: `.amp/in/artifacts/action-file-diff-${info.project.name}.png` });
+  await last.getByRole('button', { name: '拒绝', exact: true }).click();
+  await expect(last.getByRole('status')).toHaveText('已拒绝');
+  await ask('本机提案文件替换');
+  await expect(last.getByRole('heading')).toHaveText('文件修改');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeEnabled();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/project/save', async (route) => { const response = await route.fetch(); await held; await route.fulfill({ response }); });
   await page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true }).fill('new buffer');
   await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeDisabled();
+  await expect(last.getByRole('status')).toHaveText('等待自动保存');
+  await last.screenshot({ path: `.amp/in/artifacts/action-autosaving-${info.project.name}.png` });
   await page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true }).fill('printf "CONFIRMED_47\\n"\n');
+  release();
+  await expect(page.getByRole('region', { name: 'IDE 与终端', exact: true }).getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
+  await page.unroute('**/project/save');
+  // Restoring the text does not restore the disk version fenced by the proposal.
+  await last.getByRole('button', { name: '确认执行', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '文件版本已变化' })).toBeVisible();
+  await page.reload();
+  await expect(last.getByRole('status')).toHaveText('已失效');
+  await ask('本机提案文件替换');
+  await expect(last.getByRole('button', { name: '确认执行', exact: true })).toBeEnabled();
   let dropped = false;
   await page.route('**/actions/*', async (route) => {
     if (!dropped && route.request().method() === 'POST') { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
@@ -1303,18 +1330,13 @@ test('local proposals require confirmation, recover pending cards and return rea
   await last.getByRole('button', { name: '确认执行', exact: true }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(last).toContainText('成功');
-  await expect(last).toContainText('CONFIRMED_47');
-  await page.getByRole('treeitem', { name: 'confirmations', exact: true }).click();
-  await expect(page.getByLabel('编辑 confirmations', { exact: true }).filter({ visible: true })).toHaveText('once\n', { useInnerText: true });
+  await expect(last.getByRole('status')).toHaveText('已修改');
+  await page.getByRole('treeitem', { name: 'proposal.sh', exact: true }).click();
+  await expect(page.getByLabel('编辑 proposal.sh', { exact: true }).filter({ visible: true })).toHaveText('# Use the caller input\nprintf "UPDATED_83\\n"\n', { useInnerText: true });
   await last.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `.amp/in/artifacts/action-command-result-${info.project.name}.png` });
-  await ask('本机提案等待');
-  await expect(last).toContainText('待确认');
-  await last.getByRole('button', { name: '确认执行', exact: true }).click();
-  await last.getByRole('button', { name: '取消执行', exact: true }).click();
-  await expect(last).toContainText('已取消');
-  await expect(page.getByRole('treeitem', { name: 'must-not-exist', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `.amp/in/artifacts/action-file-result-${info.project.name}.png` });
+  const visible = await page.getByRole('log', { name: 'Agent 会话', exact: true }).innerText();
+  expect(visible).not.toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|工作目录|本机操作 |取消或中断不代表/);
 });
 
 test('real code assessment shows errors and cancellation, fixes output and keeps newer drafts separate', async ({ page }, info) => {
