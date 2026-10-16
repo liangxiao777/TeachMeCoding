@@ -28,7 +28,7 @@ test('all six scenes retain their ordered business tools across independent Skil
   const expected = {
     intake: ['ask_user_question', 'write_research_document', 'submit_requirement_draft'],
     roadmap: ['add_route_stage', 'add_route_unit', 'update_route_stage', 'update_route_unit', 'remove_route_unit', 'remove_route_stage', 'submit_route_proposal'],
-    tutor: ['read', 'ls', 'find', 'grep', 'propose_file_change', 'propose_command', 'submit_learning_conclusion'],
+    tutor: ['read', 'ls', 'find', 'grep', 'propose_file_change', 'submit_learning_conclusion'],
     lesson: ['read_learning_route', 'read_reference_lesson', 'submit_lesson'], assessment: ['submit_assessment'], evaluation: ['submit_evaluation'],
   } as const;
   try {
@@ -150,6 +150,7 @@ test('all six scenes can list and read global documents and execute Bash by defa
       const prepared = await prepareTools({ scenarioTools: base, cwd: () => root, hasSkills: false, library, runId, signal: new AbortController().signal });
       const names = prepared.declarations.map((t) => t.name);
       for (const name of ['read', 'ls', 'find', 'grep', 'list_library_files', 'bash']) assert.ok(names.includes(name), `${scenario}: ${name}`);
+      assert.equal(names.includes('propose_command'), false, scenario);
       assert.equal(names.includes('shell'), false);
       assert.equal(names.length, new Set(names).size);
       const listing = await prepared.tools.find((t) => t.name === 'list_library_files')!.execute('list', {});

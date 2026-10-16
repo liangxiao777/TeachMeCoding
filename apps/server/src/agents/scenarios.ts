@@ -1,5 +1,5 @@
 import { Type } from '@earendil-works/pi-ai';
-import { commandProposalSchema, fileProposalSchema, conclusionSchema, type ActionProposal } from '@teach-me-coding/contracts';
+import { fileProposalSchema, conclusionSchema, type ActionProposal } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from '../modules/learning.js';
 import type { Actions } from '../modules/actions.js';
 import type { FrozenContext } from './context.js';
@@ -35,12 +35,6 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
       parameters: Type.Unsafe<ReturnType<typeof fileProposalSchema.parse>>(JSON.parse(JSON.stringify(fileProposalSchema.toJSONSchema()))),
       async execute(_id, args) {
         const p = actions.prepare(input.spaceId, input.sessionId!, runId, 'file', args); proposals.push(p);
-        return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
-      } },
-    { name: 'propose_command', label: '提议本机命令', description: 'Propose a bash command in the current project directory. Does not execute; requires explicit user confirmation. Never auto-install toolchains.',
-      parameters: Type.Unsafe<ReturnType<typeof commandProposalSchema.parse>>(JSON.parse(JSON.stringify(commandProposalSchema.toJSONSchema()))),
-      async execute(_id, args) {
-        const p = actions.prepare(input.spaceId, input.sessionId!, runId, 'command', args); proposals.push(p);
         return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
       } },
   ] : [];

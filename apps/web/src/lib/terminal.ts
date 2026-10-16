@@ -9,8 +9,10 @@ export class LocalTerminal {
   private connecting = false
   private attached = false
   private generation = 0
+  private inputEpoch = 0
+  private inputs: Promise<unknown> = Promise.resolve()
   snapshot: Extract<TerminalEvent, { type: 'snapshot' }> | null = null
-  constructor(private space: string, private status: (connected: boolean) => void, private inputAllowed: () => boolean) {}
+  constructor(private space: string, private status: (connected: boolean) => void, private beforeInput: () => Promise<void>) {}
   subscribe(receive: (event: TerminalEvent) => void) {
     this.listeners.add(receive)
     if (this.snapshot) receive(this.snapshot)
@@ -51,12 +53,37 @@ export class LocalTerminal {
       if (!this.disposed) this.reconnect = setTimeout(() => { void this.connect() }, 1500)
     }
   }
-  send(type: 'input' | 'resize' | 'stop' | 'restart', values: { data?: string; cols?: number; rows?: number } = {}) {
-    if (type === 'input' && values.data !== '\x03' && !this.inputAllowed()) {
-      this.emit({ type: 'error', message: '有未保存文件；输入未发送。请先保存全部文件，Ctrl+C 和停止仍可使用。' })
-      return false
+  input(data: string): Promise<boolean> {
+    if (data === '\x03') {
+      this.inputEpoch++
+      return Promise.resolve(this.send('input', { data }))
     }
-    // Never queue/replay input across a reconnect or a new shell instance.
+    if (this.socket?.readyState !== WebSocket.OPEN || !this.snapshot || !this.attached) {
+      this.emit({ type: 'error', message: '连接中断，输入未发送；请重连后重新输入。' })
+      return Promise.resolve(false)
+    }
+    const generation = this.generation, id = this.snapshot.id, epoch = this.inputEpoch
+    const valid = () => !this.disposed && this.attached && generation === this.generation && id === this.snapshot?.id && epoch === this.inputEpoch
+    const next = this.inputs.then(async () => {
+      if (!valid()) return false
+      try { await this.beforeInput() }
+      catch {
+        if (valid()) {
+          this.inputEpoch++
+          this.emit({ type: 'error', message: '文件自动保存失败，输入未发送；请重试保存后重新输入。Ctrl+C 和停止仍可使用。' })
+        }
+        return false
+      }
+      // Waiting for a save must not replay input into a reconnected/new shell,
+      // or execute a command the user cancelled while it was waiting.
+      if (!valid()) return false
+      return this.send('input', { data })
+    })
+    this.inputs = next
+    return next
+  }
+  send(type: 'input' | 'resize' | 'stop' | 'restart', values: { data?: string; cols?: number; rows?: number } = {}) {
+    if (type === 'stop' || type === 'restart') this.inputEpoch++
     if (this.socket?.readyState !== WebSocket.OPEN || !this.snapshot || !this.attached) {
       if (type === 'input') this.emit({ type: 'error', message: '连接中断，输入未发送；请重连后重新输入。' })
       return false

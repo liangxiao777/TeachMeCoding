@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react'
-import type { ActionProposal, AgentContext, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, LessonProposal, ProjectFile, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
+import type { ActionProposal, AgentContext, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, LessonProposal, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 import type { LocalTerminal } from '@/lib/terminal'
 
@@ -62,7 +62,7 @@ export interface AppModel {
   viewRecord: (id: string) => void
   goNextUnit: Action
   backToStudy: Action
-  /** Only real storage has manual-save/conflict states. Absent in the isolated preview. */
+  /** Real storage state and operations. Absent in the isolated preview. */
   persistence?: {
     ready: boolean
     busy: boolean
@@ -82,14 +82,11 @@ export interface AppModel {
     saveName: Action
     assessmentDirty: boolean
     fileDirty: boolean
-    unsavedFiles: string[]
-    saveFiles: Action
+    fileSaveError: string | null
+    fileRenaming: boolean
+    filesPending: boolean
     saveAssessment: Action
-    saveFile: Action
-    compareFile: Action
     refreshFiles: Action
-    disk: ProjectFile | null
-    resolveFile: (keepLocal: boolean) => void
     proposals: Proposal[]
     routeRevision: number
     requirementRevision: number

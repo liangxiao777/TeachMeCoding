@@ -17,7 +17,7 @@ interface StoredSpace {
   drafts: Record<string, AssessmentDraft>
   tree: ProjectEntry[]
   files: Record<string, ProjectFile>
-  disk: ProjectFile | null
+  renamingPath: string | null
   requirementDraft: RequirementDraft | null
   planningError: string | null
   taskParts: Record<string, AgentDisplayPart[]>
@@ -28,7 +28,6 @@ interface StoredSpace {
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const latestPlan = (saved: Workspace) => saved.runs.filter((work) => work.kind === 'roadmap').at(-1)
 const answers = (d: { q1: string; q2: string }) => ({ q1: d.q1, q2: d.q2 })
-const unsavedFiles = (s: StoredSpace) => s.ui.files.filter((f) => s.files[f.id] && f.content !== s.files[f.id]!.content)
 type SessionEdit = Partial<Pick<Session, 'composerText' | 'composerQuote' | 'routeSuggestion'>>
 const sessionKey = (space: Space) => sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
 const uiSession = (s: SessionDetail): Session => ({ ...s, updatedAt: s.messages.at(-1)?.createdAt ?? 0,
@@ -128,7 +127,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
     const key = session.scope === 'unit' ? `unit:${session.unitId}` : session.scope
     selectedSessions[key] ??= sessionStorage.getItem(`session:${saved.id}:${key}`) ?? session.id
   }
-  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, disk: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), runContexts, actions: actionGroups.flat(), executions: executionGroups.flat(),
+  return { saved, sessions: Object.fromEntries(sessions.map((s) => [s.id, s])), units: details, tree, files: {}, renamingPath: null, drafts, requirementDraft: null, planningError: null, taskParts: Object.fromEntries(taskEntries), runContexts, actions: actionGroups.flat(), executions: executionGroups.flat(),
     ui: {
       id: saved.id, name: saved.name, kind: 'generic', topic: '', requirement: saved.requirement.value,
       onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: true },
@@ -161,6 +160,11 @@ export function usePersistentModel(): AppModel {
   const errorRef = useRef('')
   const retry = useRef<() => void>(() => {})
   const inFlight = useRef(new Map<string, Promise<unknown>>())
+  const fileSaves = useRef(new Map<string, Promise<void>>())
+  const fileSaveErrors = useRef(new Map<string, string>())
+  // An unacknowledged write is still unsaved after undoing to the old baseline.
+  const unsavedFiles = (s: StoredSpace) => s.ui.files.filter((f) => fileSaves.current.has(`${s.ui.id}:${f.id}`)
+    || fileSaveErrors.current.has(`${s.ui.id}:${f.id}`) || s.files[f.id] && f.content !== s.files[f.id]!.content)
   const pendingEdits = useRef(new Map<string, SessionEdit>())
   const businessRefresh = useRef(new Map<string, number>())
   const invalidateBusiness = (space: string) => {
@@ -195,7 +199,7 @@ export function usePersistentModel(): AppModel {
   if (current && capabilities.terminal && !terminals.current.has(current.id)) {
     const id = current.id
     terminals.current.set(id, new LocalTerminal(id, (connected) => changeUi(id, (s) => ({ ...s,
-      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' })), () => unsavedFiles(cache.current[id]!).length === 0))
+      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' })), () => flushFiles(id)))
   }
   const localTerminal = current ? terminals.current.get(current.id) : undefined
   const needsAssessment = (space: string, unit: string) => {
@@ -261,7 +265,7 @@ export function usePersistentModel(): AppModel {
 
   const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || requirementDirty(s)
     || Object.values(s.drafts).some((draft) => !same(answers(draft), answers(s.units[draft.unitId]!.draft)))
-    || s.ui.files.some((file) => !!s.files[file.id] && file.content !== s.files[file.id]!.content))
+    || unsavedFiles(s).length > 0)
   useUnsavedWarning(dirty)
   const navigate = (view: SpaceView, unitId = current?.currentUnitId ?? null) => {
     if (!current) return false
@@ -597,12 +601,12 @@ export function usePersistentModel(): AppModel {
     const loaded = await Promise.all(Object.values(before.files).filter((f) => tree.some((e) => e.path === f.path && e.kind === 'file'))
       .map(async (file) => ({ before: file, disk: await api<ProjectFile>(`/spaces/${id}/project/file?path=${encodeURIComponent(file.path)}`) })))
     change(id, (s) => {
-      const entries = projectEntries(tree, s.ui.files), files = { ...s.files }
+      const entries = projectEntries(tree, s.ui.files), files = { ...s.files }, pending = new Set(unsavedFiles(s).map((f) => f.id))
       // A terminal can delete/rename a file. Never discard an unsaved buffer.
-      entries.files.push(...unsavedFiles(s).filter((f) => !entries.files.some((entry) => entry.id === f.id)))
+      entries.files.push(...s.ui.files.filter((f) => pending.has(f.id) && !entries.files.some((entry) => entry.id === f.id)))
       for (const { before, disk } of loaded) {
         const file = entries.files.find((f) => f.id === disk.path)
-        if (file && files[disk.path]?.version === before.version && file.content === before.content) {
+        if (file && !pending.has(disk.path) && files[disk.path]?.version === before.version && file.content === before.content) {
           entries.files = entries.files.map((f) => f.id === disk.path ? { ...f, content: disk.content } : f)
           files[disk.path] = disk
         }
@@ -610,10 +614,53 @@ export function usePersistentModel(): AppModel {
       return { ...s, tree, files, ui: { ...s.ui, ...entries } }
     })
   }
-  const saveFile = async (space: string, path: string) => {
-    const entry = cache.current[space]!, content = entry.ui.files.find((f) => f.id === path)!.content, version = entry.files[path]!.version
-    const saved = await api<ProjectFile>(`/spaces/${space}/project/save`, { path, content, version })
-    change(space, (s) => ({ ...s, disk: null, files: { ...s.files, [path]: saved } }))
+  const saveFile = (space: string, path: string): Promise<void> => {
+    const key = `${space}:${path}`, pending = fileSaves.current.get(key)
+    if (pending) return pending
+    const failure = fileSaveErrors.current.get(key)
+    if (failure === errorRef.current) { setError(''); errorRef.current = '' }
+    fileSaveErrors.current.delete(key)
+    // Start immediately, but allow only one write per file. Edits arriving during
+    // a request are picked up from the live buffer after its response, not replayed.
+    const promise = (async () => {
+      // A failed response may hide a successful write. Re-read before deciding
+      // that reverting to the cached baseline needs no further disk write.
+      if (failure) {
+        const disk = await api<ProjectFile>(`/spaces/${space}/project/file?path=${encodeURIComponent(path)}`)
+        change(space, (s) => ({ ...s, files: { ...s.files, [path]: disk } }))
+      }
+      let conflicts = 0
+      while (true) {
+        const entry = cache.current[space]!, file = entry.ui.files.find((f) => f.id === path), baseline = entry.files[path]
+        if (!file || !baseline || file.content === baseline.content) return
+        try {
+          const saved = await api<ProjectFile>(`/spaces/${space}/project/save`, { path, content: file.content, version: baseline.version })
+          change(space, (s) => ({ ...s, files: { ...s.files, [path]: saved } }))
+          conflicts = 0
+        } catch (cause) {
+          if (!(cause instanceof ApiError) || cause.status !== 409 || ++conflicts > 3) throw cause
+          // Latest editor input wins over an external edit. Keep the buffer and
+          // retry against a fresh disk version; retain the server's atomic writes.
+          const disk = await api<ProjectFile>(`/spaces/${space}/project/file?path=${encodeURIComponent(path)}`)
+          change(space, (s) => ({ ...s, files: { ...s.files, [path]: disk } }))
+        }
+      }
+    })().catch((cause: unknown) => {
+      const message = `自动保存 ${path} 失败：${cause instanceof Error ? cause.message : '请求失败，请重试。'}`
+      fileSaveErrors.current.set(key, message)
+      errorRef.current = message; setError(message)
+      retry.current = () => { void saveFile(space, path).catch(() => {}) }
+      throw cause
+    }).finally(() => { fileSaves.current.delete(key); publish() })
+    fileSaves.current.set(key, promise)
+    return promise
+  }
+  const flushFiles = async (space: string) => {
+    while (true) {
+      const files = unsavedFiles(cache.current[space]!)
+      if (!files.length) return
+      await Promise.all(files.map((file) => saveFile(space, file.id)))
+    }
   }
   useEffect(() => {
     const active = Object.values(cache.current).filter((s) => s.actions.some((p) => p.state === 'running') || s.executions.some((e) => ['pending', 'running'].includes(e.state)))
@@ -633,7 +680,7 @@ export function usePersistentModel(): AppModel {
     const id = current.id
     void run(`file:${id}:${path}`, async () => {
       if (!cache.current[id]!.files[path]) await readFile(id, path)
-      change(id, (s) => ({ ...s, disk: null, ui: { ...s.ui, ideOpen: true, activeFileId: path, selectedEntryId: path,
+      change(id, (s) => ({ ...s, ui: { ...s.ui, ideOpen: true, activeFileId: path, selectedEntryId: path,
         openFileIds: [...new Set([...s.ui.openFileIds, path])],
         expandedDirectoryIds: [...new Set([...s.ui.expandedDirectoryIds, ...path.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/'))])],
       } }))
@@ -648,7 +695,10 @@ export function usePersistentModel(): AppModel {
       await refreshFiles(id)
       if (kind === 'file') { await readFile(id, path); changeUi(id, (s) => ({ ...s, activeFileId: path, selectedEntryId: path, openFileIds: [...s.openFileIds, path], ideOpen: true })) }
       else changeUi(id, (s) => ({ ...s, selectedEntryId: path }))
-      if (content !== undefined) changeUi(id, (s) => ({ ...s, files: s.files.map((file) => file.id === path ? { ...file, content } : file), view: 'unit' }))
+      if (content !== undefined) {
+        changeUi(id, (s) => ({ ...s, files: s.files.map((file) => file.id === path ? { ...file, content } : file), view: 'unit' }))
+        void saveFile(id, path).catch(() => {})
+      }
       if (parent) changeUi(id, (s) => ({ ...s, expandedDirectoryIds: [...new Set([...s.expandedDirectoryIds, parent])] }))
       return true
     })
@@ -829,22 +879,29 @@ export function usePersistentModel(): AppModel {
     renameEntry: async (path, name) => {
       if (!current || !selected) return '没有打开的学习空间'
       const space = current.id, affected = (p: string) => p === path || p.startsWith(`${path}/`)
-      if (current.files.some((f) => affected(f.id) && selected.files[f.id] && f.content !== selected.files[f.id]!.content)) return '重命名前请先保存该文件或目录中的编辑内容。'
       const destination = path.includes('/') ? `${path.slice(0, path.lastIndexOf('/'))}/${name}` : name
-      const entry = selected.tree.find((e) => e.path === path)!
       const result = await run(`rename:${space}:${path}`, async () => {
-        await api(`/spaces/${space}/project/rename`, { path, destination, version: entry.version })
-        change(space, (s) => ({ ...s, disk: null, files: Object.fromEntries(Object.entries(s.files).filter(([p]) => !affected(p))), ui: { ...s.ui,
-          files: s.ui.files.filter((f) => !affected(f.id)), openFileIds: s.ui.openFileIds.filter((p) => !affected(p)), activeFileId: s.ui.activeFileId && affected(s.ui.activeFileId) ? null : s.ui.activeFileId, selectedEntryId: destination,
-        } }))
-        await refreshFiles(space); return true
+        change(space, (s) => ({ ...s, renamingPath: path }))
+        try {
+          await flushFiles(space)
+          await refreshFiles(space)
+          const entry = cache.current[space]!.tree.find((e) => e.path === path)!
+          await api(`/spaces/${space}/project/rename`, { path, destination, version: entry.version })
+          change(space, (s) => ({ ...s, files: Object.fromEntries(Object.entries(s.files).filter(([p]) => !affected(p))), ui: { ...s.ui,
+            files: s.ui.files.filter((f) => !affected(f.id)), openFileIds: s.ui.openFileIds.filter((p) => !affected(p)), activeFileId: s.ui.activeFileId && affected(s.ui.activeFileId) ? null : s.ui.activeFileId, selectedEntryId: destination,
+          } }))
+          await refreshFiles(space); return true
+        } finally { change(space, (s) => ({ ...s, renamingPath: null })) }
       })
       return result ? null : errorRef.current
     },
     openFile,
     closeFile: (id) => { if (current) changeUi(current.id, (s) => { const openFileIds = s.openFileIds.filter((x) => x !== id); return { ...s, openFileIds, activeFileId: s.activeFileId === id ? openFileIds[0] ?? null : s.activeFileId } }) },
     createFile: (name) => { void createEntry(name, 'file', null) },
-    updateFile: (id, content) => { if (current) changeUi(current.id, (s) => ({ ...s, files: s.files.map((f) => f.id === id ? { ...f, content } : f) })) },
+    updateFile: (id, content) => { if (!current) return
+      changeUi(current.id, (s) => ({ ...s, files: s.files.map((f) => f.id === id ? { ...f, content } : f) }))
+      void saveFile(current.id, id).catch(() => {})
+    },
     bringToIde: (code, suggested = 'example.txt') => {
       if (!current || !selected) return
       const base = suggested.split('/').at(-1) || 'example.txt'
@@ -856,7 +913,7 @@ export function usePersistentModel(): AppModel {
       void createEntry(name, 'file', null, code)
     },
     connectEnv: () => { void localTerminal?.connect() },
-    terminalCommand: (command) => { localTerminal?.send('input', { data: `${command}\r` }) },
+    terminalCommand: (command) => { void localTerminal?.input(`${command}\r`) },
     startAssessment: () => { if (!recordUnit || !current) return
       if (!navigate('assessment', recordUnit)) return
       if (capabilities.assessment && !pendingDecision(cache.current[current.id]!.saved) && needsAssessment(current.id, recordUnit)
@@ -894,7 +951,7 @@ export function usePersistentModel(): AppModel {
       decideAction: (id, decision) => { if (!current || !selected) return
         const space = current.id, proposal = selected.actions.find((p) => p.id === id)!
         void run(`action:${id}:${decision}`, async () => {
-          if (decision === 'confirm' && unsavedFiles(cache.current[space]!).length) throw new Error('请先保存所有编辑器文件，再确认执行。')
+          if (decision === 'confirm') await flushFiles(space)
           const updated = await api<ActionProposal>(`/spaces/${space}/actions/${id}`, { digest: proposal.digest, decision })
           change(space, (s) => ({ ...s, actions: s.actions.map((p) => p.id === id && ['pending', 'running'].includes(p.state) ? updated : p) }))
           await refreshBusiness(space)
@@ -920,28 +977,17 @@ export function usePersistentModel(): AppModel {
         void run(`name:${id}`, async () => { const saved = await api<SpaceSummary>(`/spaces/${id}/name`, { name, previousName }); change(id, (s) => ({ ...s, saved: { ...s.saved, name: saved.name }, ui: { ...s.ui, name: s.ui.name === name ? saved.name : s.ui.name } })) })
       },
       assessmentDirty: !!current?.draft && !same(answers(current.draft), answers(selected!.units[current.draft.unitId]!.draft)),
-      fileDirty: !!activeFile && !!selected?.files[activeFile.id] && activeFile.content !== selected.files[activeFile.id]!.content,
-      unsavedFiles: selected ? unsavedFiles(selected).map((f) => f.id) : [],
-      saveFiles: () => { if (!current) return; const id = current.id
-        void run(`files:${id}`, async () => { for (const file of unsavedFiles(cache.current[id]!)) await saveFile(id, file.id); await refreshFiles(id) })
-      },
+      fileDirty: !!activeFile && !!selected && unsavedFiles(selected).some((f) => f.id === activeFile.id),
+      fileSaveError: activeFile ? fileSaveErrors.current.get(`${currentId}:${activeFile.id}`) ?? null : null,
+      fileRenaming: !!activeFile && !!selected?.renamingPath && (activeFile.id === selected.renamingPath || activeFile.id.startsWith(`${selected.renamingPath}/`)),
+      filesPending: !!selected && unsavedFiles(selected).length > 0,
       saveAssessment: () => { if (!current?.draft || !selected) return; const id = current.id, draft = current.draft, revision = selected.units[draft.unitId]!.draft.revision
         void run(`assessment:${id}:${draft.unitId}`, async () => {
           const saved = await api<SavedAssessmentDraft>(`/spaces/${id}/units/${draft.unitId}/draft`, { revision, ...answers(draft) })
           change(id, (s) => ({ ...s, units: { ...s.units, [draft.unitId]: { ...s.units[draft.unitId]!, draft: saved } } }))
         })
       },
-      saveFile: () => { if (!current || !activeFile) return; const id = current.id, path = activeFile.id
-        void run(`file:${id}:${path}`, async () => { await saveFile(id, path); await refreshFiles(id) })
-      },
-      compareFile: () => { if (!current || !activeFile) return; const id = current.id, path = activeFile.id
-        void run(`file:${id}:${path}`, async () => { const disk = await api<ProjectFile>(`/spaces/${id}/project/file?path=${encodeURIComponent(path)}`); change(id, (s) => ({ ...s, disk })) })
-      },
       refreshFiles: () => { if (current) void run(`tree:${current.id}`, () => refreshFiles(current.id)) },
-      disk: selected?.disk ?? null,
-      resolveFile: (keepLocal) => { if (!current || !selected?.disk) return; const disk = selected.disk
-        change(current.id, (s) => ({ ...s, disk: null, files: { ...s.files, [disk.path]: disk }, ui: { ...s.ui, files: s.ui.files.map((file) => file.id === disk.path && !keepLocal ? { ...file, content: disk.content } : file) } }))
-      },
       proposals: selected?.saved.proposals ?? [],
       lessonProposals: selected?.saved.lessonProposals ?? [],
       lessonVersions: Object.fromEntries(Object.entries(selected?.units ?? {}).map(([id, unit]) => [id, unit.lesson?.revision ?? 0])),

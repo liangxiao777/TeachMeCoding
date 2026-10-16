@@ -388,57 +388,151 @@ test('inline route review keeps learned history, blocks every composer, and appl
   await otherTab.close();
 });
 
-test('disk editing preserves local changes on failure, compares external content and survives fullscreen and refresh', async ({ page }, info) => {
+test('IDE saves on input, retries failures without losing edits and replaces external content without comparison', async ({ page }, info) => {
   const data = seed(info);
+  const path = join(data.root, 'projects', data.spaceId, 'autosave.rs');
+  writeFileSync(path, '// initial');
   await page.goto(`/?space=${data.spaceId}&tab=route`);
   await enterUnit(page, '所有权与借用');
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
   const tree = page.getByRole('tree', { name: '项目目录树', exact: true });
-  await tree.getByRole('treeitem', { name: 'src', exact: true }).press('ArrowRight');
-  await tree.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
-  await visible(page, '编辑 main.rs').fill('local editing survives');
-  writeFileSync(join(data.root, 'projects', data.spaceId, 'src/main.rs'), 'external edit 42');
-  await page.getByRole('button', { name: '保存文件', exact: true }).click();
-  await expect(page.getByRole('alert').filter({ hasText: '外部修改' })).toBeVisible();
-  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
-  await shot(page, info, 'file-conflict');
-  await page.getByRole('button', { name: '读取磁盘版本', exact: true }).click();
-  const comparison = page.getByRole('region', { name: '磁盘版本比较', exact: true });
-  await expect(comparison.getByText('external edit 42', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
-  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
-  await expect(comparison.getByText('external edit 42', { exact: true })).toBeVisible();
-  await shot(page, info, 'file-comparison');
-  await page.getByRole('button', { name: '保留编辑，基于此版本继续' }).click();
-  await expect(comparison).toHaveCount(0);
-  await page.getByRole('button', { name: '保存文件', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'autosave.rs', exact: true }).click();
+  const editor = visible(page, '编辑 autosave.rs');
   const ide = page.getByRole('region', { name: 'IDE 与终端', exact: true });
+  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '读取磁盘版本', exact: true })).toHaveCount(0);
+  await expect(editor).toHaveText('// initial', { useInnerText: true });
+  await editor.press('ControlOrMeta+a'); await editor.pressSequentially('// saved while focused');
+  await expect.poll(() => readFileSync(path, 'utf8')).toBe('// saved while focused');
+  await expect(editor).toBeFocused();
   await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
-  expect(readFileSync(join(data.root, 'projects', data.spaceId, 'src/main.rs'), 'utf8')).toBe('local editing survives');
+  let outage = true;
+  await page.route('**/project/save', (route) => outage ? route.fulfill({ status: 503, json: { error: '测试写入失败' } }) : route.continue());
+  writeFileSync(path, 'external edit 42');
+  await editor.fill('// local editing survives');
+  await expect(page.getByRole('alert').filter({ hasText: '自动保存 autosave.rs 失败' })).toBeVisible();
+  await expect(ide.getByRole('status').filter({ hasText: /^保存失败$/ })).toBeVisible();
+  await expect(editor).toHaveText('// local editing survives', { useInnerText: true });
+  expect(readFileSync(path, 'utf8')).toBe('external edit 42');
+  await shot(page, info, 'autosave-error');
+  outage = false;
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: '自动保存 autosave.rs 失败' })).toHaveCount(0);
+  expect(readFileSync(path, 'utf8')).toBe('// local editing survives');
+  writeFileSync(path, 'external newer 64');
+  await editor.press('End'); await editor.pressSequentially('!');
+  await expect.poll(() => readFileSync(path, 'utf8')).toBe('// local editing survives!');
+  await editor.press('Backspace');
+  await expect.poll(() => readFileSync(path, 'utf8')).toBe('// local editing survives');
+  await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
+  await expect(page.getByRole('region', { name: '磁盘版本比较', exact: true })).toHaveCount(0);
+  await shot(page, info, 'autosave-normal');
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await expect(editor).toHaveText('// local editing survives', { useInnerText: true });
+  await shot(page, info, 'autosave-fullscreen');
   await page.keyboard.press('Escape');
   await expect(ide).toBeHidden();
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
-  await page.getByRole('button', { name: '关闭 src/main.rs' }).click();
-  await tree.getByRole('treeitem', { name: 'main.rs', exact: true }).click();
-  await expect(visible(page, '编辑 main.rs')).toHaveText('local editing survives', { useInnerText: true });
-  await tree.getByRole('treeitem', { name: 'main.rs', exact: true }).press('F2');
+  await page.getByRole('button', { name: '关闭 autosave.rs' }).click();
+  await tree.getByRole('treeitem', { name: 'autosave.rs', exact: true }).click();
+  await expect(editor).toHaveText('// local editing survives', { useInnerText: true });
+  await tree.getByRole('treeitem', { name: 'autosave.rs', exact: true }).press('F2');
   await visible(page, '重命名').fill('renamed.rs');
   await visible(page, '重命名').press('Enter');
-  await expect(tree.getByRole('treeitem', { name: 'renamed.rs', exact: true })).toHaveAttribute('data-entry-id', 'src/renamed.rs');
-  await expect(page.getByRole('button', { name: '关闭 src/main.rs' })).toHaveCount(0);
+  await expect(tree.getByRole('treeitem', { name: 'renamed.rs', exact: true })).toHaveAttribute('data-entry-id', 'renamed.rs');
+  await expect(page.getByRole('button', { name: '关闭 autosave.rs' })).toHaveCount(0);
   await page.reload();
-  await tree.getByRole('treeitem', { name: 'src', exact: true }).press('ArrowRight');
   await tree.getByRole('treeitem', { name: 'renamed.rs', exact: true }).click();
-  await expect(visible(page, '编辑 renamed.rs')).toHaveText('local editing survives', { useInnerText: true });
+  await expect(visible(page, '编辑 renamed.rs')).toHaveText('// local editing survives', { useInnerText: true });
   await page.getByRole('button', { name: '询问这个文件', exact: true }).click();
   await expectTemporaryComposer(page);
-  await expect(composer(page)).toContainText('src/renamed.rs');
+  await expect(composer(page)).toContainText('renamed.rs');
   await expect(composer(page)).toContainText('local editing survives');
   await shot(page, info, 'ide');
   await page.reload();
   await expect(composer(page).getByRole('button', { name: '移除引用' })).toHaveCount(0);
   await expect(visible(page, '向 Agent 提问')).toHaveValue('');
+});
+
+test('autosave preserves reverted text across pending writes, closed tabs, rename and lost responses', async ({ page }, info) => {
+  const data = seed(info), root = join(data.root, 'projects', data.spaceId);
+  writeFileSync(join(root, 'revert.rs'), '// original 17');
+  writeFileSync(join(root, 'parallel.rs'), '// original 29');
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${data.unitIds[0]}`);
+  const tree = page.getByRole('tree', { name: '项目目录树', exact: true });
+  await tree.getByRole('treeitem', { name: 'revert.rs', exact: true }).click();
+  const editor = visible(page, '编辑 revert.rs');
+  const ide = page.getByRole('region', { name: 'IDE 与终端', exact: true });
+  let saved = false, release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route('**/project/save', async (route) => {
+    const response = await route.fetch();
+    if (route.request().postDataJSON().content === '// intermediate 83') { saved = true; await held; }
+    await route.fulfill({ response });
+  });
+  await editor.fill('// intermediate 83');
+  await expect.poll(() => saved).toBe(true);
+  await editor.fill('// original 17');
+  await expect(ide.getByRole('status').filter({ hasText: /^正在保存…$/ })).toBeVisible();
+  await page.getByRole('button', { name: '关闭 revert.rs', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'parallel.rs', exact: true }).click();
+  await visible(page, '编辑 parallel.rs').fill('// parallel edit 61');
+  await page.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await tree.getByRole('treeitem', { name: 'revert.rs', exact: true }).click();
+  await expect(editor).toHaveText('// original 17', { useInnerText: true });
+  expect(readFileSync(join(root, 'revert.rs'), 'utf8')).toBe('// intermediate 83');
+  await tree.getByRole('treeitem', { name: 'revert.rs', exact: true }).press('F2');
+  await visible(page, '重命名').fill('reverted.rs');
+  await visible(page, '重命名').press('Enter');
+  await expect(editor).toHaveAttribute('aria-disabled', 'true');
+  release();
+  await expect(tree.getByRole('treeitem', { name: 'reverted.rs', exact: true })).toBeVisible();
+  expect(readFileSync(join(root, 'reverted.rs'), 'utf8')).toBe('// original 17');
+  expect(readFileSync(join(root, 'parallel.rs'), 'utf8')).toBe('// parallel edit 61');
+  await page.unroute('**/project/save');
+  await tree.getByRole('treeitem', { name: 'reverted.rs', exact: true }).click();
+  const renamed = visible(page, '编辑 reverted.rs');
+  let dropped = false;
+  await page.route('**/project/save', async (route) => {
+    if (!dropped && route.request().postDataJSON().content === '// response lost 97') { dropped = true; await route.fetch(); await route.abort(); } else await route.continue();
+  });
+  await renamed.fill('// response lost 97');
+  await expect(ide.getByRole('status').filter({ hasText: /^保存失败$/ })).toBeVisible();
+  expect(readFileSync(join(root, 'reverted.rs'), 'utf8')).toBe('// response lost 97');
+  await renamed.fill('// original 17');
+  await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
+  expect(readFileSync(join(root, 'reverted.rs'), 'utf8')).toBe('// original 17');
+  await page.unroute('**/project/save');
+  let uncertain = false, loseResponse!: () => void;
+  const lost = new Promise<void>((resolve) => { loseResponse = resolve; });
+  await page.route('**/project/save', async (route) => {
+    const response = await route.fetch();
+    if (route.request().postDataJSON().content === '// uncertain write 43') {
+      uncertain = true; await lost; await route.abort();
+    } else await route.fulfill({ response });
+  });
+  await renamed.fill('// uncertain write 43');
+  await expect.poll(() => uncertain).toBe(true);
+  await renamed.fill('// original 17');
+  loseResponse();
+  await expect(ide.getByRole('status').filter({ hasText: /^保存失败$/ })).toBeVisible();
+  expect(readFileSync(join(root, 'reverted.rs'), 'utf8')).toBe('// uncertain write 43');
+  const refreshed = page.waitForResponse((response) => response.url().endsWith('/project/file?path=reverted.rs'));
+  await page.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await (await refreshed).finished();
+  await expect(page.getByRole('button', { name: '刷新目录', exact: true })).toBeEnabled();
+  await expect(renamed).toHaveText('// original 17', { useInnerText: true });
+  const restart = page.getByRole('button', { name: '新建终端', exact: true });
+  if (await restart.isVisible()) { await restart.click(); await expect(restart).toHaveCount(0); }
+  const input = page.getByRole('textbox', { name: '本机终端输入', exact: true });
+  await input.pressSequentially('cat reverted.rs > recovered.txt'); await input.press('Enter');
+  await expect.poll(() => { try { return readFileSync(join(root, 'recovered.txt'), 'utf8'); } catch { return ''; } }).toBe('// original 17');
+  await expect(ide.getByRole('status').filter({ hasText: /^已保存$/ })).toBeVisible();
+  expect(readFileSync(join(root, 'reverted.rs'), 'utf8')).toBe('// original 17');
+  await page.reload();
+  await tree.getByRole('treeitem', { name: 'reverted.rs', exact: true }).click();
+  await expect(renamed).toHaveText('// original 17', { useInnerText: true });
 });
 
 test('unavailable business API displays a retryable failure, never demo spaces', async ({ page }, info) => {
@@ -489,13 +583,11 @@ test('original lesson quotation and bring-to-IDE actions retain real data throug
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   const code = 'fn main() { println!("example"); }';
   await expect(visible(page, '编辑 example.rs')).toHaveText(code, { useInnerText: true });
-  expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example.rs'), 'utf8')).toBe('');
-  await page.getByRole('button', { name: '保存文件', exact: true }).click();
-  await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeDisabled();
+  await expect.poll(() => readFileSync(join(data.root, 'projects', data.spaceId, 'example.rs'), 'utf8')).toBe(code);
   await page.getByRole('button', { name: '带入 IDE', exact: true }).click();
   await expect(visible(page, '编辑 example-1.rs')).toHaveText(code, { useInnerText: true });
   expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example.rs'), 'utf8')).toBe(code);
-  expect(readFileSync(join(data.root, 'projects', data.spaceId, 'example-1.rs'), 'utf8')).toBe('');
+  await expect.poll(() => readFileSync(join(data.root, 'projects', data.spaceId, 'example-1.rs'), 'utf8')).toBe(code);
 });
 
 test('stored Markdown sections and assessment prompts render headings, tables and code without rewriting artifacts', async ({ page }, info) => {
@@ -578,7 +670,7 @@ test('Markdown lessons derive directories and offer code, callouts and optional 
     '## 理解**所有权**\n\n赋值可能转移所有权，并不一定复制数据。',
     `\`\`\`rust file="move demo.rs"\n${code}\n\`\`\``,
     '> [!TIP]\n> 先比较整数与 `String` 的赋值，再解释它们为什么不同。',
-    '> [!WARNING]\n> 示例没有自动执行；带入 IDE 后由你决定修改、保存和运行。',
+    '> [!WARNING]\n> 示例没有自动执行；带入 IDE 后自动保存，由你决定修改和运行。',
     '## 理解**所有权**\n\n用下面的练习检查自己的理解。',
     `::::practice\n${question}\n\n:::hint\n## 提示内部标题\n\n提示内容：想一想所有权在哪次赋值时发生了转移。\n:::\n\n:::solution\n## 讲解内部标题\n\n参考结论：编译器会拒绝使用已经转移所有权的 \`s1\`。\n:::\n::::`,
     '::::practice\n把问候语改为自己的名字，再观察输出。\n::::',
@@ -633,7 +725,7 @@ test('Markdown lessons derive directories and offer code, callouts and optional 
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
   await article.getByRole('button', { name: '带入 IDE', exact: true }).first().click();
   await expect(visible(page, '编辑 move demo.rs')).toHaveText(code, { useInnerText: true });
-  expect(readFileSync(join(data.root, 'projects', data.spaceId, 'move demo.rs'), 'utf8')).toBe('');
+  await expect.poll(() => readFileSync(join(data.root, 'projects', data.spaceId, 'move demo.rs'), 'utf8')).toBe(code);
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await page.getByRole('button', { name: '查看课件', exact: true }).click();
   const drawer = page.getByRole('dialog'), drawerPractice = drawer.getByRole('region', { name: '动手试试', exact: true }).first();

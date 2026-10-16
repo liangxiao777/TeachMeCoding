@@ -61,7 +61,7 @@ type PreparedTools = {
 | --- | --- |
 | intake | 需求草稿工具 |
 | roadmap | 路线阶段、单元构建与提交工具 |
-| tutor | 文件读取、学习结论，以及接入 Actions 时的本机操作提案 |
+| tutor | 文件读取、学习结论，以及接入 Actions 时的文件修改提案 |
 | lesson | 课件提交工具 |
 | assessment | 出题提交工具 |
 | evaluation | 评估提交工具 |
@@ -70,7 +70,7 @@ type PreparedTools = {
 
 所有场景继续按当前配置加入共享能力：有启用的 Skills 时补齐读取工具；加入已连接 MCP 服务的工具；搜索须启用且认证就绪；`web_fetch` 始终加入。
 
-`runtime.ts` 继续拥有运行状态、取消、事件、顺序执行配置和正常结束后的 `commit()`。本机文件/命令工具仍只生成提案，用户确认后由 `Actions.decide()` 执行。MCP 不增加统一审批层。
+`runtime.ts` 继续拥有运行状态、取消、事件、顺序执行配置和正常结束后的 `commit()`。文件修改工具只生成提案，用户确认后由 `Actions.decide()` 执行。后续简化中，所有 Agent 的命令执行统一使用默认自主执行的 `bash`，不再装配 `propose_command`；保留历史命令提案的读取和处理兼容，不迁移或删除记录。MCP 不增加统一审批层。
 
 搜索关闭仍中断正在进行的 Agent 搜索；配置更新不重绑定旧工具。MCP 重连或工具列表更新不自动替换当前 run 的工具。连接失败、认证缺失及取消继续遵循原服务处理方式。
 

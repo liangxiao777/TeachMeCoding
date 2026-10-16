@@ -16,6 +16,14 @@ export interface ActionProposal {
 }
 export const actionDecisionSchema = z.object({ decision: z.enum(['confirm', 'reject', 'cancel']), digest: z.string().min(1) }).strict();
 
+/** Human-readable receipt; host IDs stay in the proposal, program output stays intact. */
+export function actionReceipt(p: Pick<ActionProposal, 'action' | 'state' | 'result'>): string {
+  const status = { pending: '待确认', running: '执行中', succeeded: '已完成', failed: '失败', rejected: '已拒绝', expired: '已失效', cancelled: '已取消', interrupted: '已中断' }[p.state];
+  return `${p.action.kind === 'file' ? `文件修改${status}：${p.action.path}` : `命令执行${status}`}。`
+    + (p.action.kind === 'command' && p.result?.exitCode !== null && p.result?.exitCode !== undefined ? `退出码 ${p.result.exitCode}。` : '')
+    + (p.result?.output && (p.action.kind === 'command' || p.state !== 'succeeded') ? `\n${p.result.output}` : '');
+}
+
 export const codePlanSchema = z.object({
   language: z.enum(['python', 'javascript', 'typescript', 'rust', 'bash']),
   cases: z.array(z.object({ args: z.array(z.string().max(1000)).max(30), expected: z.string().max(20_000) }).strict()).min(1).max(20),

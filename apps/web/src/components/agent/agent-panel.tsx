@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
+import { actionReceipt } from '@teach-me-coding/contracts'
 import { BrandMark, isComposing } from '@/components/shared'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
 import { Message as ChatMessage, MessageContent } from '@/components/ai-elements/message'
@@ -28,6 +29,7 @@ import { RunContent } from './run-content'
 import { RunContext } from './run-context'
 import { RouteProposalDecision } from './route-proposal-decision'
 import { LessonProposalDecision } from './lesson-proposal-decision'
+import { LocalAction } from './local-action'
 import { pendingDecision } from '@/app/lesson-proposals'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -93,10 +95,13 @@ export function AgentMessage({ msg }: { msg: Message }) {
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
   const awaitingDecision = persistence && pendingDecision(persistence)
 
+  // Reformat only known legacy host receipts, never arbitrary chat or program output.
+  const legacyReceipt = !msg.parts?.length && persistence?.actions.find((p) => msg.text.startsWith(`本机操作 ${p.id}：${p.state}。`))
+
   return (
     <ChatMessage from="assistant" className="max-w-full">
       <MessageContent className="w-full gap-3 leading-relaxed">
-      <RunContent parts={msg.parts} text={msg.text} streaming={capabilities.agent && (msg.status === 'thinking' || msg.status === 'streaming')}
+      <RunContent parts={msg.parts} text={legacyReceipt ? actionReceipt(legacyReceipt) : msg.text} streaming={capabilities.agent && (msg.status === 'thinking' || msg.status === 'streaming')}
         onCode={(code, language) => bringToIde(code, `agent_example.${({ python: 'py', rust: 'rs', javascript: 'js', typescript: 'ts', json: 'json', bash: 'sh' } as Record<string, string>)[language || lang] ?? 'txt'}`)} />
       {msg.status === 'stopped' && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -145,30 +150,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
         </Card>
       ))}
       {persistence?.actions.filter((p) => p.runId === msg.id).map((p) => (
-        <Card key={p.id} size="sm" data-testid="local-action">
-          <CardHeader><CardTitle className="text-sm">{p.action.kind === 'file' ? '文件修改提案' : '本机命令提案'} · {{ pending: '待确认', running: '执行中', succeeded: '成功', failed: '失败', rejected: '已拒绝', expired: '已过期', cancelled: '已取消', interrupted: '已中断' }[p.state]}</CardTitle>
-            <CardDescription>{p.action.reason}</CardDescription></CardHeader>
-          <CardContent className="min-w-0 space-y-2 text-xs">
-            <p className="break-all">工作目录：{p.action.cwd}</p>
-            {p.action.kind === 'file' ? <>
-              <p className="break-all">文件：{p.action.path}</p>
-              <details><summary className="cursor-pointer">查看完整修改前后内容</summary>
-                <p className="mt-2">修改前{p.action.before === null ? '（新文件）' : ''}</p><pre className="max-h-64 overflow-auto whitespace-pre rounded bg-muted p-2">{p.action.before ?? ''}</pre>
-                <p className="mt-2">修改后</p><pre className="max-h-64 overflow-auto whitespace-pre rounded bg-muted p-2">{p.action.content}</pre>
-              </details>
-            </> : <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{p.action.command}</pre>}
-            <p className="text-muted-foreground">在本机执行，不是沙箱；拥有服务账号权限。取消不能撤销已发生的修改。命令最多 30 秒、256 KiB 输出；不自动安装环境。</p>
-            {p.state === 'interrupted' && <p>服务已重启，执行结果可能不完整；没有自动重放，请检查磁盘。</p>}
-            {p.result && <><p>结果：{p.result.status} · 退出码 {p.result.exitCode ?? '无'}</p><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{p.result.output}</pre></>}
-            {p.state === 'pending' && persistence.unsavedFiles.length > 0 && <p role="status">请先保存所有编辑器文件，再确认执行。</p>}
-          </CardContent>
-          {(p.state === 'pending' || p.state === 'running') && <CardFooter className="gap-2">
-            {p.state === 'pending' ? <>
-              <Button size="xs" disabled={persistence.busy || persistence.unsavedFiles.length > 0} onClick={() => persistence.decideAction(p.id, 'confirm')}>确认执行</Button>
-              <Button size="xs" variant="outline" disabled={persistence.busy} onClick={() => persistence.decideAction(p.id, 'reject')}>拒绝</Button>
-            </> : <Button size="xs" variant="outline" onClick={() => persistence.decideAction(p.id, 'cancel')}>取消执行</Button>}
-          </CardFooter>}
-        </Card>
+        <LocalAction key={p.id} proposal={p} />
       ))}
       {!persistence && msg.action && msg.status === 'done' && (
         <Card size="sm" className="ring-primary/30">

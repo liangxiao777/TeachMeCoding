@@ -8,7 +8,7 @@ import '@xterm/xterm/css/xterm.css'
 
 /** Real transport in the original IDE panel; preview keeps its isolated runner. */
 export function LocalTerminalView() {
-  const { localTerminal: client, setQuote, persistence } = useApp()
+  const { localTerminal: client, setQuote } = useApp()
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const [exit, setExit] = useState<string | null>(null)
@@ -32,7 +32,7 @@ export function LocalTerminalView() {
       if (event.type === 'exit') setExit(`终端已退出：${event.exitCode}（信号 ${event.signal ?? '无'}）`)
       if (event.type === 'error') setError(event.message)
     })
-    const input = term.onData((data) => { if (client.send('input', { data })) setError('') })
+    const input = term.onData((data) => { void client.input(data).then((sent) => { if (sent) setError('') }) })
     void client.connect()
     return () => { unsubscribe(); input.dispose(); observer.disconnect(); term.dispose(); terminal.current = null }
   }, [client])
@@ -49,10 +49,6 @@ export function LocalTerminalView() {
         <Button variant="ghost" size="icon-xs" aria-label="停止终端" disabled={!!exit} onClick={() => client?.send('stop')}><Square /></Button>
       </div>
     </div>
-    {!!persistence?.unsavedFiles.length && <div role="status" className="shrink-0 border-b px-3 py-2 text-xs">
-      <p className="break-words">未保存：{persistence.unsavedFiles.join('、')}。命令输入暂停，执行只使用磁盘文件。</p>
-      <Button size="xs" variant="outline" disabled={persistence.busy} onClick={() => { setError(''); persistence.saveFiles() }}>保存全部文件</Button>
-    </div>}
     {error && <p role="alert" className="px-3 py-1 text-xs text-destructive">{error}</p>}
     {exit && <div role="status" className="flex items-center gap-2 px-3 py-1 text-xs"><span>{exit}</span><Button size="xs" variant="outline" onClick={() => { setError(''); client?.send('restart') }}>新建终端</Button></div>}
     <div ref={host} aria-label="本机终端" className="min-h-0 flex-1 overflow-hidden p-2" />

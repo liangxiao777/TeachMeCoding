@@ -103,7 +103,7 @@ test('standalone library uploads arbitrary bytes, retries safely, shares globall
   expect(errors).toEqual([]);
 });
 
-test('library round trips retain unsaved editor, composer, fullscreen and the same PTY connection', async ({ page }, info) => {
+test('library round trips retain autosaved editor, composer, fullscreen and the same PTY connection', async ({ page }, info) => {
   const data = seed(info);
   writeFileSync(join(data.root, 'projects', data.spaceId, 'library-navigation.rs'), '// saved library fixture');
   let sockets = 0, closed = 0;
@@ -128,7 +128,7 @@ test('library round trips retain unsaved editor, composer, fullscreen and the sa
     await page.getByRole('region', { name: '资料库', exact: true }).getByRole('button', { name: '返回学习', exact: true }).click();
     await expect(editor).toHaveText('// unsaved library navigation', { useInnerText: true });
     await expect(composer).toHaveValue('尚未发送的资料问题');
-    await expect(page.getByRole('button', { name: '保存文件', exact: true })).toBeEnabled();
+    await expect.poll(() => readFileSync(join(data.root, 'projects', data.spaceId, 'library-navigation.rs'), 'utf8')).toBe('// unsaved library navigation');
     await expect(page).toHaveURL(url);
     await expect(page.getByRole('textbox', { name: '本机终端输入', exact: true })).toBeEnabled();
   }

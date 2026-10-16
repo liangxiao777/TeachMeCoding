@@ -6,7 +6,7 @@ import { BusinessError } from './learning.js';
 
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 const forbidden = () => new BusinessError(422, '路径无效，或包含符号链接/非普通文件；只允许访问当前空间项目目录。');
-const conflict = () => new BusinessError(409, '文件已被外部修改或目标已存在；请读取磁盘版本并比较，编辑内容尚未保存。');
+const conflict = () => new BusinessError(409, '文件已被外部修改或目标已存在，请重试。');
 const stat = (path: string) => {
   try { return lstatSync(path, { bigint: true }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
