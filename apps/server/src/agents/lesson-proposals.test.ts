@@ -15,6 +15,31 @@ import { compileContext, type FrozenContext } from './context.js';
 const original = { title: 'Applied lesson', content: '## Applied\n\nOriginal material.\n' };
 const changed = { title: 'Changed lesson', content: '## Replacement\n\nComplete corrected material.' };
 
+test('lesson regeneration inherits only its explicit originating conversation approval mode', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning), unit = units[0]!.id;
+  learning.saveLesson(space.id, unit, original);
+  const session = learning.createSession(space.id, { scope: 'unit', unitId: unit, title: 'YOLO' }).id;
+  const wrong = learning.createSession(space.id, { scope: 'unit', unitId: units[1]!.id, title: 'Other unit' }).id;
+  learning.saveSessionSettings(space.id, session, { revision: 0, yolo: true });
+  const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => response(context.messages.at(-1)?.role === 'toolResult'
+    ? reply([]) : reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments: changed }], 'toolUse')) });
+  try {
+    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: wrong }), /发起会话的单元/);
+    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: space.sessions[0]!.id }), /发起会话的单元/);
+    const manual = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1 });
+    await runtime.idle(manual.id); assert.equal(runtime.get(space.id, manual.id).state, 'succeeded');
+    const pending = learning.space(space.id).lessonProposals.at(-1)!;
+    assert.equal(pending.state, 'pending'); assert.equal(pending.sessionId, session);
+    assert.deepEqual(learning.unit(space.id, unit).lesson, { ...original, revision: 1 });
+    learning.rejectLessonProposal(space.id, pending.id, {});
+    const automatic = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: session });
+    await runtime.idle(automatic.id); assert.equal(runtime.get(space.id, automatic.id).state, 'succeeded');
+    assert.equal(learning.space(space.id).lessonProposals.at(-1)!.state, 'applied');
+    assert.deepEqual(learning.unit(space.id, unit).lesson, { ...changed, revision: 2 });
+    assert.equal(learning.unit(space.id, units[1]!.id).lesson, null);
+  } finally { await runtime.close(); db.close(); }
+});
+
 test('tutor lesson tools bind the applied unit and stage only the last valid full candidate after normal completion', async () => {
   for (const mode of ['normal', 'failed', 'stopped', 'no-op', 'no-lesson'] as const) {
     const db = openDatabase(':memory:'), learning = new Learning(db), { space, units } = populated(learning), unit = units[0]!.id;

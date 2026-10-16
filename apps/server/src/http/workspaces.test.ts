@@ -11,6 +11,42 @@ import { createApp } from './app.js';
 import { createLocalAccess } from './local-access.js';
 import { conceptIntake } from '../agents/test-support.js';
 
+test('conversation approval settings are isolated, revisioned and idempotent without consuming drafts', async () => {
+  const db = openDatabase(':memory:'), learning = new Learning(db);
+  const access = createLocalAccess({ port: 14333 }), app = createApp(access, learning);
+  const space = learning.create({ name: 'Preferences', goal: 'Learn' }), other = learning.create({ name: 'Other', goal: 'Learn' });
+  const session = space.sessions[0]!.id, path = `/api/spaces/${space.id}/sessions/${session}/settings`;
+  const headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token, 'Content-Type': 'application/json' };
+  const post = (body: unknown, key = randomUUID(), url = path) => app.request(url, {
+    method: 'POST', headers: { ...headers, 'Idempotency-Key': key }, body: JSON.stringify(body),
+  });
+  try {
+    const before = learning.saveSessionDraft(space.id, session, { revision: 0, text: 'Keep this draft', quote: null, routeSuggestion: '' });
+    assert.deepEqual(before.settings, { revision: 0, yolo: false });
+    for (const invalid of [{ yolo: true }, { revision: 0, yolo: 'true' }, { revision: 0, yolo: true, extra: true }]) {
+      assert.equal((await post(invalid)).status, 400);
+    }
+    assert.equal((await post({ revision: 0, yolo: true }, randomUUID(), `/api/spaces/${other.id}/sessions/${session}/settings`)).status, 404);
+    db.exec("CREATE TRIGGER fail_setting BEFORE INSERT ON app_settings BEGIN SELECT RAISE(ABORT, 'injected setting failure'); END");
+    const key = randomUUID(), input = { revision: 0, yolo: true };
+    assert.equal((await post(input, key)).status, 503);
+    assert.deepEqual(learning.session(space.id, session), before);
+    db.exec('DROP TRIGGER fail_setting');
+    const saved = await post(input, key); assert.equal(saved.status, 200);
+    assert.deepEqual((await saved.json()).settings, { revision: 1, yolo: true });
+    assert.equal((await post(input)).status, 409);
+    const disabled = await post({ revision: 1, yolo: false }); assert.equal(disabled.status, 200);
+    assert.deepEqual((await disabled.json()).settings, { revision: 2, yolo: false });
+    // Replaying an old successful request cannot turn the mode back on.
+    assert.deepEqual((await (await post(input, key)).json()).settings, { revision: 2, yolo: false });
+    const restored = new Learning(db).session(space.id, session);
+    assert.deepEqual(restored.draft, before.draft); assert.deepEqual(restored.messages, before.messages);
+    assert.deepEqual(restored.settings, { revision: 2, yolo: false });
+    assert.equal(learning.session(space.id, space.sessions[1]!.id).settings.yolo, false);
+    assert.equal(learning.session(other.id, other.sessions[0]!.id).settings.yolo, false);
+  } finally { db.close(); }
+});
+
 test('all business reads and mutations use local protection, validation and idempotency', async () => {
   const db = openDatabase(':memory:'); const l = new Learning(db);
   const access = createLocalAccess({ port: 14333 }); const app = createApp(access, l);

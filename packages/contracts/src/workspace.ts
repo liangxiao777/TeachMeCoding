@@ -20,6 +20,7 @@ export const saveRequirementSchema = z.object({ revision: z.number().int().nonne
   intake: intakeMetadataSchema.nullable().optional() }).strict();
 export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title }).strict()
   .refine((v) => (v.scope === 'unit') === (v.unitId !== null), 'Unit sessions require a unit; other scopes forbid it');
+export const sessionSettingsSchema = z.object({ revision: z.number().int().nonnegative(), yolo: z.boolean() }).strict();
 export const sessionDraftSchema = z.object({ revision: z.number().int().nonnegative(), text, quote: quoteSchema.nullable(), routeSuggestion: text }).strict();
 export const messageInputSchema = z.object({ text, quote: quoteSchema.nullable(), draftRevision: z.number().int().nonnegative() }).strict()
   .refine((v) => v.text.trim() || v.quote, 'A message or reference is required');
@@ -47,7 +48,8 @@ export const rejectLessonProposalSchema = rejectRouteProposalSchema;
 export const conclusionSchema = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
 export const conclusionDecisionSchema = z.object({ revision: z.number().int().nonnegative(), adopted: z.boolean() }).strict();
 export const generationInputSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.enum(['lesson', 'assessment']), revision: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal('lesson'), revision: z.number().int().nonnegative(), sessionId: idSchema.optional() }).strict(),
+  z.object({ kind: z.literal('assessment'), revision: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal('evaluation'), revision: z.number().int().nonnegative(), specRevision: z.number().int().positive(), q1: text, q2: text, execute: z.boolean().optional() }).strict(),
 ]);
 export const assessmentSpecSchema = z.object({ q1: text.min(1).refine((value) => value.trim().length > 0, 'Assessment question must not be blank.'), q2: text, starter: text.default(''), q2Kind: z.enum(['code', 'reasoning']).default('code'), execution: codePlanSchema.optional() }).strict();
@@ -75,7 +77,7 @@ export interface AgentContext {
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | null;
 }
 export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: string }
-export interface SessionDetail extends SessionSummary { draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
+export interface SessionDetail extends SessionSummary { settings: z.infer<typeof sessionSettingsSchema>; draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
   valid?: boolean; verification?: 'non-execution' | 'execution-unverified' | 'execution-failed' | 'execution-verified'; execution?: CodeExecution; specRevision?: number; lessonRevision?: number; answerHash?: string; q2Kind?: 'code' | 'reasoning' }

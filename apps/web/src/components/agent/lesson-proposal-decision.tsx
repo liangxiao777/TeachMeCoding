@@ -8,6 +8,7 @@ import { useLessonDrawer } from '@/app/lesson-drawer'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { YoloSwitch } from './yolo-switch'
 
 /** The decision belongs to the space, never the selected session or lesson. */
 export function LessonProposalDecision({ proposal }: { proposal: LessonProposal }) {
@@ -33,7 +34,8 @@ export function LessonProposalDecision({ proposal }: { proposal: LessonProposal 
   return <section className="shrink-0 overflow-y-auto border-t bg-background p-4" aria-labelledby={`lesson-decision-${proposal.id}`} data-testid="lesson-decision" data-proposal-id={proposal.id}>
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2"><BookOpen className="size-4" aria-hidden />
-        <h2 id={`lesson-decision-${proposal.id}`} className="flex-1 text-sm font-semibold">{rejecting ? '拒绝课件修改' : '请确认这份课件修改'}</h2><Badge variant="outline">待选择</Badge>
+        <h2 id={`lesson-decision-${proposal.id}`} className="flex-1 text-sm font-semibold">{rejecting ? '拒绝课件修改' : '请确认这份课件修改'}</h2>
+        <YoloSwitch sessionId={proposal.sessionId} /><Badge variant="outline">待选择</Badge>
       </div>
       <p className="text-sm font-medium break-words">目标单元：{unit?.title ?? proposal.baseLesson.title}</p>
       {!previewVisible && <Button variant="outline" size="sm" data-testid="lesson-review" disabled={!unit} onClick={() => persistence.reviewLessonProposal(proposal.id)}>查看课件中的变化</Button>}

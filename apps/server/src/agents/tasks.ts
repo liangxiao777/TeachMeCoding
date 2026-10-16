@@ -49,7 +49,7 @@ export function createTask(learning: Learning, input: FrozenContext, taskId: str
     if (!lesson) throw new BusinessError(422, '模型没有提交有效课件；旧课件保持不变。');
     learning.assertUnitUnlocked(input.spaceId, input.unitId!);
     learning.checkLessonReferences(input.spaceId, references.consumed());
-    if (input.lesson) learning.proposeLesson(input.spaceId, input.unitId!, lesson, baseline(input), { kind: 'task', id: taskId }, references.consumed());
+    if (input.lesson) learning.proposeLesson(input.spaceId, input.unitId!, lesson, baseline(input), { kind: 'task', id: taskId }, references.consumed(), input.approvalSessionId);
     else learning.saveLesson(input.spaceId, input.unitId!, lesson, baseline(input));
   } };
 }

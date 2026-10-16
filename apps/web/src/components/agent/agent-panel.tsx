@@ -27,6 +27,7 @@ import { PromptInput, PromptInputFooter, PromptInputHeader, PromptInputSubmit, P
 import { Suggestion } from '@/components/ai-elements/suggestion'
 import { RunContent } from './run-content'
 import { RunContext } from './run-context'
+import { YoloSwitch } from './yolo-switch'
 import { RouteProposalDecision } from './route-proposal-decision'
 import { LessonProposalDecision } from './lesson-proposal-decision'
 import { LocalAction } from './local-action'
@@ -284,6 +285,7 @@ function Composer() {
             className="min-h-16 leading-relaxed"
           />
           <PromptInputFooter>
+            <YoloSwitch />
             {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">正在生成路线调整…</span>}
             <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
             <PromptInputSubmit className="ml-auto" status={replying ? 'streaming' : 'ready'} onStop={stopReply}

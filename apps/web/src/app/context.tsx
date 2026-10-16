@@ -68,6 +68,7 @@ export interface AppModel {
     busy: boolean
     error: string
     retry: Action
+    setYolo: (enabled: boolean, sessionId?: string) => void
     requirementConfirmed: boolean
     planning: { run?: WorkStatus; error: string | null }
     intake: IntakeMetadata | null

@@ -12,6 +12,52 @@ import { populated, reply, response, syntheticSource } from '../agents/test-supp
 import { TeachingRuntime } from '../agents/runtime.js';
 import { runCommand } from '../runtime/commands.js';
 
+test('YOLO serializes successful file approvals, preserves edits and never executes failed or stopped turns', async () => {
+  for (const mode of ['enabled', 'disabled', 'failed', 'stopped', 'stale'] as const) {
+    const root = mkdtempSync(join(tmpdir(), 'tmc-yolo-actions-')), data = openDataDirectory(root);
+    const learning = new Learning(data.db), projects = new Projects(root), actions = new Actions(learning, projects);
+    const { space, units } = populated(learning);
+    const session = learning.createSession(space.id, { scope: 'unit', unitId: units[0]!.id, title: 'YOLO' }).id;
+    learning.saveSessionSettings(space.id, session, { revision: 0, yolo: true });
+    projects.newFile(space.id, 'first.txt', 'original');
+    let runId = '';
+    const runtime = new TeachingRuntime(learning, syntheticSource, { actions, projectDirectory: (s) => projects.root(s),
+      retry: { enabled: false, maxRetries: 0, baseDelayMs: 0 }, stream: (_m, context) => {
+        if (context.messages.at(-1)?.role === 'toolResult') {
+          if (mode === 'disabled') learning.saveSessionSettings(space.id, session, { revision: 1, yolo: false });
+          if (mode === 'stopped') runtime.stop(space.id, runId);
+          if (mode === 'stale') projects.save(space.id, { ...projects.read(space.id, 'first.txt'), content: 'new user edit' });
+          return response(reply([], mode === 'failed' ? 'error' : 'stop'));
+        }
+        return response(reply([
+          { type: 'toolCall', id: 'first', name: 'propose_file_change', arguments: { path: 'first.txt', content: 'agent edit', reason: 'Update example' } },
+          { type: 'toolCall', id: 'second', name: 'propose_file_change', arguments: { path: 'second.txt', content: 'new example', reason: 'Add example' } },
+        ], 'toolUse'));
+      } });
+    try {
+      const { run } = runtime.submit(space.id, session, randomUUID(), { text: 'Update examples', quote: null, draftRevision: 0 });
+      runId = run.id; await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, mode === 'failed' ? 'failed' : mode === 'stopped' ? 'interrupted' : 'succeeded');
+      assert.equal(projects.read(space.id, 'first.txt').content, mode === 'enabled' ? 'agent edit' : mode === 'stale' ? 'new user edit' : 'original');
+      assert.equal(existsSync(join(projects.root(space.id), 'second.txt')), mode === 'enabled');
+      const saved = actions.list(space.id, session);
+      if (mode === 'enabled') {
+        assert.deepEqual(saved.map((p) => p.state), ['succeeded', 'succeeded']);
+        assert.equal(projects.read(space.id, 'second.txt').content, 'new example');
+        // Historical command records use the same consent and execution path.
+        const command = actions.prepare(space.id, session, run.id, 'command', { command: 'printf once >> count', reason: 'Legacy record' });
+        actions.save(space.id, command);
+        await runtime.approveSession(space.id, session); await runtime.approveSession(space.id, session);
+        assert.equal(actions.get(space.id, command.id).state, 'succeeded');
+        assert.equal(readFileSync(join(projects.root(space.id), 'count'), 'utf8'), 'once');
+      } else if (mode === 'stale') {
+        assert.deepEqual(saved.map((p) => p.state), ['expired', 'pending']);
+        assert.match(learning.session(space.id, session).messages.at(-1)!.text, /YOLO 自动审批未完成.*版本已变化/);
+      } else assert.deepEqual(saved.map((p) => p.state), mode === 'disabled' ? ['pending', 'pending'] : []);
+    } finally { await runtime.close(); await actions.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test('immutable proposals require confirmation, fence stale files, and never replay competing decisions', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-actions-')), data = openDataDirectory(root);
   const learning = new Learning(data.db), projects = new Projects(root), actions = new Actions(learning, projects);

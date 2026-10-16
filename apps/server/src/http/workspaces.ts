@@ -115,8 +115,13 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   });
   api.post('/spaces/:space/sessions/:session/:action', async (c) => {
     const { space, session, action } = c.req.param();
-    if (!['draft', 'messages'].includes(action)) return c.json({ error: 'Not found' }, 404);
+    if (!['draft', 'messages', 'settings'].includes(action)) return c.json({ error: 'Not found' }, 404);
     const input: unknown = await c.req.json();
+    if (action === 'settings') {
+      learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.saveSessionSettings(space, session, input));
+      await decisions.approveSession(space, session);
+      return c.json(learning.session(space, session));
+    }
     return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => {
       if (action === 'messages') return learning.addMessage(space, session, input);
       learning.assertAgentInputAllowed(space);

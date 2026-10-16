@@ -27,12 +27,12 @@ export function createLessonChangeTools(input: FrozenContext) {
     },
   }, {
     name: 'propose_lesson_change', label: '提议修改课件',
-    description: 'Stage a complete replacement title and Markdown content for this session’s current unit only, with an optional explanatory note. Submit the whole lesson, not a patch. Does not publish, alter the route/goals, change files or assessments, or prove mastery. Only the last valid candidate becomes a proposal after normal completion; the user must explicitly accept it.',
+    description: 'Stage a complete replacement title and Markdown content for this session’s current unit only, with an optional explanatory note. Submit the whole lesson, not a patch. Does not publish, alter the route/goals, change files or assessments, or prove mastery. Only the last valid candidate becomes a proposal after normal completion; the host requests acceptance or automatically accepts it in YOLO mode.',
     parameters: Type.Unsafe<ReturnType<typeof lessonChangeSchema.parse>>(JSON.parse(JSON.stringify(lessonChangeSchema.toJSONSchema({ io: 'input' })))),
     async execute(_id, args, signal) {
       signal?.throwIfAborted();
       candidate = lessonChangeSchema.parse(args);
-      return { content: [{ type: 'text', text: '完整课件候选已暂存；回复正常完成后供用户审阅接受，当前课件未改变。' }], details: {} };
+      return { content: [{ type: 'text', text: '完整课件候选已暂存，当前课件未改变。正常完成后由宿主按当前审批模式处理。' }], details: {} };
     },
   }];
   return { tools, candidate: () => candidate };

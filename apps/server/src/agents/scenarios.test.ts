@@ -9,6 +9,103 @@ import { createLocalAccess } from '../http/local-access.js';
 import { TeachingRuntime } from './runtime.js';
 import { conceptIntake, populated, reply, response, routeReply, syntheticSource } from './test-support.js';
 
+test('YOLO accepts only its conversation artifacts and disabling it before completion restores review', async () => {
+  for (const kind of ['route', 'lesson', 'conclusion'] as const) {
+    const db = openDatabase(':memory:'), learning = new Learning(db), { space, units, routeSession } = populated(learning);
+    const unit = units[0]!.id;
+    learning.saveLesson(space.id, unit, { title: 'Original', content: 'Original lesson' });
+    const session = kind === 'route' ? routeSession : learning.createSession(space.id, { scope: 'unit', unitId: unit, title: 'YOLO' }).id;
+    const other = learning.createSession(space.id, { scope: kind === 'route' ? 'route' : 'unit', unitId: kind === 'route' ? null : unit, title: 'Manual' }).id;
+    learning.saveSessionSettings(space.id, session, { revision: 0, yolo: true });
+    let disable = false, candidate = 0;
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
+      if (context.messages.at(-1)?.role === 'toolResult') {
+        if (disable) {
+          learning.saveSessionSettings(space.id, session, { ...learning.sessionSettings(space.id, session), yolo: false });
+          disable = false;
+        }
+        return response(reply([]));
+      }
+      candidate++;
+      if (kind === 'route') return response(routeReply(context.messages, { ...space.route.content!, note: `YOLO route ${candidate}` }, true)!);
+      return response(reply([{ type: 'toolCall', id: randomUUID(), name: kind === 'lesson' ? 'propose_lesson_change' : 'submit_learning_conclusion',
+        arguments: kind === 'lesson' ? { title: `Updated ${candidate}`, content: `Updated lesson ${candidate}` } : { text: 'Separate reading from validation.' },
+      }], 'toolUse'));
+    } });
+    const submit = async (owner: string) => {
+      const { run } = runtime.submit(space.id, owner, randomUUID(), { text: 'Update', quote: null, draftRevision: learning.session(space.id, owner).draft.revision });
+      await runtime.idle(run.id); assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
+      return run.id;
+    };
+    try {
+      await submit(other);
+      if (kind === 'route') {
+        const pending = learning.space(space.id).proposals.at(-1)!;
+        assert.equal(pending.state, 'pending'); learning.rejectProposal(space.id, pending.id, {});
+      } else if (kind === 'lesson') {
+        const pending = learning.space(space.id).lessonProposals.at(-1)!;
+        assert.equal(pending.state, 'pending'); learning.rejectLessonProposal(space.id, pending.id, {});
+      } else assert.equal(learning.conclusions(space.id).at(-1)!.adopted, false);
+      const accepted = await submit(session);
+      if (kind === 'route') {
+        assert.equal(learning.space(space.id).proposals.at(-1)!.state, 'applied');
+        assert.equal(learning.space(space.id).route.content!.note, 'YOLO route 2');
+      } else if (kind === 'lesson') {
+        assert.equal(learning.space(space.id).lessonProposals.at(-1)!.state, 'applied');
+        assert.deepEqual(learning.unit(space.id, unit).lesson, { title: 'Updated 2', content: 'Updated lesson 2', revision: 2 });
+      } else assert.deepEqual(learning.conclusions(space.id).map((c) => [c.runId === accepted, c.adopted]), [[false, false], [true, true]]);
+      disable = true;
+      await submit(session);
+      assert.equal(learning.sessionSettings(space.id, session).yolo, false);
+      if (kind === 'route') assert.equal(learning.space(space.id).proposals.at(-1)!.state, 'pending');
+      if (kind === 'lesson') {
+        assert.equal(learning.space(space.id).lessonProposals.at(-1)!.state, 'pending');
+        assert.deepEqual(learning.unit(space.id, unit).lesson, { title: 'Updated 2', content: 'Updated lesson 2', revision: 2 });
+      }
+      if (kind === 'conclusion') assert.equal(learning.conclusions(space.id).at(-1)!.adopted, false);
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
+test('YOLO confirms ready requirements and plans once, but never supplies clarification answers', async () => {
+  for (const askQuestion of [false, true]) {
+    const db = openDatabase(':memory:'), learning = new Learning(db);
+    const space = learning.create({ name: 'YOLO intake', goal: 'Learn text processing' }), session = space.sessions[0]!.id;
+    learning.saveSessionSettings(space.id, session, { revision: 0, yolo: true });
+    let ask = askQuestion;
+    const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
+      if (context.messages.some((m) => m.role === 'system' && m.toolsAdded?.some((t) => t.name === 'submit_route'))) {
+        return response(routeReply(context.messages, { stages: [{ title: 'Text processing', units: [{ title: 'Read input' }] }] }) ?? reply([]));
+      }
+      if (context.messages.at(-1)?.role === 'toolResult') return response(reply([]));
+      return response(reply([
+        { type: 'toolCall', id: 'draft', name: 'submit_requirement_draft', arguments: { rows: [{ question: 'Goal?', answer: 'Process text files' }] } },
+        ...(ask ? [{ type: 'toolCall' as const, id: 'question', name: 'ask_user_question', arguments: { questions: [{ prompt: 'Where will it run?', multiple: false,
+          options: [{ label: 'Local command line', description: 'Read local files' }, { label: 'Browser', description: 'Read uploaded files' }] }] } }] : []),
+      ], 'toolUse'));
+    } });
+    try {
+      const { run } = runtime.submit(space.id, session, randomUUID(), { text: 'Plan my learning', quote: null, draftRevision: 0 });
+      await runtime.idle(run.id);
+      assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
+      if (askQuestion) {
+        assert.equal(learning.space(space.id).requirement.confirmed, false);
+        assert.equal(learning.space(space.id).runs.filter((r) => r.kind === 'roadmap').length, 0);
+        const round = learning.session(space.id, session).questions![0]!;
+        assert.equal(round.state, 'pending'); assert.equal(round.answers, null);
+        ask = false;
+        const answer = runtime.answer(space.id, session, round.id, randomUUID(), { answers: [{ questionId: round.questions[0]!.id, optionIds: [round.questions[0]!.options[0]!.id], customText: '' }] });
+        await runtime.idle(answer.run.id);
+        assert.equal(learning.session(space.id, session).questions![0]!.state, 'answered');
+      }
+      const plans = learning.space(space.id).runs.filter((r) => r.kind === 'roadmap');
+      assert.equal(plans.length, 1); await runtime.idle(plans[0]!.id);
+      assert.equal(learning.space(space.id).requirement.confirmed, true);
+      assert.equal(learning.space(space.id).route.content!.stages[0]!.units[0]!.title, 'Read input');
+    } finally { await runtime.close(); db.close(); }
+  }
+});
+
 test('the opening request starts intake once, and only its tool fills the editable requirement', async () => {
   const db = openDatabase(':memory:'), learning = new Learning(db);
   const opening = `学习 Rust；只会 Python；做字数统计，3 小时/周共6周。${'希望处理不同编码的文件。'.repeat(20)}`;

@@ -62,6 +62,7 @@ export interface Session {
   id: string
   unitId: string | null
   scope?: 'intake' | 'route' | 'unit'
+  settings?: import('@teach-me-coding/contracts').SessionDetail['settings']
   title: string
   updatedAt: number
   messages: Message[]
