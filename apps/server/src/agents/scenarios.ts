@@ -31,11 +31,11 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
   const lesson = input.lesson ? createLessonChangeTools(input) : undefined;
   const proposals: ActionProposal[] = [];
   const proposalTools: ScenarioRun['tools'] = actions ? [
-    { name: 'propose_file_change', label: '提议修改文件', description: 'Propose full new content for one project file. Does not write; requires explicit user confirmation.',
+    { name: 'propose_file_change', label: '提议修改文件', description: 'Propose full new content for one project file. Does not write immediately; the host requests user confirmation or automatically accepts it in YOLO mode after normal completion.',
       parameters: Type.Unsafe<ReturnType<typeof fileProposalSchema.parse>>(JSON.parse(JSON.stringify(fileProposalSchema.toJSONSchema()))),
       async execute(_id, args) {
         const p = actions.prepare(input.spaceId, input.sessionId!, runId, 'file', args); proposals.push(p);
-        return { content: [{ type: 'text', text: `已暂存提案 ${p.id}，尚未执行。成功回复后由用户查看并确认。` }], details: {} };
+        return { content: [{ type: 'text', text: '文件修改已暂存，尚未执行。正常完成后由宿主按当前审批模式处理。' }], details: {} };
       } },
   ] : [];
   return { tools: [...(cwd ? readTools(cwd) : []), ...proposalTools, ...(lesson?.tools ?? []), {

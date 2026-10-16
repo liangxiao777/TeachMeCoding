@@ -9,6 +9,8 @@ export type Scenario = 'intake' | 'roadmap' | 'tutor' | 'lesson' | 'assessment' 
 export interface FrozenContext {
   spaceId: string;
   sessionId: string | null;
+  /** Originating conversation for independent lesson regeneration, not task execution scope. */
+  approvalSessionId?: string;
   unitId: string | null;
   scenario: Scenario;
   /** Model choice frozen when the run was created; absent on runs from before settings existed. */

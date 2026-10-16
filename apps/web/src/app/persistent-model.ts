@@ -46,10 +46,12 @@ function mergeQuestions(known: QuestionRound[] = [], fresh: QuestionRound[] = []
   return [...rounds.values()]
 }
 function mergeSession(known: SessionDetail | undefined, fresh: SessionDetail, acceptQuestions = true): SessionDetail {
-  if (!known) return { ...fresh, questions: acceptQuestions ? fresh.questions : [] }
+  const settings = fresh.settings ?? { revision: 0, yolo: false }
+  if (!known) return { ...fresh, settings, questions: acceptQuestions ? fresh.questions : [] }
   const messages = new Map(known.messages.map((message) => [message.id, message]))
   for (const message of fresh.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
   return { ...fresh, draft: known.draft.revision > fresh.draft.revision ? known.draft : fresh.draft,
+    settings: (known.settings?.revision ?? 0) > settings.revision ? known.settings : settings,
     messages: [...messages.values()], questions: acceptQuestions ? mergeQuestions(known.questions, fresh.questions) : known.questions }
 }
 const supersedeQuestions = (sessions: StoredSpace['sessions']) => Object.fromEntries(Object.entries(sessions).map(([id, session]) =>
@@ -387,6 +389,9 @@ export function usePersistentModel(): AppModel {
         sessions, ui: { ...s.ui, draft: s.ui.draft ? drafts[s.ui.draft.unitId] ?? null : null,
           ...(freshRoute ? { completed: Object.values(units).every((unit) => unit.status === 'passed' || unit.status === 'skipped'), stages, routeNote: loaded.ui.routeNote, records: unitRecords(units, stages) } : {}),
           ...(s.ui.view === 'planning' && route.content ? { view: 'route', agentOpen: false } : {}),
+          ...(s.ui.view === 'onboarding' && !s.saved.requirement.confirmed && requirement.confirmed
+            && uiSessions.some((session) => session.scope === 'intake' && session.settings?.yolo)
+            ? { view: route.content ? 'route' : 'planning', agentOpen: false } : {}),
           ...(pendingDecision(saved) ? { agentOpen: true } : {}),
           currentUnitId, requirement: requirement.value, sessions: uiSessions,
         },
@@ -453,6 +458,7 @@ export function usePersistentModel(): AppModel {
             if (terminal) {
               refreshCapabilities()
               await refreshBusiness(space)
+              await refreshFiles(space)
               if (work.kind === 'evaluation' || work.kind === 'roadmap') {
                 const final = await api<AgentRun>(`/spaces/${space}/runs/${work.id}`)
                 if (work.kind === 'roadmap') change(space, (s) => latestPlan(s.saved)?.id === work.id ? { ...s, planningError: final.error } : s)
@@ -494,7 +500,7 @@ export function usePersistentModel(): AppModel {
       const update = (old: Session) => {
         const next = uiSession(saved), messages = new Map(old.messages.map((message) => [message.id, message]))
         for (const message of next.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
-        return { ...old, messages: [...messages.values()], updatedAt: Math.max(old.updatedAt, next.updatedAt),
+        return { ...old, settings: saved.settings, messages: [...messages.values()], updatedAt: Math.max(old.updatedAt, next.updatedAt),
           composerText: consumed && old.composerText === consumed.text ? fresh.draft.text : old.composerText,
           composerQuote: consumed && same(old.composerQuote, consumed.quote) ? fresh.draft.quote : old.composerQuote }
       }
@@ -524,6 +530,7 @@ export function usePersistentModel(): AppModel {
     let submission: RunSubmission | undefined, saved: SessionDetail | undefined, applied = false
     return run(`session:${id}`, async () => {
       if (!submission && !saved && pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
+      await flushFiles(space)
       if (capabilities.agent) submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input)
       saved ??= submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
       // Explicit messages and structured answers never consume the composer. A
@@ -707,10 +714,12 @@ export function usePersistentModel(): AppModel {
   const unavailable = () => { setError('该能力尚未接入，不会执行模拟操作。') }
   const generateLesson = (space: string, unit: string) => {
     const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
+    const owner = activeSession(cache.current[space]!.ui)
+    const sessionId = owner?.unitId === unit ? owner.id : undefined
     void run(`lesson:${space}:${unit}`, async () => {
       if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再生成课件。')
       if (!availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
-      const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision })
+      const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision, sessionId })
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] },
         ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit && !s.units[unit]?.lesson ? { ...u, contentState: 'generating' } : u) })) } }))
       watchRun(space, task)
@@ -937,6 +946,24 @@ export function usePersistentModel(): AppModel {
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      setYolo: (enabled, sessionId = session?.id) => {
+        if (!current || !sessionId) return
+        const space = current.id, target = cache.current[space]!.sessions[sessionId]
+        if (!target) return
+        const input = { revision: target.settings?.revision ?? 0, yolo: enabled }
+        void run(`session-settings:${sessionId}`, async () => {
+          if (enabled) await flushFiles(space)
+          try {
+            const saved = await api<SessionDetail>(`/spaces/${space}/sessions/${sessionId}/settings`, input)
+            invalidateBusiness(space)
+            acceptSession(space, saved)
+          } finally {
+            // A lost response or failed auto-accept may still have saved the mode.
+            await refreshBusiness(space)
+            await refreshFiles(space)
+          }
+        })
+      },
       planning: { run: selected ? latestPlan(selected.saved) : undefined, error: selected?.planningError ?? null },
       intake: selected?.saved.requirement.intake ?? null, readiness: selected?.saved.readiness,
       questions: session ? selected?.sessions[session.id]?.questions ?? [] : [],

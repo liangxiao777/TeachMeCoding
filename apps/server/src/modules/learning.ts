@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, unlockedUnitIds,
+  applyAgentEvent, executionFeedback, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, sessionSettingsSchema, unlockedUnitIds,
   type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Lesson, type LessonProposal, type LessonProposalApplication, type Message, type Proposal, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
@@ -111,6 +111,24 @@ export class Learning {
       return { document, workspace: this.space(space) };
     })();
   }
+  sessionSettings(space: string, id: string): SessionDetail['settings'] {
+    idSchema.parse(space); idSchema.parse(id);
+    this.one('SELECT 1 FROM sessions WHERE space_id=? AND id=?', space, id);
+    const row = this.db.prepare('SELECT value FROM app_settings WHERE key=?').get(`session:${space}:${id}`) as { value: string } | undefined;
+    return row ? sessionSettingsSchema.parse(JSON.parse(row.value)) : { revision: 0, yolo: false };
+  }
+  saveSessionSettings(space: string, id: string, input: unknown) {
+    const value = sessionSettingsSchema.parse(input);
+    return this.db.transaction(() => {
+      this.session(space, id);
+      const current = this.sessionSettings(space, id);
+      if (value.revision !== current.revision) throw conflict();
+      const settings = { ...value, revision: current.revision + 1 };
+      this.db.prepare('INSERT INTO app_settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+        .run(`session:${space}:${id}`, JSON.stringify(settings));
+      return settings;
+    })();
+  }
   session(space: string, id: string): SessionDetail {
     idSchema.parse(space); idSchema.parse(id);
     // Text, event projection and resume cursor must come from the same snapshot.
@@ -140,7 +158,7 @@ export class Learning {
           else errors.delete(event.runId);
         }
       }
-      return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title,
+      return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title, settings: this.sessionSettings(space, id),
         draft: { ...JSON.parse(row.draft), revision: row.revision },
         messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
           ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),

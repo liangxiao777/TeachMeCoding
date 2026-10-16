@@ -62,6 +62,44 @@ export class TeachingRuntime {
   get actions() { return this.options.actions; }
   get executions() { return this.options.executions; }
 
+  async approveSession(space: string, session: string, run?: string) {
+    const enabled = () => !this.closing && this.learning.sessionSettings(space, session).yolo;
+    if (!enabled()) return;
+    const owner = this.learning.session(space, session), workspace = this.learning.space(space);
+    for (const proposal of workspace.proposals) {
+      if (!enabled()) return;
+      if (proposal.state === 'pending' && proposal.sessionId === session && (!run || proposal.runId === run)) {
+        this.learning.applyProposal(space, proposal.id);
+      }
+    }
+    for (const proposal of workspace.lessonProposals) {
+      if (!enabled()) return;
+      if (proposal.state === 'pending' && proposal.sessionId === session && (!run || proposal.source.id === run)) {
+        this.learning.applyLessonProposal(space, proposal.id);
+      }
+    }
+    for (const conclusion of this.learning.conclusions(space)) {
+      if (!enabled()) return;
+      if (conclusion.valid && !conclusion.adopted && (run ? conclusion.runId === run
+        : workspace.runs.some((work) => work.id === conclusion.runId && work.sessionId === session))) {
+        this.learning.decideConclusion(space, conclusion.id, { revision: conclusion.revision, adopted: true });
+      }
+    }
+    for (const proposal of this.actions?.list(space, session) ?? []) {
+      if (!enabled()) return;
+      if (proposal.state !== 'pending' || run && proposal.runId !== run) continue;
+      this.actions!.decide(space, proposal.id, { digest: proposal.digest, decision: 'confirm' });
+      await this.actions!.idle(proposal.id);
+    }
+    if (!enabled() || owner.scope !== 'intake') return;
+    const current = this.learning.space(space);
+    // Questions need real answers; YOLO grants consent, never supplies missing facts.
+    if (!current.requirement.confirmed && current.readiness?.ready
+      && !current.runs.some((work) => work.kind === 'intake' && ['pending', 'running'].includes(work.state))) {
+      this.plan(space, randomUUID(), { ...current.requirement, confirmed: true });
+    }
+  }
+
   private tables(space: string, id: string) {
     return this.learning.db.prepare('SELECT 1 FROM task_runs WHERE space_id=? AND id=?').get(space, id)
       ? { work: 'tasks', run: 'task_runs', events: 'task_events', messages: 'task_messages', manifests: 'task_manifests' }
@@ -127,6 +165,10 @@ export class TeachingRuntime {
       this.learning.assertUnitUnlocked(space, unit);
       const revision = input.kind === 'lesson' ? u.lesson?.revision ?? 0 : input.kind === 'assessment' ? u.assessment?.revision ?? 0 : u.draft.revision;
       if (!w.requirement.confirmed || revision !== input.revision) throw new BusinessError(409, '任务基线已改变，请刷新后重试。');
+      if (input.kind === 'lesson' && input.sessionId) {
+        const owner = this.learning.session(space, input.sessionId);
+        if (owner.scope !== 'unit' || owner.unitId !== unit) throw new BusinessError(422, '课件任务必须属于发起会话的单元。');
+      }
       if (input.kind === 'lesson') {
         this.learning.intake.assertReady(space, { ...w.requirement, intake: w.route.intake }, false);
       }
@@ -139,7 +181,7 @@ export class TeachingRuntime {
         progress: input.kind === 'evaluation' ? undefined : this.learning.progress(space),
         research: w.route.intake?.researchRef ? this.learning.intake.research(space, w.route.intake.researchRef) : null,
         assessmentRevision: u.assessment?.revision ?? 0,
-        ...(input.kind === 'lesson' ? { lessonRefs: this.learning.lessonReferences(space),
+        ...(input.kind === 'lesson' ? { approvalSessionId: input.sessionId, lessonRefs: this.learning.lessonReferences(space),
           rejectedLessonProposal: w.lessonProposals.findLast((p) => p.unitId === unit && p.state === 'rejected') } : {}),
         ...(input.kind === 'evaluation' ? { evaluation: new Assessments(this.learning).submit(space, unit, input) } : {}) };
       if (input.kind === 'evaluation' && input.execute) {
@@ -417,7 +459,10 @@ export class TeachingRuntime {
       if (!active(this.get(space, id))) return;
       const cwd = this.options.projectDirectory?.(space) ?? process.cwd();
       const saved = restoreAgentSession(this.learning.db, space, frozen.sessionId, id, cwd);
-      const compiled = compileRequest(frozen, saved.history, [], prepared.declarations, skills?.prompt);
+      const approvalSession = frozen.sessionId ?? frozen.approvalSessionId;
+      const yolo = approvalSession && this.learning.sessionSettings(space, approvalSession).yolo;
+      const approvalPrompt = yolo ? '<approval_mode>当前会话已开启 YOLO。仍通过现有工具提交产物；正常完成后宿主会自动接受需求、路线、课件、文件修改和学习结论，无需请求用户点击审批。此模式覆盖默认的人工确认要求，但不代表已执行成功，不绕过版本、归属、写入或测评校验。澄清问题仍需用户真实回答，不能编造答案。</approval_mode>' : '';
+      const compiled = compileRequest(frozen, saved.history, [], prepared.declarations, `${skills?.prompt ?? ''}${approvalPrompt}`);
       for (const message of compiled.messages.slice(2)) saved.manager.appendMessage(message);
       // The current frozen business baseline replaces the previous baseline, not
       // the conversation. Compaction summaries remain historical, never authority.
@@ -591,6 +636,17 @@ export class TeachingRuntime {
           : '模型响应未正常完成，未保存生成产物。'));
       // Pi feeds tool errors back to the model; the scenario validates publishable artifacts.
       this.learning.db.transaction(() => { scenario.commit(); persistSession!(); emitContext(); this.finish(space, id, 'succeeded', null); })();
+      // Only committed, normally completed artifacts can be automatically accepted.
+      // File execution claims remain outside the publication transaction and never replay.
+      const owner = frozen.sessionId ?? frozen.approvalSessionId;
+      if (owner) {
+        try { await this.approveSession(space, owner, id); }
+        catch (error) {
+          const reason = error instanceof BusinessError ? error.message : '请检查待处理操作后重试。';
+          this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent',?,NULL,?)")
+            .run(space, owner, randomUUID(), `YOLO 自动审批未完成：${reason}`, Date.now());
+        }
+      }
     } catch (error) {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message
         : modelFailure?.message ?? '生成产物或模型运行无效，请重试。'))();

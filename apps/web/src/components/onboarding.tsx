@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
 import { RunContext } from '@/components/agent/run-context'
+import { YoloSwitch } from '@/components/agent/yolo-switch'
 import { RouteProposalDecision } from '@/components/agent/route-proposal-decision'
 import { LessonProposalDecision } from '@/components/agent/lesson-proposal-decision'
 import { pendingDecision } from '@/app/lesson-proposals'
@@ -264,6 +265,7 @@ function Chat() {
               className="leading-relaxed"
             />
             <PromptInputFooter>
+              <YoloSwitch />
               <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行

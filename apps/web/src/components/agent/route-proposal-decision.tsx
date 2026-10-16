@@ -6,6 +6,7 @@ import { diffRoute, routeDiffSummary } from '@/app/route-diff'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { YoloSwitch } from './yolo-switch'
 
 /** One mandatory decision, independent of the currently viewed session. */
 export function RouteProposalDecision({ proposal }: { proposal: Proposal }) {
@@ -31,6 +32,7 @@ export function RouteProposalDecision({ proposal }: { proposal: Proposal }) {
         <div className="flex items-center gap-2">
           <Route className="size-4" aria-hidden />
           <h2 id={`decision-${proposal.id}`} className="flex-1 text-sm font-semibold">{rejecting ? '拒绝并说明修改意见' : '请确认这份路线调整'}</h2>
+          <YoloSwitch sessionId={proposal.sessionId} />
           <Badge variant="outline">待选择</Badge>
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground">{summary}</p>
