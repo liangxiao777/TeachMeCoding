@@ -17,7 +17,7 @@ export function createRouteTools(current: RouteContent | null, progress: readonl
     let submitted: RouteContent | undefined;
     return { tools: [{
       name: 'submit_route', label: '提交完整学习路线',
-      description: 'Submit the complete initial learning route in one call. Nest units inside stages; array order is learning order. Include a concise summary of what each unit covers and goals describing what the learner will be able to do when useful. Summary, goals and the planning rationale note are optional. Do not provide IDs or position numbers; the host creates identities and associations. This only stages the route; successful completion saves and displays it.',
+      description: 'Submit the complete initial learning route in one call. Nest units inside stages; array order is learning order. Write each unit summary for the learner in one or two plain sentences: what it helps them do and why it comes at this point, not a list of APIs. Goals describe what the learner will be able to do and check. Summary, goals and the planning rationale note are optional. Do not provide IDs or position numbers; the host creates identities and associations. This only stages the route; successful completion saves and displays it.',
       parameters: Type.Unsafe(JSON.parse(JSON.stringify(routeSubmissionSchema.toJSONSchema()))),
       async execute(_id, args) {
         const content = routeSubmissionSchema.parse(args);
@@ -69,7 +69,7 @@ export function createRouteTools(current: RouteContent | null, progress: readonl
         draft.stages.splice(at, 0, value);
         return { stageId: value.id, title: value.title };
       }),
-    tool('add_route_unit', '添加学习单元', 'Add one unit to a stage. Copy stageId from the route or tool result. Summary and goals are optional; prefer useful teaching scope and learning outcomes rather than filler. The host returns unitId.',
+    tool('add_route_unit', '添加学习单元', 'Add one unit to a stage. Copy stageId from the route or tool result. Summary and goals are optional; write the summary for the learner (what it helps with, why here) and goals they can check; avoid filler and API lists. The host returns unitId.',
       unitContent.partial({ summary: true, goals: true }).extend({ stageId: idSchema, position }).strict(), (args) => {
         const parent = stage(args.stageId), at = index(args.position, parent.units.length, parent.units.length);
         const value = { id: randomUUID(), title: args.title, summary: args.summary ?? '', goals: args.goals ?? [] };
@@ -112,7 +112,7 @@ export function createRouteTools(current: RouteContent | null, progress: readonl
         draft.stages.splice(draft.stages.indexOf(value), 1);
         return { removed: value.id };
       }),
-    tool('submit_route_proposal', '提交路线调整', 'Submit the assembled adjustment for user confirmation, without repeating the whole route. The planning rationale note is optional. Every stage must contain a unit. Actual content or order changes after submission require resubmission; unchanged updates do not.',
+    tool('submit_route_proposal', '提交路线调整', 'Submit the assembled adjustment for user confirmation, without repeating the whole route. The optional note replaces the route’s arrangement rationale; write it for the learner about the adjusted route. Every stage must contain a unit. Actual content or order changes after submission require resubmission; unchanged updates do not.',
       z.object({ note: routeContentSchema.shape.note.optional() }).strict(), (args) => {
         submitted = routeContentSchema.parse({ ...draft, note: args.note ?? '' });
         return { status: 'staged', stages: submitted.stages.length, units: submitted.stages.reduce((n, stage) => n + stage.units.length, 0),

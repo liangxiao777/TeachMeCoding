@@ -27,7 +27,7 @@ export function createLessonChangeTools(input: FrozenContext) {
     },
   }, {
     name: 'propose_lesson_change', label: '提议修改课件',
-    description: 'Stage a complete replacement title and Markdown content for this session’s current unit only, with an optional explanatory note. Submit the whole lesson, not a patch. Does not publish, alter the route/goals, change files or assessments, or prove mastery. Only the last valid candidate becomes a proposal after normal completion; the host requests acceptance or automatically accepts it in YOLO mode.',
+    description: 'Stage a complete replacement title and Markdown content for this session’s current unit only, with an optional explanatory note. Submit the whole lesson, not a patch. Does not publish, alter the route/goals, change files or assessments, or prove mastery. Only the last valid candidate becomes a proposal after normal completion; the host requests acceptance or automatically accepts it in YOLO mode. Write the replacement for the learner the same way as generated courseware: build understanding and keep only the detail the unit needs.',
     parameters: Type.Unsafe<ReturnType<typeof lessonChangeSchema.parse>>(JSON.parse(JSON.stringify(lessonChangeSchema.toJSONSchema({ io: 'input' })))),
     async execute(_id, args, signal) {
       signal?.throwIfAborted();

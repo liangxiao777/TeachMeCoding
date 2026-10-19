@@ -10,7 +10,7 @@ export function createIntakeTools(learning: Learning, input: FrozenContext, runI
   return {
     tools: [
       { name: 'ask_user_question', label: '确认学习需求',
-        description: 'Stage one round of relevant questions with 2–4 balanced options each. Usually ask 1–2 questions. The host always allows custom text. End this run normally to publish them; an answer starts a new run. Never ask for information already provided.',
+        description: 'Stage one round of questions. Each question asks about exactly one thing, with 2–4 distinct options that answer that one thing, never combinations of several attributes. Include only independent questions needed now; ask follow-ups that depend on an answer in a later round. The host always allows custom text. End this run normally to publish them; an answer starts a new run. Never ask for information already provided.',
         parameters: Type.Unsafe(JSON.parse(JSON.stringify(questionInputSchema.toJSONSchema()))),
         async execute(_id, args) {
           questions = learning.intake.prepareQuestions(input.sessionId!, runId, input.requirement.revision, args);
@@ -25,7 +25,7 @@ export function createIntakeTools(learning: Learning, input: FrozenContext, runI
           return { content: [{ type: 'text', text: 'Markdown 调研资料已暂存；正常结束本轮后发布。' }], details: {} };
         } },
       { name: 'submit_requirement_draft', label: '整理需求草稿',
-        description: 'Write the complete editable learning-requirement table as rows of question and answer. Choose useful questions from the conversation; there is no fixed checklist, required wording, category or separate version field. Preserve the user’s answers, goals, important preferences and corrections without inventing missing information; an unknown answer may be empty. The host associates the whole table with its research document; do not supply IDs, references or row metadata. Update that document when it no longer supports the agreed learning needs. A later call replaces the staged table. Never confirms the requirement for the user.',
+        description: 'Write the complete editable learning-requirement table as rows of question and answer. Choose useful questions from the conversation; there is no fixed checklist, required wording, category or separate version field. Preserve the user’s answers, goals, important preferences and corrections in their own words and concrete details, without inventing missing information. Do not present your own inferences or suggestions as the user’s answers, or add rows only for the user to fill in. The host associates the whole table with its research document; do not supply IDs, references or row metadata. Update that document when it no longer supports the agreed learning needs. A later call replaces the staged table. Never confirms the requirement for the user.',
         parameters: Type.Unsafe(JSON.parse(JSON.stringify(requirementSchema.toJSONSchema()))),
         async execute(_id, args) {
           draft = requirementSchema.parse(args);
