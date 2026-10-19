@@ -210,6 +210,94 @@
   }
 }
 
+.code-loading {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  padding: 24px;
+}
+
+.code-loading-content,
+.code-loading-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.code-loading-content {
+  gap: 24px;
+  transform: translateY(-12px);
+}
+
+.code-loading-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+
+.code-loading-mark {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  font-size: 20px;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.code-loading-status {
+  gap: 15px;
+}
+
+.code-loading-status p {
+  color: var(--muted-foreground);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.code-loading-dots {
+  display: flex;
+  gap: 8px;
+}
+
+.code-loading-dots > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--foreground);
+  opacity: 0.18;
+  animation: code-loading-breathe 2.1s ease-in-out infinite;
+}
+
+.code-loading-dots > span:nth-child(2) { animation-delay: 0.7s; }
+.code-loading-dots > span:nth-child(3) { animation-delay: 1.4s; }
+
+@keyframes code-loading-breathe {
+  0%, 58%, 100% { opacity: 0.18; }
+  25% { opacity: 0.85; }
+}
+
+@media (max-width: 480px) {
+  .code-loading-brand {
+    gap: 10px;
+    font-size: 20px;
+  }
+
+  .code-loading-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    font-size: 17px;
+  }
+}
+
 .lesson-prose ::selection {
   background: var(--accent);
   color: var(--accent-foreground);
@@ -415,6 +503,11 @@
 
   .startup-light-plane > span {
     animation: none;
+  }
+
+  .code-loading-dots > span {
+    animation: none;
+    opacity: 0.4;
   }
 
   .startup-submit:not(:disabled):hover svg,

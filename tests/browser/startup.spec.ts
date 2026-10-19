@@ -2,6 +2,58 @@ import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { expect, test } from '@playwright/test';
 
+for (const { path, theme } of [{ path: '/', theme: 'light' }, { path: '/preview', theme: 'dark' }] as const) {
+  test(`code loading respects the saved ${theme} theme, motion preference and mobile viewport (${path})`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.emulateMedia({ colorScheme: theme === 'light' ? 'dark' : 'light', reducedMotion: 'no-preference' });
+    await page.addInitScript((selected) => localStorage.setItem('tmc-theme', selected), theme);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await page.route(/\/(?:src\/(?:app\/workspace|fixtures\/preview)\.tsx(?:\?.*)?|assets\/(?:workspace|preview)-[^/]+\.js)$/, async (route) => {
+      await gate;
+      await route.continue();
+    });
+    const loading = page.getByRole('main', { name: '应用加载', exact: true });
+    try {
+      await page.goto(path, { waitUntil: 'domcontentloaded' });
+      await expect(loading).toBeVisible();
+      await expect(loading.getByRole('status')).toHaveText('正在加载…');
+      await expect(loading.getByText('TeachMeCoding', { exact: true })).toBeVisible();
+      await expect(loading).toHaveCSS('background-color', theme === 'light' ? 'rgb(251, 251, 251)' : 'rgb(16, 16, 16)');
+      await page.evaluate(() => document.fonts.ready);
+      const brand = loading.locator('.code-loading-brand');
+      const before = (await brand.boundingBox())!;
+      expect(before.x + before.width / 2).toBeCloseTo(page.viewportSize()!.width / 2, 0);
+      const dot = loading.locator('.code-loading-dots > span').first();
+      const opacity = await dot.evaluate((el) => getComputedStyle(el).opacity);
+      await expect.poll(() => dot.evaluate((el) => getComputedStyle(el).opacity)).not.toBe(opacity);
+      const planes = loading.locator('.startup-light-plane');
+      await expect(planes).toHaveCount(2);
+      const light = planes.first().locator('span');
+      await expect(light).toHaveCSS('animation-duration', '12s');
+      await expect(planes.nth(1).locator('span')).toHaveCSS('animation-duration', '16s');
+      const background = await light.evaluate((el) => getComputedStyle(el).transform);
+      await expect.poll(() => light.evaluate((el) => getComputedStyle(el).transform)).not.toBe(background);
+      await page.mouse.move(page.viewportSize()!.width * 0.85, page.viewportSize()!.height * 0.3);
+      await expect.poll(() => planes.first().evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m41)).toBeCloseTo(5.6, 1);
+      await expect.poll(() => planes.first().evaluate((el) => new DOMMatrixReadOnly(getComputedStyle(el).transform).m42)).toBeCloseTo(-2.4, 1);
+      expect(await brand.boundingBox()).toEqual(before);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(loading.getByRole('status')).toBeInViewport();
+      await expect(brand).toBeInViewport({ ratio: 1 });
+      await expect(planes.first()).toHaveCSS('transform', 'none');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await expect.poll(() => loading.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+      await expect(loading.getByRole('status')).toHaveText('正在加载…');
+    } finally { release(); }
+    await expect(loading).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: '你想学什么', exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+}
+
 test('network HTTP entry can create and retry a space without secure-context UUID support', async ({ page, baseURL }, info) => {
   test.skip(process.env.HOST !== '0.0.0.0', 'Run with HOST=0.0.0.0 to exercise network access.');
   const address = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address;
