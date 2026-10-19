@@ -126,7 +126,9 @@ export function QuestionRoundCard({ round, disabled, onAnswer }: {
           </fieldset>
           {navigation}
           {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-          <Button type="submit" size="sm" disabled={disabled || sending || !complete}>{sending ? '提交中…' : '提交全部回答'}</Button>
+          <div className="flex justify-end">
+            <Button type="submit" size="sm" disabled={disabled || sending || !complete}>{sending ? '提交中…' : '提交全部回答'}</Button>
+          </div>
         </form>
       </CardContent>
     </Card>

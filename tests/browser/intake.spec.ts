@@ -286,6 +286,9 @@ for (const count of [1, 4] as const) test(`one visible question preserves distin
   const texts = ['先写脱敏账本 CLI', '失败样例与分块边界', '先试合成中文记录', '测试日志结合解释'];
   const types = ['radio', 'checkbox', 'radio', 'checkbox'] as const;
   await expect(navigation).toHaveCount(count === 1 ? 0 : 1);
+  const rightInset = await submit.evaluate((button) =>
+    button.closest('form')!.getBoundingClientRect().right - button.getBoundingClientRect().right);
+  expect(Math.abs(rightInset)).toBeLessThanOrEqual(1);
   for (let index = 0; index < count; index++) {
     await expect(page.locator('fieldset')).toHaveCount(1);
     if (count > 1) await expect(navigation.getByRole('status')).toContainText(`问题 ${index + 1} / ${count}`);
