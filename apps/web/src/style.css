@@ -246,9 +246,6 @@
   flex: none;
   width: 48px;
   height: 48px;
-  border-radius: 14px;
-  font-size: 20px;
-  line-height: 1;
   box-shadow: none;
 }
 
@@ -293,8 +290,6 @@
   .code-loading-mark {
     width: 40px;
     height: 40px;
-    border-radius: 11px;
-    font-size: 17px;
   }
 }
 
