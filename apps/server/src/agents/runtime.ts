@@ -2,9 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
-import { type AssistantMessage, type RetryPolicy } from '@earendil-works/pi-ai';
+import { type AssistantMessage, type RetryPolicy, type UserMessage } from '@earendil-works/pi-ai';
 import { AgentSession, convertToLlm, createExtensionRuntime, SettingsManager, type CompactionSettings, type ResourceLoader } from '@earendil-works/pi-coding-agent';
-import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, createSpaceSchema, generationInputSchema, idSchema, messageInputSchema, questionAnswerSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, saveRequirementSchema, type AgentContext, type AgentEventData, type AgentRun, type ProposalRejection, type QueuedPrompt, type RunEvents, type RunSubmission } from '@teach-me-coding/contracts';
 import { BusinessError, Learning } from '../modules/learning.js';
 import type { ModelSource } from '../models/service.js';
 import { classifyModelFailure } from '../models/failure.js';
@@ -44,9 +44,14 @@ interface RuntimeOptions {
   webFetch?: WebFetchOptions;
   library?: Library;
 }
+interface LiveRun {
+  space: string; session?: AgentSession; controller: AbortController; done: Promise<void>; accepting: boolean;
+  pending: { prompt: QueuedPrompt; native: UserMessage }[];
+}
 const active = (run: AgentRun) => run.state === 'running' || run.state === 'pending';
+const promptText = (text: string, references: FrozenContext['references']) => `${text}${references.length ? `\n<references>${xmlText(JSON.stringify(references))}</references>` : ''}`;
 export class TeachingRuntime {
-  private live = new Map<string, { space: string; session?: AgentSession; controller: AbortController; done: Promise<void> }>();
+  private live = new Map<string, LiveRun>();
   private closing = false;
   private stream: StreamFn;
   private httpIdleTimeoutMs: number;
@@ -339,9 +344,57 @@ export class TeachingRuntime {
     const input = messageInputSchema.parse(raw);
     if (this.closing) throw new BusinessError(503, '服务正在关闭。');
     if (!this.available) throw new BusinessError(503, this.models?.issue ?? '教学模型不可用，请在应用设置中检查模型与凭据。');
-    const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => this.recordRun(space, session, input, retryOf));
+    let queued: LiveRun['pending'][number] | undefined;
+    const id = this.learning.once(key, `agent:${space}:${session}:${retryOf ?? ''}`, input, () => {
+      const running = !retryOf && this.learning.db.prepare("SELECT id FROM runs WHERE space_id=? AND session_id=? AND state IN ('pending','running')").get(space, session) as { id: string } | undefined;
+      if (!running) return this.recordRun(space, session, input, retryOf);
+      const entry = this.live.get(running.id);
+      if (!entry?.accepting) throw new BusinessError(409, '本轮正在收尾，请稍后发送。');
+      this.learning.assertAgentInputAllowed(space);
+      const saved = this.learning.session(space, session);
+      if (saved.scope === 'route') this.learning.assertRouteAdjustmentAllowed(space, running.id);
+      if (saved.unitId) this.learning.assertUnitUnlocked(space, saved.unitId);
+      // Draft consumption and acceptance are durable; only delivery enters chat history.
+      this.learning.saveSessionDraft(space, session, { ...saved.draft, revision: input.draftRevision, text: '', quote: null });
+      const prompt: QueuedPrompt = { id: randomUUID(), text: input.text, quote: input.quote, createdAt: Date.now() };
+      queued = { prompt, native: { role: 'user', content: [{ type: 'text', text: promptText(input.text, input.quote ? [input.quote] : []) }], timestamp: prompt.createdAt } };
+      this.emit(space, running.id, { type: 'prompt_queued', prompt });
+      return running.id;
+    });
+    if (queued) {
+      const entry = this.live.get(id)!;
+      entry.pending.push(queued);
+      // Use Pi's message queue directly: the host owns IDs/references and disables templates.
+      // This is synchronous even during AgentSession's asynchronous startup preflight.
+      entry.session?.agent.followUp(queued.native);
+    }
     this.launch(space, id, input.text);
     return { run: this.get(space, id), session: this.learning.session(space, session) };
+  }
+  dequeue(space: string, session: string, promptId: string, key: string) {
+    idSchema.parse(promptId);
+    let update: { entry: LiveRun; remaining: LiveRun['pending'] } | undefined;
+    this.learning.once(key, `dequeue:${space}:${session}:${promptId}`, null, () => {
+      const saved = this.learning.session(space, session);
+      const owner = saved.messages.find((message) => message.queuedPrompts?.some((prompt) => prompt.id === promptId));
+      if (!owner) throw new BusinessError(404, '待发送消息不存在或已开始处理。');
+      const entry = this.live.get(owner.id);
+      if (entry?.session && active(this.get(space, owner.id))) {
+        const next = entry.session.agent.peekQueuedMessages()[0];
+        const index = entry.pending.findIndex((pending) => pending.native === next);
+        const remaining = index < 0 ? [] : entry.pending.slice(index);
+        if (!remaining.some((pending) => pending.prompt.id === promptId)) throw new BusinessError(409, '这条消息已开始处理，不能撤回。');
+        update = { entry, remaining: remaining.filter((pending) => pending.prompt.id !== promptId) };
+      }
+      this.emit(space, owner.id, { type: 'prompt_removed', promptId });
+      return owner.id;
+    });
+    if (update) {
+      update.entry.session!.agent.clearFollowUpQueue();
+      for (const pending of update.remaining) update.entry.session!.agent.followUp(pending.native);
+    }
+    for (const entry of this.live.values()) entry.pending = entry.pending.filter((pending) => pending.prompt.id !== promptId);
+    return this.learning.session(space, session);
   }
   private recordRun(space: string, session: string, input: ReturnType<typeof messageInputSchema.parse>, retryOf?: string, preserveDraft = false) {
     this.learning.assertAgentInputAllowed(space);
@@ -360,7 +413,7 @@ export class TeachingRuntime {
   }
   private launch(space: string, id: string, text: string) {
     if (this.get(space, id).state === 'pending' && !this.live.has(id)) {
-      const entry: { space: string; session?: AgentSession; controller: AbortController; done: Promise<void> } = { space, controller: new AbortController(), done: Promise.resolve() };
+      const entry: LiveRun = { space, controller: new AbortController(), done: Promise.resolve(), accepting: true, pending: [] };
       this.live.set(id, entry);
       entry.done = Promise.resolve().then(() => this.execute(space, id, text, entry)).finally(() => { this.live.delete(id); });
     }
@@ -373,6 +426,8 @@ export class TeachingRuntime {
         this.learning.db.prepare(`UPDATE ${this.tables(space, id).run} SET cancelled=1 WHERE space_id=? AND id=?`).run(space, id);
         this.finish(space, id, 'interrupted', '已主动停止；未完成的回复不能作为完成结果。');
       })();
+      const entry = this.live.get(id);
+      if (entry) { entry.accepting = false; entry.session?.agent.clearFollowUpQueue(); }
       this.live.get(id)?.controller.abort();
       void this.live.get(id)?.session?.abort();
       this.stopExecution(space, id);
@@ -388,6 +443,8 @@ export class TeachingRuntime {
   async close() {
     this.closing = true;
     for (const [id, entry] of this.live) {
+      entry.accepting = false;
+      entry.session?.agent.clearFollowUpQueue();
       this.learning.db.transaction(() => this.finish(entry.space, id, 'interrupted', '服务关闭，运行已中断；未自动重放。'))();
       entry.controller.abort();
       void entry.session?.abort();
@@ -406,7 +463,7 @@ export class TeachingRuntime {
       { type: 'context', context: { ...context, phase: state === 'failed' ? 'failed' : 'interrupted' } });
     this.emit(space, id, { type: 'state', state, error });
   }
-  private async execute(space: string, id: string, text: string, entry: { session?: AgentSession; controller: AbortController }) {
+  private async execute(space: string, id: string, text: string, entry: LiveRun) {
     if (!active(this.get(space, id))) return;
     const tables = this.tables(space, id);
     const { input } = this.learning.db.prepare(`SELECT input FROM ${tables.run} WHERE space_id=? AND id=?`).get(space, id) as { input: string };
@@ -434,7 +491,7 @@ export class TeachingRuntime {
     };
     const toolSources: unknown[] = [];
     const toolParts = new Map<string, string>();
-    let failure = '', request = 0, nativeSeq = 0;
+    let failure = '', request = 0, nativeSeq = 0, responseMessageId = id;
     let modelFailure: ReturnType<typeof classifyModelFailure>;
     let completion: AssistantMessage | undefined;
     let phase: AgentContext['phase'] = 'ready', compaction: AgentContext['compaction'];
@@ -486,7 +543,7 @@ export class TeachingRuntime {
       const agent = new Agent({
         initialState: { model: choice.model, messages: saved.manager.buildSessionContext().messages, thinkingLevel: choice.selection.thinkingLevel },
         convertToLlm,
-        sessionId: frozen.sessionId ?? id, toolExecution: 'sequential',
+        sessionId: frozen.sessionId ?? id, toolExecution: 'sequential', followUpMode: 'one-at-a-time',
         streamFn: async (model, context, options) => {
           const timeoutMs = options?.timeoutMs ?? (this.httpIdleTimeoutMs === 0 ? 2147483647 : this.httpIdleTimeoutMs);
           const modelFetch = this.modelTransport.fetchFor(model.api);
@@ -569,11 +626,34 @@ export class TeachingRuntime {
       this.emit(space, id, { type: 'state', state: 'running', error: null });
       emitContext();
       session.subscribe((event) => {
+        if (event.type === 'agent_end' && !event.willRetry && (failure || completion?.stopReason === 'error' || completion?.stopReason === 'aborted')) {
+          // Session otherwise continues queued prompts after a terminal model error.
+          // Keep the host's durable pending records, but do not silently run past a failure.
+          entry.accepting = false;
+          agent.clearFollowUpQueue();
+        }
+        if (event.type === 'message_start' && event.message.role === 'user' && active(this.get(space, id))) {
+          const pending = entry.pending.find((pending) => pending.native === event.message);
+          if (pending && frozen.sessionId) {
+            responseMessageId = randomUUID();
+            this.learning.db.transaction(() => {
+              if (frozen.scenario === 'intake') this.learning.intake.supersede(space, frozen.sessionId!);
+              const prompt = pending.prompt;
+              this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'user',?,?,?)")
+                .run(space, frozen.sessionId, prompt.id, prompt.text, prompt.quote ? JSON.stringify(prompt.quote) : null, prompt.createdAt);
+              this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, frozen.sessionId, responseMessageId, Date.now());
+              this.emit(space, id, { type: 'prompt_started', prompt, messageId: responseMessageId });
+            })();
+            entry.pending = entry.pending.filter((item) => item !== pending);
+          }
+        }
         if (event.type === 'message_end' && (event.message.role === 'user' || event.message.role === 'assistant' || event.message.role === 'toolResult')) {
           const m = event.message;
           this.learning.db.prepare(`INSERT INTO ${tables.messages} VALUES (?,?,?,1,?)`).run(space, id, ++nativeSeq, JSON.stringify(retainedMessage(m)));
           if (m.role === 'assistant') {
             completion = m;
+            // Pi repairs truncated tool calls through tool feedback; plain text has no repair turn.
+            if (m.stopReason === 'length' && !m.content.some((part) => part.type === 'toolCall')) failure = '模型输出被截断，未保存生成产物。';
             phase = 'ready';
           }
         }
@@ -597,7 +677,7 @@ export class TeachingRuntime {
           const update = event.assistantMessageEvent;
           if (displayModelText && update.type === 'text_delta') {
             this.learning.db.transaction(() => {
-              if (frozen.sessionId) this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(update.delta, space, id);
+              if (frozen.sessionId) this.learning.db.prepare('UPDATE messages SET text=text||? WHERE space_id=? AND id=?').run(update.delta, space, responseMessageId);
               this.emit(space, id, { type: 'text', delta: update.delta, partId: `${id}:${request}:text:${update.contentIndex}` });
             })();
           }
@@ -627,7 +707,9 @@ export class TeachingRuntime {
             ...(event.type === 'tool_execution_start' ? { input: publicInput(event.toolName, event.args) } : {}),
             phase: event.type === 'tool_execution_start' ? 'start' : 'end', failed: event.type === 'tool_execution_end' ? event.isError : undefined });
       });
-      await session.prompt(`${skills?.text ?? text}${frozen.references.length ? `\n<references>${xmlText(JSON.stringify(frozen.references))}</references>` : ''}`, { expandPromptTemplates: false });
+      for (const pending of entry.pending) agent.followUp(pending.native);
+      await session.prompt(promptText(skills?.text ?? text, frozen.references), { expandPromptTemplates: false });
+      entry.accepting = false;
       await Promise.all(responses);
       if (!active(this.get(space, id))) return;
       if (failure) throw new BusinessError(422, failure);
@@ -651,6 +733,7 @@ export class TeachingRuntime {
       this.learning.db.transaction(() => this.finish(space, id, 'failed', error instanceof BusinessError ? error.message
         : modelFailure?.message ?? '生成产物或模型运行无效，请重试。'))();
     } finally {
+      entry.accepting = false;
       await Promise.all(responses);
       if (this.get(space, id).state !== 'succeeded') persistSession?.();
       entry.session?.dispose();

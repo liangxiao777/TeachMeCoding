@@ -28,6 +28,7 @@ import { Suggestion } from '@/components/ai-elements/suggestion'
 import { RunContent } from './run-content'
 import { RunContext } from './run-context'
 import { YoloSwitch } from './yolo-switch'
+import { PromptQueue } from './prompt-queue'
 import { RouteProposalDecision } from './route-proposal-decision'
 import { LessonProposalDecision } from './lesson-proposal-decision'
 import { LocalAction } from './local-action'
@@ -108,8 +109,8 @@ export function AgentMessage({ msg }: { msg: Message }) {
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Square className="size-3" aria-hidden />
           已停止生成
-          <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.id)}>
-            重新生成
+          <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.runId ?? msg.id)}>
+            {msg.runId ? '重新生成首条问题' : '重新生成'}
           </Button>
         </div>
       )}
@@ -118,9 +119,9 @@ export function AgentMessage({ msg }: { msg: Message }) {
           <AlertCircle />
           <AlertTitle>{msg.error ?? '回复失败，你的问题已保留'}</AlertTitle>
           <AlertAction>
-            <Button size="xs" variant="outline" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.id)}>
+            <Button size="xs" variant="outline" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.runId ?? msg.id)}>
               <RotateCcw data-icon="inline-start" />
-              重试
+              {msg.runId ? '重试首条问题' : '重试'}
             </Button>
           </AlertAction>
         </Alert>
@@ -230,7 +231,8 @@ function Composer() {
   const quote = session?.composerQuote
   const replying = capabilities.agent && (!!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
     || sessionScope(space) === 'route' && !!persistence?.routeAdjustmentRun)
-  const busy = replying || sending || !!persistence && (persistence.busy || !persistence.ready)
+  const busy = !persistence && replying || sending || !!persistence && (persistence.busy || !persistence.ready
+    || sessionScope(space) === 'route' && !!persistence.routeAdjustmentRun && persistence.routeAdjustmentRun.sessionId !== session?.id)
   const canSend = !busy && (text.trim() || quote)
 
   useEffect(() => {
@@ -287,9 +289,10 @@ function Composer() {
           <PromptInputFooter>
             <YoloSwitch />
             {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">正在生成路线调整…</span>}
-            <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
-            <PromptInputSubmit className="ml-auto" status={replying ? 'streaming' : 'ready'} onStop={stopReply}
-              disabled={!replying && !canSend} aria-label={replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
+            <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.runId ?? session?.messages.findLast((m) => m.role === 'agent')?.id} />
+            {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label="停止"><Square /></Button>}
+            <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status={!persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
+              disabled={!(!persistence && replying) && !canSend} aria-label={persistence && replying ? '加入队列' : replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
           </PromptInputFooter>
       </PromptInput>
       {sendError && <p role="alert" className="mt-2 text-xs text-destructive">{sendError}</p>}
@@ -416,6 +419,7 @@ export function AgentPanel() {
           <ConversationScrollButton aria-label="滚动到最新消息" />
         </Conversation>
       )}
+      <PromptQueue />
       {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : lessonProposal ? <LessonProposalDecision key={lessonProposal.id} proposal={lessonProposal} /> : <Composer />}
     </motion.aside>
   )

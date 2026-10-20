@@ -37,7 +37,7 @@ function setup() {
 }
 const message = (text: string, draftRevision = 0) => ({ text, quote: null, draftRevision });
 
-test('runs isolate sessions, reject concurrency, replay durable cursors and deduplicate submissions', async () => {
+test('runs isolate sessions, replay durable cursors and deduplicate submissions', async () => {
   const { db, learning, a, b, sa, sb } = setup();
   const contexts: string[] = [];
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => {
@@ -46,7 +46,6 @@ test('runs isolate sessions, reject concurrency, replay durable cursors and dedu
   try {
     const key = randomUUID(), first = runtime.submit(a.id, sa, key, message('A prompt'));
     assert.equal(runtime.submit(a.id, sa, key, message('A prompt')).run.id, first.run.id);
-    assert.throws(() => runtime.submit(a.id, sa, randomUUID(), message('duplicate', 1)), /已有运行/);
     const second = runtime.submit(b.id, sb, randomUUID(), message('B prompt'));
     await Promise.all([runtime.idle(first.run.id), runtime.idle(second.run.id)]);
     assert.equal(runtime.get(a.id, first.run.id).state, 'succeeded');
@@ -62,6 +61,93 @@ test('runs isolate sessions, reject concurrency, replay durable cursors and dedu
     assert.equal(contexts.length, 2);
     assert.equal(runtime.stop(a.id, first.run.id).state, 'succeeded');
   } finally { await runtime.close(); db.close(); }
+});
+
+test('follow-ups wait for the whole tool chain, consume FIFO and project separate replies', async () => {
+  const { db, learning, a, sa } = setup();
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const ready = new Promise<void>((resolve) => { entered = resolve; });
+  const inputs: string[] = [];
+  const runtime = new TeachingRuntime(learning, syntheticSource, {
+    scenario: () => ({ tools: [{ name: 'read', label: 'read', description: 'synthetic', parameters: Type.Object({}),
+      async execute() { entered(); await held; return { content: [{ type: 'text', text: 'tool result' }], details: {} }; } }], commit() {} }),
+    stream: (_model, context) => {
+      const last = context.messages.at(-1)!;
+      const text = last.role === 'user' ? JSON.stringify(last.content) : last.role;
+      inputs.push(text);
+      if (inputs.length === 1) return response(reply([{ type: 'toolCall', id: 'read-1', name: 'read', arguments: {} }], 'toolUse'));
+      return response(reply([{ type: 'text', text: `reply ${inputs.length}` }]));
+    },
+  });
+  try {
+    const first = runtime.submit(a.id, sa, randomUUID(), message('initial'));
+    const key = randomUUID();
+    const queued = runtime.submit(a.id, sa, key, message('same prompt', 1)); // Before AgentSession exists.
+    assert.equal(queued.run.id, first.run.id);
+    assert.equal(runtime.submit(a.id, sa, key, message('same prompt', 1)).session.draft.revision, 2);
+    await ready;
+    runtime.submit(a.id, sa, randomUUID(), message('same prompt', 2)); // Identical text must keep its own identity.
+    const quote = { source: 'code' as const, label: 'quoted.py', text: 'print(37)' };
+    const last = runtime.submit(a.id, sa, randomUUID(), { ...message('quoted follow-up', 3), quote });
+    const pending = last.session.messages[1]!.queuedPrompts!;
+    assert.deepEqual(pending.map((p) => p.text), ['same prompt', 'same prompt', 'quoted follow-up']);
+    assert.equal(new Set(pending.map((p) => p.id)).size, 3);
+    assert.equal(last.session.messages.length, 2, 'queued prompts are not delivered chat messages');
+    assert.equal(inputs.length, 1, 'a follow-up must not interrupt a running tool');
+    assert.throws(() => runtime.submit(a.id, sa, randomUUID(), message('stale', 2)), /已改变/);
+    release(); await runtime.idle(first.run.id);
+    assert.equal(runtime.get(a.id, first.run.id).state, 'succeeded');
+    assert.equal(inputs[1], 'toolResult', 'finish the initial tool chain before consuming follow-ups');
+    assert.match(inputs[2]!, /same prompt/); assert.match(inputs[3]!, /same prompt/);
+    assert.match(inputs[4]!, /quoted follow-up/); assert.match(inputs[4]!, /print\(37\)/);
+    const saved = learning.session(a.id, sa);
+    assert.deepEqual(saved.messages.map((m) => m.role), ['user', 'agent', 'user', 'agent', 'user', 'agent', 'user', 'agent']);
+    assert.deepEqual(saved.messages.filter((m) => m.role === 'agent').map((m) => m.text), ['reply 2', 'reply 3', 'reply 4', 'reply 5']);
+    assert.deepEqual(saved.messages.find((m) => m.text === 'quoted follow-up')?.quote, quote);
+    assert.ok(saved.messages.every((m) => m.status === 'done'));
+    assert.deepEqual(saved.messages[1]!.queuedPrompts, []);
+    assert.equal(learning.space(a.id).runs.length, 1, 'all follow-ups use the same native Pi run');
+  } finally { release(); await runtime.close(); db.close(); }
+});
+
+test('queued prompts can be withdrawn by ID and remain recoverable after stop or model failure', async () => {
+  for (const end of ['stop', 'error', 'length', 'retry'] as const) {
+    const { db, learning, a, sa, b, sb } = setup();
+    let finish!: () => void, entered!: () => void, calls = 0;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const runtime = new TeachingRuntime(learning, syntheticSource, { retry: { enabled: end === 'retry', maxRetries: 1, baseDelayMs: 0 }, stream: () => {
+      calls++;
+      const result = { ...reply([{ type: 'text', text: 'first reply' }], end === 'stop' ? 'stop' : end === 'length' ? 'length' : 'error'),
+        ...(end === 'retry' ? { errorMessage: '503 Service unavailable' } : {}) };
+      if (calls > 1) return response(result);
+      const stream = createAssistantMessageEventStream();
+      finish = () => {
+        if (end === 'error' || end === 'retry') stream.push({ type: 'error', reason: 'error', error: result });
+        else stream.push({ type: 'done', reason: end, message: result });
+      };
+      entered(); return stream;
+    } });
+    try {
+      const { run } = runtime.submit(a.id, sa, randomUUID(), message('initial'));
+      await ready;
+      runtime.submit(a.id, sa, randomUUID(), message('withdraw me', 1));
+      const queued = runtime.submit(a.id, sa, randomUUID(), message('keep me', 2));
+      const prompts = queued.session.messages[1]!.queuedPrompts!;
+      assert.throws(() => runtime.dequeue(b.id, sb, prompts[0]!.id, randomUUID()), /不存在/);
+      const key = randomUUID();
+      runtime.dequeue(a.id, sa, prompts[0]!.id, key);
+      runtime.dequeue(a.id, sa, prompts[0]!.id, key);
+      assert.deepEqual(learning.session(a.id, sa).messages[1]!.queuedPrompts?.map((p) => p.text), ['keep me']);
+      if (end === 'stop') runtime.stop(a.id, run.id);
+      finish(); await runtime.idle(run.id);
+      assert.equal(calls, end === 'retry' ? 2 : 1, `${end} must not silently consume remaining prompts`);
+      assert.equal(runtime.get(a.id, run.id).state, end === 'stop' ? 'interrupted' : 'failed');
+      assert.deepEqual(learning.session(a.id, sa).messages[1]!.queuedPrompts?.map((p) => p.text), ['keep me']);
+      runtime.dequeue(a.id, sa, prompts[1]!.id, randomUUID());
+      assert.deepEqual(learning.session(a.id, sa).messages[1]!.queuedPrompts, []);
+    } finally { finish?.(); await runtime.close(); db.close(); }
+  }
 });
 
 test('cancel before commit wins even if transport finishes; pending shutdown never calls provider', async () => {
@@ -174,6 +260,7 @@ test('startup appends an interrupted event once and does not replay a pending re
   try {
     const learning = new Learning(data.db), a = learning.create({ name: 'recovery', goal: 'only test' });
     const id = randomUUID();
+    const prompt = { id: randomUUID(), text: 'keep this queued prompt', quote: null, createdAt: 1 };
     data.db.prepare("INSERT INTO runs VALUES (?,?,NULL,?,'intake','running')").run(a.id, id, a.sessions[0]!.id);
     data.db.prepare("INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,'{}',0)").run(a.id, id);
     const task = randomUUID();
@@ -189,6 +276,7 @@ test('startup appends an interrupted event once and does not replay a pending re
         { type: 'reasoning', partId: `${runId}:1:reasoning:0`, phase: 'delta', delta: 'Unfinished at shutdown' },
         { type: 'tool', callId: `${runId}:1:tool:unfinished`, name: 'read', phase: 'start' },
       ];
+      if (runId === id) events.push({ type: 'prompt_queued', prompt });
       events.forEach((event, index) => data.db.prepare(`INSERT INTO ${table} VALUES (?,?,?,?)`).run(a.id, runId, index + 1, JSON.stringify(event)));
     }
     data.close(); data = openDataDirectory(root);
@@ -200,13 +288,19 @@ test('startup appends an interrupted event once and does not replay a pending re
     data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticSource);
     for (const runId of [id, task]) {
       const events = runtime.events(a.id, runId).events;
-      assert.equal(events.length, 4);
+      assert.equal(events.length, runId === id ? 5 : 4);
       const parts = events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
       assert.deepEqual(parts, [
         { type: 'reasoning', id: `${runId}:1:reasoning:0`, text: 'Unfinished at shutdown', status: 'interrupted' },
         { type: 'tool', id: `${runId}:1:tool:unfinished`, name: 'read', status: 'interrupted' },
       ]);
-      if (runId === id) assert.deepEqual(new Learning(data.db).session(a.id, a.sessions[0]!.id).messages.at(-1)?.parts, parts);
+      if (runId === id) {
+        const saved = new Learning(data.db).session(a.id, a.sessions[0]!.id);
+        assert.deepEqual(saved.messages.at(-1)?.parts, parts);
+        assert.deepEqual(saved.messages.at(-1)?.queuedPrompts, [prompt]);
+        runtime.dequeue(a.id, saved.id, prompt.id, randomUUID());
+        assert.deepEqual(new Learning(data.db).session(a.id, saved.id).messages.at(-1)?.queuedPrompts, []);
+      }
     }
     for (const table of ['agent_messages', 'task_messages']) {
       const rows = data.db.prepare(`SELECT value FROM ${table} ORDER BY seq`).all();

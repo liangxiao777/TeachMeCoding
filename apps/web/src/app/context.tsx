@@ -69,6 +69,7 @@ export interface AppModel {
     error: string
     retry: Action
     setYolo: (enabled: boolean, sessionId?: string) => void
+    dequeuePrompt: (id: string) => Promise<boolean>
     requirementConfirmed: boolean
     planning: { run?: WorkStatus; error: string | null }
     intake: IntakeMetadata | null

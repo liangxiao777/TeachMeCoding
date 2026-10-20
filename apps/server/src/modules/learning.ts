@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, sessionSettingsSchema, unlockedUnitIds,
-  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Lesson, type LessonProposal, type LessonProposalApplication, type Message, type Proposal, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
+  applyAgentEvent, applyPromptQueue, executionFeedback, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, sessionSettingsSchema, unlockedUnitIds,
+  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Lesson, type LessonProposal, type LessonProposalApplication, type Message, type Proposal, type QueuedPrompt, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
 
@@ -149,22 +149,43 @@ export class Learning {
       const parts = new Map<string, AgentDisplayPart[]>();
       const contexts = new Map<string, AgentContext>();
       const errors = new Map<string, string>();
+      const queues = new Map<string, QueuedPrompt[]>();
+      const currentReply = new Map<string, string>();
+      const replyRuns = new Map<string, string>();
+      const cursors = new Map<string, number>();
+      const roots = new Map(messages.map((message) => [message.id, message]));
       for (const event of events) {
         const data = JSON.parse(event.value) as AgentEventData;
-        parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [], { runId: event.runId, seq: event.seq, data }));
-        if (data.type === 'context') contexts.set(event.runId, data.context);
+        cursors.set(event.runId, event.seq);
+        queues.set(event.runId, applyPromptQueue(queues.get(event.runId) ?? [], data));
+        if (data.type === 'prompt_started') {
+          currentReply.set(event.runId, data.messageId);
+          replyRuns.set(data.messageId, event.runId);
+          continue;
+        }
+        const reply = currentReply.get(event.runId) ?? event.runId;
+        parts.set(reply, applyAgentEvent(parts.get(reply) ?? [], { runId: event.runId, seq: event.seq, data }));
+        if (data.type === 'context') contexts.set(reply, data.context);
         if (data.type === 'state') {
-          if (data.error) errors.set(event.runId, data.error);
-          else errors.delete(event.runId);
+          if (data.error) errors.set(reply, data.error);
+          else errors.delete(reply);
         }
       }
       return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title, settings: this.sessionSettings(space, id),
         draft: { ...JSON.parse(row.draft), revision: row.revision },
-        messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
-          ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
-          ...(contexts.has(m.id) ? { context: contexts.get(m.id) } : {}),
-          ...(errors.has(m.id) ? { error: errors.get(m.id) } : {}),
-        })),
+        messages: messages.map((m) => {
+          const runId = replyRuns.get(m.id) ?? m.id, root = roots.get(runId)!;
+          const latest = currentReply.get(runId) ?? runId;
+          const status = cursors.has(runId) ? latest !== m.id ? 'done'
+            : root.status === 'thinking' || root.status === 'streaming' ? m.text ? 'streaming' : 'thinking' : root.status : m.status;
+          return { ...m, quote: m.quote === null ? null : JSON.parse(m.quote), status,
+            ...(replyRuns.has(m.id) ? { runId, sequence: cursors.get(runId) } : {}),
+            ...(queues.has(m.id) ? { queuedPrompts: queues.get(m.id) } : {}),
+            ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
+            ...(contexts.has(m.id) ? { context: contexts.get(m.id) } : {}),
+            ...(errors.has(m.id) ? { error: errors.get(m.id) } : {}),
+          };
+        }),
         ...(row.scope === 'intake' ? { questions: this.intake.questions(space, id) } : {}),
       };
     })();

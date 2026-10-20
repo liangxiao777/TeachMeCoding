@@ -1,11 +1,12 @@
 'use client'
 
-import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Square, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
 import { RunContext } from '@/components/agent/run-context'
 import { YoloSwitch } from '@/components/agent/yolo-switch'
+import { PromptQueue } from '@/components/agent/prompt-queue'
 import { RouteProposalDecision } from '@/components/agent/route-proposal-decision'
 import { LessonProposalDecision } from '@/components/agent/lesson-proposal-decision'
 import { pendingDecision } from '@/app/lesson-proposals'
@@ -188,7 +189,7 @@ function Chat() {
   const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
   const lessonProposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending')
   const replying = capabilities.agent && space.onboarding.agentTyping
-  const busy = !!proposal || !!lessonProposal || replying || sending || !!persistence && (persistence.busy || !persistence.ready)
+  const busy = !!proposal || !!lessonProposal || !persistence && replying || sending || !!persistence && (persistence.busy || !persistence.ready)
 
   useEffect(() => setSendError(''), [session?.id, messages.length])
 
@@ -244,6 +245,7 @@ function Chat() {
         <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label="滚动到最新消息" />
       </Conversation>
 
+      <PromptQueue className="px-4 sm:px-6" />
       {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : lessonProposal ? <LessonProposalDecision key={lessonProposal.id} proposal={lessonProposal} /> : <div className="flex shrink-0 flex-col gap-3 px-4 pt-4 pb-6 sm:px-6">
         <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send(text, true)}>
             <label htmlFor="ob-input" className="sr-only">
@@ -266,12 +268,13 @@ function Chat() {
             />
             <PromptInputFooter>
               <YoloSwitch />
-              <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.id} />
+              <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.runId ?? session?.messages.findLast((m) => m.role === 'agent')?.id} />
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
               </span>
-              <PromptInputSubmit className="ml-auto" status={persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
-                disabled={!(persistence && replying) && (!text.trim() || busy)} aria-label={persistence && replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
+              {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label="停止"><Square /></Button>}
+              <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status="ready"
+                disabled={!text.trim() || busy} aria-label={persistence && replying ? '加入队列' : capabilities.agent ? '发送' : '保存问题'} />
             </PromptInputFooter>
         </PromptInput>
         {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}

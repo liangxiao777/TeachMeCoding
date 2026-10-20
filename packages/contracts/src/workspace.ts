@@ -76,7 +76,10 @@ export interface AgentContext {
   /** This run's reported usage, including summary requests; not context occupancy. */
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | null;
 }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: string }
+export interface QueuedPrompt { id: string; text: string; quote: Quote | null; createdAt: number }
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: string;
+  /** Follow-up replies share their original run; only its first message owns the pending queue. */
+  runId?: string; queuedPrompts?: QueuedPrompt[] }
 export interface SessionDetail extends SessionSummary { settings: z.infer<typeof sessionSettingsSchema>; draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
 export interface AssessmentDraft extends z.infer<typeof assessmentDraftSchema> { unitId: string }
 export interface AssessmentRecord extends z.infer<typeof assessmentResultSchema> { id: string; unitId: string; attempt: number; answers: { q1: string; q2: string }; createdAt: number;
@@ -96,6 +99,9 @@ export interface LessonProposal {
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
 export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
 export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
+  | { type: 'prompt_queued'; prompt: QueuedPrompt }
+  | { type: 'prompt_removed'; promptId: string }
+  | { type: 'prompt_started'; prompt: QueuedPrompt; messageId: string }
   | { type: 'context'; context: AgentContext }
   | { type: 'text'; delta: string; partId?: string }
   | { type: 'reasoning'; partId: string; phase: 'start' | 'delta' | 'end'; delta?: string }
@@ -106,11 +112,17 @@ export interface RunSubmission { run: AgentRun; session: SessionDetail }
 export interface ProposalRejection { workspace: Workspace; session: SessionDetail; run: AgentRun | null; followupError: string | null }
 export interface LessonProposalApplication { workspace: Workspace; unit: UnitDetail }
 
-// One run's ordered display projection. Callers discard seq <= their saved cursor
+export function applyPromptQueue(prompts: QueuedPrompt[], data: AgentEventData): QueuedPrompt[] {
+  if (data.type === 'prompt_queued') return [...prompts, data.prompt];
+  if (data.type === 'prompt_removed' || data.type === 'prompt_started') return prompts.filter((prompt) => prompt.id !== (data.type === 'prompt_removed' ? data.promptId : data.prompt.id));
+  return prompts;
+}
+
+// One reply's ordered display projection. Callers discard seq <= their saved cursor
 // before applying events; hydration starts empty, never from Message.text.
 export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEvent): AgentDisplayPart[] {
   const { data, runId, seq } = event;
-  if (data.type === 'context') return [...parts];
+  if (data.type === 'context' || data.type === 'prompt_queued' || data.type === 'prompt_removed' || data.type === 'prompt_started') return [...parts];
   if (data.type === 'state') {
     return parts.map((part) => ['succeeded', 'failed', 'interrupted'].includes(data.state)
       && ((part.type === 'reasoning' && part.status === 'streaming') || (part.type === 'tool' && ['generating', 'ready', 'running'].includes(part.status)))

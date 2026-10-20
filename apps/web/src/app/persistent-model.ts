@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
+import { applyAgentEvent, applyPromptQueue, type AgentDisplayPart } from '@teach-me-coding/contracts'
 import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, LessonProposalApplication, ProjectEntry, ProjectFile, ProposalRejection, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { access, api, streamRun, ApiError } from '@/lib/api'
 import type { AppModel, RequirementDraft } from './context'
@@ -114,7 +114,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   ])
   const details = Object.fromEntries(units.map((unit) => [unit.id, unit]))
   for (const session of sessions) for (const message of session.messages) if (message.context)
-    runContexts[message.id] = { sequence: message.sequence ?? 0, context: message.context }
+    runContexts[message.runId ?? message.id] = { sequence: message.sequence ?? 0, context: message.context }
   const records = units.flatMap((unit) => unit.records.map((record) => ({ ...record, unitTitle: metadata.find((m) => m.id === unit.id)!.title }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
   const drafts = Object.fromEntries(units.map((unit) => {
     const task = saved.tasks.find((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind) && ['pending', 'running'].includes(t.state))
@@ -414,13 +414,15 @@ export function usePersistentModel(): AppModel {
     if (subscriptions.current.has(work.id)) return
     const controller = new AbortController()
     subscriptions.current.set(work.id, controller)
-    const saved = cache.current[space]?.ui.sessions.find((s) => s.id === work.sessionId)?.messages.find((m) => m.id === work.id)
-    let cursor = saved?.sequence ?? 0, text = saved?.text ?? ''
-    let terminal = !['pending', 'running'].includes(work.state) || !!saved?.status && ['done', 'error', 'stopped'].includes(saved.status)
+    const saved = cache.current[space]?.ui.sessions.find((s) => s.id === work.sessionId)?.messages.findLast((m) => m.id === work.id || m.runId === work.id)
+    let cursor = saved?.sequence ?? 0, text = saved?.text ?? '', responseId = saved?.id ?? work.id
+    let terminal = !['pending', 'running'].includes(work.state)
     let parts: AgentDisplayPart[] = saved?.parts ?? []
     const receive = (event: RunEvent) => {
       if (terminal || event.runId !== work.id || event.seq <= cursor) return
       cursor = event.seq
+      const previousResponse = responseId
+      if (event.data.type === 'prompt_started') { responseId = event.data.messageId; text = ''; parts = [] }
       parts = applyAgentEvent(parts, event)
       if (event.data.type === 'context') {
         const context = event.data.context
@@ -443,10 +445,26 @@ export function usePersistentModel(): AppModel {
           retry.current = () => retryTask(space, work.id)
         }
       }
-      changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => session.id !== work.sessionId ? session : { ...session,
-        messages: session.messages.map((m) => m.id !== work.id || event.seq < (m.sequence ?? 0) ? m : { ...m, text, parts, sequence: event.seq,
-          error: event.data.type === 'state' ? event.data.error ?? undefined : m.error,
-          status: state === 'succeeded' ? 'done' : state === 'failed' ? 'error' : state === 'interrupted' ? 'stopped' : text ? 'streaming' : 'thinking' }),
+      changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((session) => {
+        if (session.id !== work.sessionId) return session
+        const messages = session.messages.map((message) => {
+          if (event.seq < (message.sequence ?? 0)) return message
+          let next = message
+          if (message.id === work.id) next = { ...next, sequence: event.seq,
+            queuedPrompts: event.seq > (message.sequence ?? 0) ? applyPromptQueue(message.queuedPrompts ?? [], event.data) : message.queuedPrompts }
+          if (event.data.type === 'prompt_started' && message.id === previousResponse) return { ...next, status: 'done' as const, sequence: event.seq }
+          if (message.id !== responseId) return next
+          return { ...next, text, parts, sequence: event.seq,
+            error: event.data.type === 'state' ? event.data.error ?? undefined : message.error,
+            status: state === 'succeeded' ? 'done' as const : state === 'failed' ? 'error' as const : state === 'interrupted' ? 'stopped' as const : text ? 'streaming' as const : 'thinking' as const }
+        })
+        if (event.data.type === 'prompt_started') {
+          const { prompt, messageId } = event.data
+          if (!messages.some((message) => message.id === prompt.id)) messages.push({ ...prompt, quote: prompt.quote ?? undefined, role: 'user' })
+          if (!messages.some((message) => message.id === messageId)) messages.push({ id: messageId, runId: work.id,
+            role: 'agent', text: '', parts: [], status: 'thinking', sequence: event.seq, createdAt: prompt.createdAt })
+        }
+        return { ...session, messages }
       }) }))
     }
     void (async () => {
@@ -495,8 +513,11 @@ export function usePersistentModel(): AppModel {
       const knownRun = work && s.saved.runs.find((run) => run.id === work.id)
       const nextRun = knownRun && !['pending', 'running'].includes(knownRun.state) ? knownRun : work
       const runContexts = { ...s.runContexts }
-      for (const message of fresh.messages) if (message.context && (message.sequence ?? 0) >= (runContexts[message.id]?.sequence ?? 0))
-        runContexts[message.id] = { sequence: message.sequence ?? 0, context: message.context }
+      for (const message of fresh.messages) {
+        const id = message.runId ?? message.id
+        if (message.context && (message.sequence ?? 0) >= (runContexts[id]?.sequence ?? 0))
+          runContexts[id] = { sequence: message.sequence ?? 0, context: message.context }
+      }
       const update = (old: Session) => {
         const next = uiSession(saved), messages = new Map(old.messages.map((message) => [message.id, message]))
         for (const message of next.messages) if ((message.sequence ?? 0) >= (messages.get(message.id)?.sequence ?? 0)) messages.set(message.id, message)
@@ -511,18 +532,18 @@ export function usePersistentModel(): AppModel {
           ? s.ui.sessions.map((old) => old.id === saved.id ? update(old) : old) : [...s.ui.sessions, uiSession(saved)] } }
     })
   }
-  const inputAllowed = (route = false) => {
+  const inputAllowed = (route = false, owner?: string) => {
     if (!selected) return false
     if (pendingDecision(cache.current[selected.saved.id]!.saved)) {
       setError('请先接受或拒绝当前路线或课件提案，再继续对话。'); return false
     }
-    if (route && selected.saved.runs.some((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))) {
+    if (route && selected.saved.runs.some((work) => work.kind === 'roadmap' && work.sessionId !== owner && ['pending', 'running'].includes(work.state))) {
       setError('正在生成路线调整，请等待完成或停止当前生成。'); return false
     }
     return true
   }
   const sendMessage = (text?: string): Promise<boolean> => {
-    if (!current || !session || !inputAllowed(sessionScope(current) === 'route')) return Promise.resolve(false)
+    if (!current || !session || !inputAllowed(sessionScope(current) === 'route', session.id)) return Promise.resolve(false)
     const space = current.id, id = session.id, snapshot = { text: session.composerText, quote: session.composerQuote }
     const stored = cache.current[space]!.sessions[id]!
     const input = { text: text ?? snapshot.text, quote: text === undefined ? snapshot.quote : null, draftRevision: stored.draft.revision }
@@ -853,7 +874,8 @@ export function usePersistentModel(): AppModel {
       const running = current.view === 'planning' ? latestPlan(selected!.saved)
         : sessionScope(current) === 'route' ? selected!.saved.runs.findLast((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))
         : session?.messages.find((m) => m.status === 'thinking' || m.status === 'streaming')
-      if (running) void run(`stop:${running.id}`, () => api(`/spaces/${current.id}/runs/${running.id}/stop`, {}))
+      const id = running && ('runId' in running ? running.runId ?? running.id : running.id)
+      if (id) void run(`stop:${id}`, () => api(`/spaces/${current.id}/runs/${id}/stop`, {}))
     },
     retryReply: (id) => { if (!current || !inputAllowed(selected?.saved.runs.find((work) => work.id === id)?.kind === 'roadmap')) return; const space = current.id
       void run(`retry:${id}`, async () => {
@@ -946,6 +968,26 @@ export function usePersistentModel(): AppModel {
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {
       ready, busy, error, retry: () => retry.current(), requirementConfirmed: selected?.saved.requirement.confirmed ?? false,
+      dequeuePrompt: (promptId) => {
+        if (!current || !session) return Promise.resolve(false)
+        const space = current.id, id = session.id
+        const prompt = session.messages.flatMap((message) => message.queuedPrompts ?? []).find((prompt) => prompt.id === promptId)
+        if (!prompt) return Promise.resolve(false)
+        let saved: SessionDetail | undefined, applied = false
+        return run(`dequeue:${promptId}`, async () => {
+          saved ??= await api<SessionDetail>(`/spaces/${space}/sessions/${id}/queue/${promptId}/dequeue`, {})
+          if (!applied) {
+            acceptSession(space, saved)
+            changeUi(space, (s) => ({ ...s, sessions: s.sessions.map((old) => old.id !== id ? old : { ...old,
+              // Never overwrite text or a reference entered while the request was in flight.
+              composerText: [prompt.text, prompt.quote && old.composerQuote ? `[${prompt.quote.label}]\n${prompt.quote.text}` : '', old.composerText].filter(Boolean).join('\n\n'),
+              composerQuote: old.composerQuote ?? prompt.quote,
+            }) }))
+            applied = true
+          }
+          return true
+        }).then(Boolean)
+      },
       setYolo: (enabled, sessionId = session?.id) => {
         if (!current || !sessionId) return
         const space = current.id, target = cache.current[space]!.sessions[sessionId]

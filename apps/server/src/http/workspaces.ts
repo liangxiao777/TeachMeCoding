@@ -67,6 +67,8 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
       c.req.param('space'), c.req.param('unit'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
     api.post('/spaces/:space/sessions/:session/runs', async (c) => c.json(agents.submit(
       c.req.param('space'), c.req.param('session'), c.req.header('Idempotency-Key') ?? '', await c.req.json())));
+    api.post('/spaces/:space/sessions/:session/queue/:prompt/dequeue', (c) => c.json(agents.dequeue(
+      c.req.param('space'), c.req.param('session'), c.req.param('prompt'), c.req.header('Idempotency-Key') ?? '')));
     api.get('/spaces/:space/runs/:run', (c) => c.json(agents.get(c.req.param('space'), c.req.param('run'))));
     api.get('/spaces/:space/runs/:run/events', (c) => c.json(agents.events(c.req.param('space'), c.req.param('run'), Number(c.req.query('after') ?? 0))));
     api.post('/spaces/:space/runs/:run/stop', (c) => c.json(agents.stop(c.req.param('space'), c.req.param('run'))));

@@ -768,13 +768,111 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   expect(errors).toEqual([]);
 });
 
+test('prompts queue FIFO during a run and resume their separate replies after reload', async ({ page }, info) => {
+  test.setTimeout(45000);
+  const goal = `慢速排队 ${info.project.name}`;
+  await page.emulateMedia({ colorScheme: 'light' });
+  await create(page, goal);
+  const input = page.getByLabel('回复 Agent', { exact: true });
+  const queue = page.getByRole('region', { name: '待发送消息', exact: true });
+  await input.fill('慢速后续：先解释输入');
+  await input.press('Enter');
+  await expect(queue.getByRole('listitem')).toHaveCount(1);
+  await expect(input).toHaveValue('');
+  await input.fill('后续：再比较边界');
+  await page.getByRole('button', { name: '加入队列', exact: true }).click();
+  await expect(queue.getByRole('listitem')).toHaveCount(2);
+  await input.fill('仍在编辑的下一条');
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeEnabled();
+  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-running-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(input).toHaveValue('');
+  await expect(queue).toContainText('后续：再比较边界');
+  await expect(page.locator('.is-user').filter({ hasText: '慢速后续：先解释输入' })).toHaveCount(1, { timeout: 15000 });
+  await expect(queue).not.toContainText('慢速后续：先解释输入');
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0, { timeout: 20000 });
+  await expect(queue).toHaveCount(0);
+  await expect(page.locator('.is-user').filter({ hasText: '后续：再比较边界' })).toHaveCount(1);
+  await expect(page.locator('.is-assistant')).toHaveCount(3);
+  expect((await workspace(page, goal)).runs).toHaveLength(1);
+  for (const reload of [false, true]) {
+    if (reload) await page.reload();
+    await expect(page.locator('.is-assistant')).toHaveCount(3);
+    await expect(queue).toHaveCount(0);
+    await page.getByRole('button', { name: '查看上下文用量', exact: true }).click();
+    const context = page.locator('[data-slot="context-content"]');
+    // Four provider requests report 11 input and 7 output tokens apiece.
+    await expect(context.getByText('输入（不含缓存）', { exact: true }).locator('..')).toContainText('44');
+    await expect(context.getByText('输出', { exact: true }).locator('..')).toContainText('28');
+    await page.keyboard.press('Escape');
+    await page.mouse.move(0, 0);
+  }
+  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-idle-${info.project.name}.png`, animations: 'disabled' });
+});
+
+test('tutor queues survive stop and withdrawal restores the reference without overwriting newer input', async ({ page }, info) => {
+  test.setTimeout(45000);
+  const goal = `队列撤回 ${info.project.name}`;
+  await create(page, goal);
+  await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
+  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '开始学习', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  const input = page.getByLabel('向 Agent 提问', { exact: true });
+  const queue = agent.getByRole('region', { name: '待发送消息', exact: true });
+  await input.fill('慢速说明参数');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  const passage = page.locator('.lesson-prose p').first();
+  await passage.evaluate((element) => {
+    const range = document.createRange(); range.selectNodeContents(element);
+    window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  });
+  await page.getByRole('button', { name: '向 Agent 提问', exact: true }).click();
+  await input.fill('针对这段文字补充一个例子');
+  await input.press('Enter');
+  await expect(queue.getByRole('listitem')).toHaveCount(1);
+  await expect(agent.getByRole('button', { name: '移除引用', exact: true })).toHaveCount(0);
+  await input.fill('我还想补充的问题');
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await expect(queue).toContainText('已暂停');
+  await expect(input).toHaveValue('我还想补充的问题');
+  await page.reload();
+  await expect(queue).toContainText('针对这段文字补充一个例子');
+  await expect(queue).toContainText('已暂停');
+  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-paused-${info.project.name}.png`, animations: 'disabled' });
+  await input.fill('慢速说明另一轮');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  await expect(queue).toContainText('已暂停');
+  await input.fill('另一轮待发送');
+  await input.press('Enter');
+  await expect(queue.getByRole('listitem')).toHaveCount(2);
+  await expect(queue.getByRole('listitem').first()).toContainText('已暂停');
+  await expect(queue.getByRole('listitem').last()).not.toContainText('已暂停');
+  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-mixed-${info.project.name}.png`, animations: 'disabled' });
+  await input.fill('刷新后正在写的新问题');
+  await queue.getByRole('button', { name: '取回第 1 条待发送消息', exact: true }).click();
+  await expect(input).toHaveValue('针对这段文字补充一个例子\n\n刷新后正在写的新问题');
+  await expect(agent.getByRole('button', { name: '移除引用', exact: true })).toBeVisible();
+  await expect(queue.getByRole('listitem')).toHaveCount(1);
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await expect(queue).toContainText('已暂停');
+  await queue.getByRole('button', { name: '取回第 1 条待发送消息', exact: true }).click();
+  await expect(input).toHaveValue('另一轮待发送\n\n针对这段文字补充一个例子\n\n刷新后正在写的新问题');
+  await expect(queue).toHaveCount(0);
+});
+
 test('reasoning cancellation retains partial thought and new input; IME does not submit', async ({ page }, info) => {
   await create(page, `推理验收 停止 ${info.project.name}`);
   await page.getByTestId('reasoning').getByRole('button').click();
   await expect(page.getByTestId('reasoning')).toContainText('先核对已有基础。');
   const input = page.getByLabel('回复 Agent', { exact: true });
   await input.fill('下一条未发送输入');
-  await input.press('Enter'); // The generating form has a stop button, not a submit button.
   await page.getByRole('button', { name: '停止', exact: true }).click();
   await expect(page.getByText('已停止生成', { exact: false })).toBeVisible();
   await expect(input).toHaveValue('下一条未发送输入');
