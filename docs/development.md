@@ -61,6 +61,10 @@ Base UI 仍固定为 1.5.0。其 React 19 生产模式存在菜单可见但 `ari
 
 Pi Core 与 AI 包固定为 `@earendil-works/pi-agent-core@1.0.0`、`@earendil-works/pi-ai@1.0.0`，不加载 Pi Extension 宿主。`pnpm test` 的模型部分使用确定性流，不访问 Provider。
 
-真实测试使用 `pnpm test:provider`，会发送两次短请求（正常流式响应、收到文字后取消），可能产生 Provider 费用。在根目录 `.env` 配置 `OPENROUTER_API_KEY` 与准确的 `OPENROUTER_MODEL`；没有 `.env` 时可参考 `.env.example` 新建，权限设为 `600`，不要覆盖已有配置或把密钥写进命令行。服务端环境变量优先于文件；缺失配置或 Provider 错误会返回失败，不切换模型。`.env` 路径相对代码定位，不依赖启动目录；读取不会把凭据注入全局环境或终端子进程。
+真实测试使用 `pnpm test:provider`，会发送两次短请求（正常流式响应、收到文字后取消），可能产生 Provider 费用。先在待测实例的「设置 → 模型配置」中保存模型选择并配置 API Key 或 OAuth 登录；脚本使用 `TMC_DATA_DIR` 指定的数据目录（默认 `~/.teach-me-coding/`）中的已保存配置。目录与应用一样从启动环境或项目根 `.env` 读取，启动环境优先；模型和凭据不从 `.env` 或环境变量读取。缺失配置或 Provider 错误会返回失败，不切换模型；不要把密钥写进命令行。
 
-教学确定性测试使用 `pnpm exec playwright test -c tests/agents.config.ts --project=production --workers=1`（开发模式换为 `development`），需先构建，占用与普通浏览器测试相同端口，不同时运行。该套件包含真实本机执行与提案确认场景，模型回复仍为确定性流。`pnpm exec tsx tests/teaching-provider-smoke.ts` 是显式收费真实模型检查：只使用可丢弃数据库和合成文件，串联需求→路线→课件→只读辅导→出题→评估；不上传用户项目，不执行提交的代码，因此不能替代真实执行验收。Provider 失败会使脚本失败；真实和确定性结果见 [ROADMAP](ROADMAP.md)，不保证模型每次输出相同。
+运行收费检查前先停止使用该数据目录的应用实例；脚本持有同一实例锁，只读模型选择，不迁移数据库或执行业务恢复。OAuth 续期仍写回该实例的凭据文件。
+
+教学确定性测试使用 `pnpm exec playwright test -c tests/agents.config.ts --project=production --workers=1`（开发模式换为 `development`），需先构建，占用与普通浏览器测试相同端口，不同时运行。该套件包含真实本机执行与提案确认场景，模型回复仍为确定性流。`pnpm exec tsx tests/teaching-provider-smoke.ts` 是显式收费真实模型检查：使用上述已保存模型配置，学习流程只使用可丢弃数据库和合成文件，串联需求→路线→课件→只读辅导→出题→评估；不上传用户项目，不执行提交的代码，因此不能替代真实执行验收。Provider 失败会使脚本失败；真实和确定性结果见 [ROADMAP](ROADMAP.md)，不保证模型每次输出相同。
+
+这些收费检查仅在显式执行对应命令时运行，不属于默认离线测试，也不会在保存配置后自动运行。

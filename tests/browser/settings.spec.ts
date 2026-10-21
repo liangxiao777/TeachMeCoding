@@ -91,7 +91,7 @@ test('model search separates queries from selection and fits one card in both th
   const settings: ModelSettings = {
     selection: { provider: 'synthetic', model: 'vendor/reasoner-v2', thinkingLevel: 'high' }, ready: true, issue: null,
     providers: [
-      { id: 'synthetic', name: 'Synthetic Provider', models: 3, stored: null, configured: { type: 'api_key', source: 'FIXTURE_API_KEY' },
+      { id: 'synthetic', name: 'Synthetic Provider', models: 3, stored: 'api_key', configured: { type: 'api_key' },
         auth: { apiKey: { name: 'Fixture key', login: true }, oauth: { name: 'Synthetic', label: '登录 Synthetic', subscription: false } } },
       { id: 'other', name: 'Other Provider', models: 1, stored: null, configured: null, auth: { apiKey: { name: 'Other key', login: true } } },
     ],
@@ -335,7 +335,7 @@ test('settings cancellation waits for its terminal state and credential removal 
   await settingsPage.getByRole('button', { name: '清除已存凭据', exact: true }).click();
   await expect(settingsPage.getByRole('button', { name: '清除已存凭据', exact: true })).toHaveCount(0);
   await expect(settingsPage.getByText('未配置凭据', { exact: true })).toBeVisible();
-  await expect(settingsPage.getByText('尚未配置凭据。', { exact: true })).toBeVisible();
+  await expect(settingsPage.getByRole('status').getByText('所选 Provider 尚未配置凭据，请在设置中登录或配置 API Key。', { exact: true })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-unconfigured-${info.project.name}.png`, animations: 'disabled' });
   expect(methods).toEqual(['POST cancel', 'POST logout']);
 });
@@ -363,7 +363,8 @@ test('settings preserves the current unit, autosaved code, conversation input an
   const restart = page.getByRole('button', { name: '新建终端', exact: true });
   if (await restart.isVisible()) await restart.click();
   await expect(page.getByRole('button', { name: '停止终端', exact: true })).toBeEnabled();
-  await editor.fill('// unsaved settings navigation');
+  await expect(editor).toHaveText('// saved settings fixture', { useInnerText: true });
+  await editor.press('ControlOrMeta+a'); await editor.pressSequentially('// unsaved settings navigation');
   await composer.fill('保留本单元未发送的问题');
   await page.getByRole('button', { name: /切换到.*色主题/ }).click();
   await expect(editor).toHaveText('// unsaved settings navigation', { useInnerText: true });

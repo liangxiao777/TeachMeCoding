@@ -104,15 +104,7 @@ pnpm start  # http://127.0.0.1:4310
 
 ### 配置模型
 
-启动后打开「设置 → 模型配置」，选择 Provider、模型和登录方式即可。凭据只保存在服务端数据目录，不会返回浏览器。
-
-也可以用环境变量提供初始配置：
-
-```sh
-cp .env.example .env
-chmod 600 .env
-# 编辑 .env，填写 OPENROUTER_API_KEY 和 OPENROUTER_MODEL
-```
+启动后打开「设置 → 模型配置」，选择 Provider、模型和登录方式即可。模型选择和凭据只从当前实例的数据目录读取（默认 `~/.teach-me-coding/`），凭据不会返回浏览器。不从 `.env` 读取模型或凭据，也不支持凭据环境变量回退；原先通过这些方式配置的凭据需在设置页重新保存或登录。
 
 ## 使用方式
 
@@ -126,7 +118,7 @@ chmod 600 .env
 
 ## 配置
 
-常用环境变量：
+启动参数支持环境变量和项目根目录的 `.env`，优先级为**启动环境 > 根 `.env` > 默认值**。可按需将 [.env.example](.env.example) 复制为 `.env`；已有文件请手动合并，不要覆盖。仅加载下面六项，不展开 `~`、`${VAR}` 或命令，修改后重启生效；自定义数据目录须填写绝对路径。`NODE_ENV` 由启动命令控制，不从文件读取。模型、搜索及 MCP 凭据仍在设置页管理。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -134,8 +126,8 @@ chmod 600 .env
 | `PORT` | `4310` | API 服务端口（生产模式同时提供界面） |
 | `TMC_WEB_PORT` | `5173` | 开发模式前端端口 |
 | `HOST` | `127.0.0.1` | 设为 `0.0.0.0` 允许可信局域网访问，**没有登录鉴权** |
-| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | — | 尚未在设置页保存模型时的初始配置 |
 | `TMC_PREVIEW_ORIGIN` | — | 允许 Devin Desktop 等编辑器内置预览的本机来源 |
+| `TMC_AGENT_DEBUG_SNAPSHOTS` | `0`（关闭） | `1` 将完整请求写入数据目录的 `agent-debug/`，可能包含敏感内容 |
 
 搜索服务、网页抓取、MCP、Skills、数据备份与恢复等完整说明见[配置指南](docs/configuration.md)。
 
@@ -160,7 +152,7 @@ pnpm build
 pnpm test           # 单元与集成测试，需要先 build
 pnpm test:browser   # Playwright 浏览器与截图回归，使用本机 Google Chrome
 pnpm test:native    # SQLite 与 PTY 原生依赖检查
-pnpm test:provider  # 真实模型冒烟测试，会产生 Provider 费用
+pnpm test:provider  # 显式执行真实模型冒烟测试，使用已保存配置，会产生 Provider 费用
 ```
 
 `pnpm test` 需要本机有 `python3` 和 `pdftotext`（Poppler）。测试端口、夹具、视觉基线更新流程等见[开发与测试](docs/development.md)。

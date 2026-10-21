@@ -5,18 +5,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TeachingRuntime } from '../apps/server/src/agents/runtime.js';
-import { defaultModel, serverEnvironment } from '../apps/server/src/config/model.js';
-import { ModelService } from '../apps/server/src/models/service.js';
+import { openSavedModel } from '../apps/server/src/compatibility/saved-model.js';
 import { openDatabase } from '../apps/server/src/storage/database.js';
 import { Learning } from '../apps/server/src/modules/learning.js';
 
+const saved = await openSavedModel();
 const root = mkdtempSync(join(tmpdir(), 'tmc-real-teaching-'));
 const db = openDatabase(join(root, 'app.db')), learning = new Learning(db);
-const env = serverEnvironment(), fallback = defaultModel(env);
-if (!fallback) throw new Error('Set OPENROUTER_MODEL explicitly; no fallback model is selected.');
-const models = new ModelService(db, { env, fallback });
-await models.refresh();
-const config = { model: fallback.model };
+const { models, selection } = saved;
 const runtime = new TeachingRuntime(learning, models, { projectDirectory: () => root });
 const space = learning.create({ name: '合成教学验证', goal: '学习 Python 函数参数' });
 const ask = async (session: string, text: string) => {
@@ -31,7 +27,7 @@ const ask = async (session: string, text: string) => {
   assert.equal(final.state, 'succeeded');
 };
 try {
-  console.log(JSON.stringify({ model: config.model, data: 'synthetic disposable', execution: 'disabled' }));
+  console.log(JSON.stringify({ provider: selection.provider, model: selection.model, data: 'synthetic disposable', execution: 'disabled' }));
   await ask(space.sessions[0]!.id, '我会 Python 的变量、if 和循环，想弄懂函数默认参数，能自己写一个问候函数。什么时候学还没决定，时间先留空。');
   let w = learning.space(space.id);
   assert.ok(w.requirement.revision > 0); assert.equal(w.requirement.confirmed, false);
@@ -93,4 +89,4 @@ try {
   console.log(JSON.stringify({ requests: (db.prepare('SELECT COUNT(*) AS n FROM context_manifests').get() as { n: number }).n,
     taskRequests: (db.prepare('SELECT COUNT(*) AS n FROM task_manifests').get() as { n: number }).n,
     lessonCharacters: learning.unit(space.id, unit).lesson!.content.length, conclusions: learning.conclusions(space.id).length, reads }));
-} finally { await runtime.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
+} finally { await runtime.close(); db.close(); saved.close(); rmSync(root, { recursive: true, force: true }); }

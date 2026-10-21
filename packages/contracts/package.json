@@ -6,6 +6,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./startup": {
+      "types": "./dist/startup.d.ts",
+      "default": "./dist/startup.js"
     }
   },
   "scripts": {

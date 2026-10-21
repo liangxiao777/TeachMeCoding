@@ -1,5 +1,60 @@
+diff --git a/dist/core/model-runtime.d.ts b/dist/core/model-runtime.d.ts
+index 5bf6433f7061292741966e0b424574730510c765..1a3e349d24273d1322e790569a74db4d0a9a4742 100644
+--- a/dist/core/model-runtime.d.ts
++++ b/dist/core/model-runtime.d.ts
+@@ -1,9 +1,12 @@
+-import { type AnyModel, type Api, type AssistantImages, type AssistantMessage, type AssistantMessageEventStream, type AuthCheck, type AuthInteraction, type AuthOperationOptions, type AuthResult, type AuthType, type ClassifierApi, type ClassifierContext, type ClassifierModel, type ClassifierResult, type Context, type Credential, type CredentialInfo, type CredentialStore, type DeferredHandle, type ImageApi, type ImageModel, type ImagesContext, type LoginOptions, type Message, type Model, type Models, type ModelsApiStreamOptions, type ModelsClassifierOptions, type ModelsDeferredCancelOptions, type ModelsDeferredFetchOptions, type ModelsImagesOptions, type ModelsRefreshOptions, type ModelsRefreshResult, type ModelsSimpleStreamOptions, type ModelsStore, type ModelThinkingLevel, type ModelType, type ModelTypeMap, type Provider } from "@earendil-works/pi-ai";
++import { type AnyModel, type Api, type AssistantImages, type AssistantMessage, type AssistantMessageEventStream, type AuthCheck, type AuthContext, type AuthInteraction, type AuthOperationOptions, type AuthResult, type AuthType, type ClassifierApi, type ClassifierContext, type ClassifierModel, type ClassifierResult, type Context, type Credential, type CredentialInfo, type CredentialStore, type DeferredHandle, type ImageApi, type ImageModel, type ImagesContext, type LoginOptions, type Message, type Model, type Models, type ModelsApiStreamOptions, type ModelsClassifierOptions, type ModelsDeferredCancelOptions, type ModelsDeferredFetchOptions, type ModelsImagesOptions, type ModelsRefreshOptions, type ModelsRefreshResult, type ModelsSimpleStreamOptions, type ModelsStore, type ModelThinkingLevel, type ModelType, type ModelTypeMap, type Provider } from "@earendil-works/pi-ai";
+ import { type AuthStatus, type CompatibilityRequestConfig, type ProviderConfigInput } from "./provider-composer.ts";
+ import { type ModelRoute, type ModelRouteReason, type VirtualModelDefinition } from "./virtual-models.ts";
+ export interface CreateModelRuntimeOptions {
+     /** Credential storage. Defaults to the file at authPath. */
+     credentials?: CredentialStore;
++    /** Host-owned auth context and provider definitions. TeachMeCoding patch. */
++    authContext?: AuthContext;
++    providers?: readonly Provider[];
+     authPath?: string;
+     modelsPath?: string | null;
+     modelsStore?: ModelsStore;
+diff --git a/dist/core/model-runtime.js b/dist/core/model-runtime.js
+index 1fa738daf73d2888e0891c68d377e50b0c631bfd..d84abf3bafac9be431a5c2059bd7d4bf0aacdd83 100644
+--- a/dist/core/model-runtime.js
++++ b/dist/core/model-runtime.js
+@@ -64,7 +64,7 @@ export class ModelRuntime {
+     providerAvailabilitySeq = new Map();
+     availabilityError;
+     credentialOperations = new Map();
+-    constructor(credentials, config, modelsPath, modelsStore, providers, modelNetworkEnabled) {
++    constructor(credentials, config, modelsPath, modelsStore, providers, modelNetworkEnabled, authContext) {
+         this.credentials = credentials;
+         this.config = config;
+         this.modelsPath = modelsPath;
+@@ -72,7 +72,7 @@ export class ModelRuntime {
+         this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
+         for (const [providerId, provider] of this.defaultBuiltins)
+             this.builtins.set(providerId, provider);
+-        this.models = createModels({ credentials, modelsStore });
++        this.models = createModels({ credentials, modelsStore, authContext });
+         this.rebuildProviders();
+     }
+     static async create(options = {}) {
+@@ -84,12 +84,12 @@ export class ModelRuntime {
+                 ? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
+                 : new InMemoryCodingAgentModelsStore());
+         const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
+-        const providers = builtinProviderCatalog
++        const providers = options.providers ?? builtinProviderCatalog
+             .builtinProviders()
+             .map((provider) => provider.id === "radius"
+             ? provider
+             : withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt));
+-        const runtime = new ModelRuntime(credentials, config, modelsPath, modelsStore, providers, process.env.PI_OFFLINE === undefined);
++        const runtime = new ModelRuntime(credentials, config, modelsPath, modelsStore, providers, process.env.PI_OFFLINE === undefined, options.authContext);
+         runtime.configureRadiusProviders();
+         runtime.rebuildProviders();
+         const refreshFromNetwork = runtime.modelNetworkEnabled && options.allowModelNetwork === true;
 diff --git a/dist/core/tools/bash.d.ts b/dist/core/tools/bash.d.ts
-index 64be599a321c7486ebe8c9a21608ad8ce61f7778..d32958510e276f8235746bfc6de0921bf3054679 100644
+index 64be599a321c7486ebe8c9a21608ad8ce61f7778..d6426ae7e1616062bfdfcaf01db836ff380482d7 100644
 --- a/dist/core/tools/bash.d.ts
 +++ b/dist/core/tools/bash.d.ts
 @@ -78,6 +78,8 @@ export interface BashToolOptions {
@@ -12,7 +67,7 @@ index 64be599a321c7486ebe8c9a21608ad8ce61f7778..d32958510e276f8235746bfc6de0921b
  export type BashRenderState = {
      startedAt: number | undefined;
 diff --git a/dist/core/tools/bash.js b/dist/core/tools/bash.js
-index e52c9d779bdb50667083810d946e11da6c7e29ba..fd0cf3f9a08fd72f79ecf561db5f02ff45eb932b 100644
+index e52c9d779bdb50667083810d946e11da6c7e29ba..500017b3a7bbc5e5d12170dfd5ad59703118ca56 100644
 --- a/dist/core/tools/bash.js
 +++ b/dist/core/tools/bash.js
 @@ -172,7 +172,7 @@ export function createShellToolDefinition(cwd, config, options) {
@@ -25,7 +80,7 @@ index e52c9d779bdb50667083810d946e11da6c7e29ba..fd0cf3f9a08fd72f79ecf561db5f02ff
              let updateTimer;
              let updateDirty = false;
 diff --git a/dist/core/tools/output-accumulator.d.ts b/dist/core/tools/output-accumulator.d.ts
-index 2e4ce2fba648d75e5585248e9ff24f20c9073d1c..e947aae7130083e5179f0da20232536355b95897 100644
+index 2e4ce2fba648d75e5585248e9ff24f20c9073d1c..794d98d80ec51281874c61a8a01730d43a1f8bdb 100644
 --- a/dist/core/tools/output-accumulator.d.ts
 +++ b/dist/core/tools/output-accumulator.d.ts
 @@ -3,6 +3,7 @@ export interface OutputAccumulatorOptions {
@@ -45,7 +100,7 @@ index 2e4ce2fba648d75e5585248e9ff24f20c9073d1c..e947aae7130083e5179f0da202325363
      private rawChunks;
      private tailText;
 diff --git a/dist/core/tools/output-accumulator.js b/dist/core/tools/output-accumulator.js
-index e0a9e71b463457ec2747acc70a7bbd74deb1215b..0a8d216e08363e311a56f79d89b9adb9532cf3be 100644
+index e0a9e71b463457ec2747acc70a7bbd74deb1215b..f0cf92ba19776f31bea22b11c72435a2e6270e3f 100644
 --- a/dist/core/tools/output-accumulator.js
 +++ b/dist/core/tools/output-accumulator.js
 @@ -4,9 +4,9 @@ import { open } from "node:fs/promises";

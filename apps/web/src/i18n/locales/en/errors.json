@@ -103,6 +103,7 @@
   "MODEL_OAUTH_REAUTH_REQUIRED": "Your {{provider}} sign-in has expired. Sign in again in the app settings.",
   "MODEL_OAUTH_REFRESH_FAILED": "Your {{provider}} sign-in cannot be renewed right now. Try again later.",
   "MCP_SECRET_REQUIRED": "Enter the actual value for new authentication fields.",
+  "MCP_ENV_REFERENCE_UNSUPPORTED": "Environment references such as ${VAR} are no longer supported. Edit this server and enter the actual values.",
   "SERVICE_CLOSING": "The service is shutting down.",
   "MCP_SERVER_NOT_FOUND": "The MCP server does not exist.",
   "MCP_SERVER_NAME_CONFLICT": "An MCP server with this name already exists. Choose another name.",

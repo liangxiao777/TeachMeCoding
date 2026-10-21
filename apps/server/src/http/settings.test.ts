@@ -18,8 +18,8 @@ const stealth = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' };
 async function fixture() {
   const access = createLocalAccess({ port: 4310 });
   const db = openDatabase(':memory:');
-  const models = new ModelService(db, { env: () => undefined, fallback: stealth });
-  await models.refresh();
+  const models = new ModelService(db);
+  await models.select({ ...stealth, thinkingLevel: 'high' });
   const app = createApp(access, undefined, undefined, undefined, models);
   const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
   return { app, headers, db, models };
@@ -102,7 +102,7 @@ test('login endpoints drive a complete prompt/answer flow and reject bad input',
 test('MCP and Skills work without a model, retain access protection and reject invalid config', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-settings-')), db = openDatabase(':memory:');
   const access = createLocalAccess({ port: 4310 });
-  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+  const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
   const skills = new SkillService(db, root);
   const app = createApp(access, undefined, undefined, undefined, undefined, mcp, skills);
   const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
@@ -130,7 +130,7 @@ test('MCP and Skills work without a model, retain access protection and reject i
 test('single-server MCP endpoints validate names, protect mutations and preserve unrelated entries', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-mcp-api-'));
   const access = createLocalAccess({ port: 4310 });
-  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+  const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
   const app = createApp(access, undefined, undefined, undefined, undefined, mcp);
   const headers = { host: 'localhost:4310', 'x-tmc-token': access.token, 'content-type': 'application/json' };
   const body = JSON.stringify({ name: 'first', configuration: { command: '/not-started', enabled: false } });
@@ -206,7 +206,7 @@ test('Skills library endpoints protect installation and file access, and complet
 test('search settings and diagnostics work without a model, protect every route and never return credentials', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-search-api-')), access = createLocalAccess({ port: 4310 });
   let requests = 0, failed = false;
-  const search = new SearchService(join(root, 'search.json'), { env: () => undefined, fetch: async (_url, options) => {
+  const search = new SearchService(join(root, 'search.json'), { fetch: async (_url, options) => {
     requests++; assert.equal(new Headers(options?.headers).get('Authorization'), 'Bearer synthetic-search-secret');
     assert.deepEqual(JSON.parse(String(options?.body)), { query: 'Rust references', max_results: 2 });
     return failed ? new Response('reflected synthetic-search-secret', { status: 401 }) : Response.json({ results: [
@@ -246,7 +246,7 @@ test('search settings and diagnostics work without a model, protect every route 
     assert.equal((await post('', { enabled: true })).status, 200); assert.equal((await search.tools()).length, 1);
     assert.equal((await post('', { enabled: false })).status, 200); assert.deepEqual(await search.tools(), []);
     assert.doesNotMatch(await (await app.request('/api/settings/search', { headers })).text(), /synthetic-search-secret/);
-    assert.equal((await createApp(access, undefined, undefined, undefined, undefined, new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root }))
+    assert.equal((await createApp(access, undefined, undefined, undefined, undefined, new McpService(join(root, 'mcp.json'), { cwd: root }))
       .request('/api/settings/search', { headers })).status, 503);
   } finally { search.close(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -63,6 +63,13 @@ test('MCP HTTP form, JSON, cancellation and credentials work in both themes and 
     const json = dialog.getByLabel('服务器配置 JSON', { exact: true });
     expect(JSON.parse(await json.inputValue())).toEqual({ type: 'http', url, headers: { Authorization: 'Bearer synthetic-form-secret' }, timeout: 12.5, enabled: true });
     await dialog.getByRole('tab', { name: '表单', exact: true }).click();
+    await dialog.getByLabel('请求头值 1', { exact: true }).fill('Bearer ${HTTP_TOKEN}');
+    await dialog.getByRole('button', { name: '添加服务器', exact: true }).click();
+    await expect(dialog.getByText('不再支持 ${VAR} 等环境引用，请编辑此服务器并填写实际值。', { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel('请求头值 1', { exact: true })).toHaveValue('Bearer ${HTTP_TOKEN}');
+    expect(requests).toEqual([]);
+    await page.screenshot({ path: `.amp/in/artifacts/mcp-environment-reference-error-${info.project.name}.png`, animations: 'disabled' });
+    await dialog.getByLabel('请求头值 1', { exact: true }).fill('Bearer synthetic-form-secret');
     await dialog.getByRole('button', { name: '添加服务器', exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(settings.getByText('已连接', { exact: true })).toBeVisible();
@@ -135,7 +142,7 @@ test('MCP failed writes retain configuration and drafts, while late polling cann
       if (hold && !held) { held = true; await waiting; await route.fulfill({ json: initial }); delivered = true; return; }
       return route.fulfill({ json: settings });
     }
-    if (failed) return route.fulfill({ status: 503, json: { error: '合成写入失败，请重试。' } });
+    if (failed) return route.fulfill({ status: 503, json: { code: 'SETTINGS_READ_FAILED' } });
     const input = route.request().postDataJSON();
     settings = { configuration: { mcpServers: { docs: input.configuration } }, servers: [{ ...initial.servers[0]!, state: 'disabled' }] };
     return route.fulfill({ json: settings });
@@ -154,12 +161,12 @@ test('MCP failed writes retain configuration and drafts, while late polling cann
   await expect(dialog.getByLabel('服务器名称', { exact: true })).toHaveValue('unsaved-docs');
   await expect(dialog.getByLabel('启动命令', { exact: true })).toHaveValue('unsaved-command');
   await dialog.getByRole('button', { name: '保存修改', exact: true }).click();
-  await expect(dialog.getByText('合成写入失败，请重试。', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible();
   await expect(dialog.getByLabel('启动命令', { exact: true })).toHaveValue('unsaved-command');
   await page.keyboard.press('Escape');
   const toggle = region.getByRole('switch', { name: '启用 docs', exact: true });
   await toggle.focus(); await page.keyboard.press('Space');
-  await expect(region.getByText('合成写入失败，请重试。', { exact: true })).toBeVisible();
+  await expect(region.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible();
   await expect(toggle).toBeChecked();
   hold = true;
   await expect.poll(() => held).toBe(true);

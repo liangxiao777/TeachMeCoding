@@ -239,7 +239,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
                 <div className="flex flex-wrap items-center gap-2">
                   <FieldLabel htmlFor="search-api-key">{t('search.apiKey')}</FieldLabel>
                   <Badge variant={current?.configured ? 'secondary' : 'outline'} className="font-normal text-muted-foreground">
-                    {current?.configured === 'saved' ? t('search.savedCredentials') : current?.configured === 'environment' ? t('search.environmentCredentials') : t('search.missingCredentials')}
+                    {current?.configured === 'saved' ? t('search.savedCredentials') : t('search.missingCredentials')}
                   </Badge>
                   {current.apiKeyUrl && <a href={current.apiKeyUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                     {t('search.getApiKey')}<ExternalLink className="size-3" />

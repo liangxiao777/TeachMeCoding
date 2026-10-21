@@ -60,7 +60,7 @@ export interface SearchSettings {
   enabled: boolean;
   provider: SearchProvider;
   providers: { id: SearchProvider; name: string; authentication: 'api_key' | 'none' | 'oauth'; apiKeyUrl?: string;
-    configured: 'saved' | 'environment' | 'account' | null; ready: boolean; model?: string; region?: 'global' | 'cn' }[];
+    configured: 'saved' | 'account' | null; ready: boolean; model?: string; region?: 'global' | 'cn' }[];
 }
 export const webSearchInputSchema = z.object({
   query: z.string().trim().min(1).max(1000),

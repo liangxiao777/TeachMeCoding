@@ -13,7 +13,7 @@ function searchFixture(provider: SearchProvider = 'brave'): SearchSettings {
     { id: 'parallel', name: 'Parallel', authentication: 'api_key', configured: null, ready: false },
     { id: 'perplexity', name: 'Perplexity Search', authentication: 'api_key', configured: null, ready: false },
     { id: 'minimax', name: 'MiniMax Search', authentication: 'api_key', configured: null, ready: false, region: 'global' },
-    { id: 'gemini', name: 'Gemini', authentication: 'api_key', configured: 'environment', ready: true, model: 'gemini-3.6-flash' },
+    { id: 'gemini', name: 'Gemini', authentication: 'api_key', configured: 'saved', ready: true, model: 'gemini-3.6-flash' },
     { id: 'grok', name: 'Grok', authentication: 'api_key', configured: null, ready: false, model: 'grok-4.7' },
     { id: 'kimi', name: 'Kimi', authentication: 'api_key', configured: 'saved', ready: true, model: 'kimi-k2.6', region: 'global' },
     { id: 'codex', name: 'Codex Hosted Search', authentication: 'oauth', configured: null, ready: false },
@@ -30,7 +30,7 @@ async function mockSearch(page: Page, initial = searchFixture()) {
     if (route.request().method() === 'GET') return route.fulfill({ json: fixture.settings });
     const input = route.request().postDataJSON() as SearchWrite;
     fixture.writes.push(input);
-    if (fixture.failWrite) return route.fulfill({ status: 503, json: { error: '合成保存失败，请重试。' } });
+    if (fixture.failWrite) return route.fulfill({ status: 503, json: { code: 'SETTINGS_READ_FAILED' } });
     fixture.settings = { ...fixture.settings,
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
       ...(input.provider ? { provider: input.provider } : {}),
@@ -173,7 +173,7 @@ test('failed search writes keep drafts and toggle state; diagnostics show safe e
   let failWrite = true, failTest = true, empty = false, searches = 0;
   await page.route('**/api/settings/search', async (route) => {
     if (route.request().method() === 'GET') return route.fulfill({ json: settings });
-    if (failWrite) return route.fulfill({ status: 503, json: { error: '合成保存失败，请重试。' } });
+    if (failWrite) return route.fulfill({ status: 503, json: { code: 'SETTINGS_READ_FAILED' } });
     const input = route.request().postDataJSON();
     settings = { ...settings, ...(input.enabled !== undefined ? { enabled: input.enabled } : {}), ...(input.provider ? { provider: input.provider } : {}),
       providers: settings.providers.map((entry) => input.apiKey && entry.id === (input.provider ?? settings.provider) ? { ...entry, configured: 'saved', ready: true } : entry) };
@@ -182,7 +182,7 @@ test('failed search writes keep drafts and toggle state; diagnostics show safe e
   // Diagnostic fixtures never call a paid search API or a model.
   await page.route('**/api/settings/search/test', async (route) => {
     searches++; expect(route.request().postDataJSON()).toEqual({ query: 'Rust official documentation', count: 5 });
-    if (failTest) return route.fulfill({ status: 503, json: { error: 'Tavily 认证失败，请检查 API Key。' } });
+    if (failTest) return route.fulfill({ status: 503, json: { code: 'SEARCH_AUTH_FAILED', params: { provider: 'Tavily' } } });
     return route.fulfill({ json: { provider: 'tavily', query: 'Rust official documentation', tookMs: 37, untrusted: true, results: empty ? [] : [
       { title: '合成检索结果：Rust 官方文档', url: 'https://doc.rust-lang.org/book/', snippet: '<script>window.searchSnippetExecuted=true</script> 不可信外部片段只作为文本显示。' },
     ] } });
@@ -196,10 +196,10 @@ test('failed search writes keep drafts and toggle state; diagnostics show safe e
   const key = panel.getByLabel('API Key', { exact: true });
   const toggle = panel.getByRole('switch', { name: '启用搜索服务', exact: true });
   await toggle.focus(); await page.keyboard.press('Space');
-  await expect(panel.getByText('合成保存失败，请重试。', { exact: true })).toBeVisible(); await expect(toggle).toBeChecked();
+  await expect(panel.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible(); await expect(toggle).toBeChecked();
   await panel.getByLabel('搜索服务商', { exact: true }).click(); await page.getByRole('option', { name: 'Tavily', exact: true }).click();
   await key.fill('synthetic-unsaved-key'); await panel.getByRole('button', { name: '保存配置', exact: true }).click();
-  await expect(panel.getByText('合成保存失败，请重试。', { exact: true })).toBeVisible(); await expect(key).toHaveValue('synthetic-unsaved-key');
+  await expect(panel.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible(); await expect(key).toHaveValue('synthetic-unsaved-key');
   await expect(panel.getByRole('button', { name: '测试搜索', exact: true })).toBeDisabled(); expect(searches).toBe(0);
   await page.screenshot({ path: `.amp/in/artifacts/search-settings-save-error-${info.project.name}.png`, animations: 'disabled' });
   failWrite = false; await panel.getByRole('button', { name: '保存配置', exact: true }).click(); await expect(key).toHaveValue('');
@@ -243,7 +243,11 @@ test('14-provider metadata controls fields, no-key readiness and concise warning
     await expect(panel.getByLabel('服务区域', { exact: true })).toHaveCount(entry.region !== undefined ? 1 : 0);
     if (entry.model !== undefined) await expect(panel.getByLabel('搜索模型', { exact: true })).toHaveValue(entry.model);
     if (entry.authentication === 'none') await expect(panel.getByText('无需 API Key', { exact: true })).toBeVisible();
-    if (entry.id === 'gemini') await expect(panel.getByText('使用服务端环境凭据', { exact: true })).toBeVisible();
+    if (entry.authentication === 'api_key') {
+      await expect(panel.getByText(entry.configured === 'saved' ? '已保存凭据' : '未配置凭据', { exact: true })).toBeVisible();
+      await expect(panel.getByLabel('API Key', { exact: true })).toHaveAttribute('type', 'password');
+      await expect(panel.getByLabel('API Key', { exact: true })).toHaveValue('');
+    }
     if (entry.id === 'ollama') {
       await expect(panel.getByText('未配置凭据', { exact: true })).toBeVisible();
       await expect(panel.getByRole('link', { name: '获取 API Key', exact: true })).toHaveAttribute('href', 'https://ollama.com/settings/keys');
@@ -299,9 +303,9 @@ test('search model and region drafts survive tabs, toggle and failed saves, then
   await expect(model).toHaveValue('kimi-browser-draft'); await expect(key).toHaveValue('synthetic-kimi-draft');
   await expect(regionValue).toHaveText('中国'); await expect(diagnose).toBeDisabled();
   fixture.failWrite = true;
-  await toggle.click(); await expect(panel.getByText('合成保存失败，请重试。', { exact: true })).toBeVisible();
+  await toggle.click(); await expect(panel.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible();
   await expect(toggle).not.toBeChecked(); await expect(model).toHaveValue('kimi-browser-draft');
-  await save.click(); await expect(panel.getByText('合成保存失败，请重试。', { exact: true })).toBeVisible();
+  await save.click(); await expect(panel.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible();
   await expect(model).toHaveValue('kimi-browser-draft'); await expect(key).toHaveValue('synthetic-kimi-draft');
   await expect(regionValue).toHaveText('中国'); expect(fixture.settings.provider).toBe('brave');
   fixture.failWrite = false; await save.click(); await expect(save).toBeDisabled(); await expect(key).toHaveValue('');
@@ -337,7 +341,7 @@ async function mockCodex(page: Page, provider: SearchProvider = 'brave') {
   const sessions = new Map<string, LoginSession>(), cancelled = new Set<string>(), answered = new Set<string>();
   await page.route('**/api/settings/model', (route) => {
     if (route.request().method() === 'POST') fixture.teachingWrites++;
-    else if (fixture.failTeachingRead) return route.fulfill({ status: 503, json: { error: '合成模型状态读取失败' } });
+    else if (fixture.failTeachingRead) return route.fulfill({ status: 503, json: { code: 'SETTINGS_READ_FAILED' } });
     return route.fulfill({ json: teaching });
   });
   await page.route('**/api/settings/providers/synthetic/models', (route) => route.fulfill({ json: [
@@ -396,18 +400,18 @@ test('returning to settings refreshes shared account readiness without replacing
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
   await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   fixture.search.settings.providers = fixture.search.settings.providers.map((entry) => entry.id === 'codex'
-    ? { ...entry, configured: 'account', ready: true } : entry.id === 'kimi' ? { ...entry, configured: 'environment' } : entry);
+    ? { ...entry, configured: 'account', ready: true } : entry.id === 'kimi' ? { ...entry, configured: null, ready: false } : entry);
   fixture.teaching.providers[0]!.configured = null;
   fixture.teaching.ready = false; fixture.teaching.issue = { code: 'MODEL_CREDENTIALS_MISSING' };
   await region.getByRole('tab', { name: '搜索服务', exact: true }).click();
   await expect(panel.getByLabel('搜索模型', { exact: true })).toHaveValue('kimi-preserved-draft');
   await expect(panel.getByLabel('API Key', { exact: true })).toHaveValue('synthetic-preserved-key');
   await expect(panel.getByLabel('服务区域', { exact: true }).locator('[data-slot="select-value"]')).toHaveText('中国');
-  await expect(panel.getByText('使用服务端环境凭据', { exact: true })).toBeVisible();
+  await expect(panel.getByText('未配置凭据', { exact: true })).toBeVisible();
   await chooseProvider(page, 'Codex Hosted Search');
   await expect(panel.getByText('已登录 · Codex', { exact: true })).toBeVisible(); await expect(diagnose).toBeEnabled();
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
-  await expect(region.getByText('合成教学凭据已移除', { exact: true })).toBeVisible();
+  await expect(region.getByText('所选 Provider 尚未配置凭据，请在设置中登录或配置 API Key。', { exact: true })).toBeVisible();
   await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   await expect(region.getByRole('button', { name: '保存选择', exact: true })).toBeDisabled();
   fixture.search.settings.providers = fixture.search.settings.providers.map((entry) => entry.id === 'codex' ? { ...entry, configured: null, ready: false } : entry);
@@ -419,7 +423,7 @@ test('returning to settings refreshes shared account readiness without replacing
   fixture.failTeachingRead = true;
   await region.getByRole('tab', { name: '搜索服务', exact: true }).click();
   await region.getByRole('tab', { name: '模型配置', exact: true }).click();
-  await expect(region.getByText('合成模型状态读取失败', { exact: true })).toBeVisible();
+  await expect(region.getByText('无法保存或读取设置，请检查数据目录权限和配置文件。', { exact: true })).toBeVisible();
   await expect(region.getByLabel('模型', { exact: true })).toHaveText('Teaching fixture');
   await expect(level.locator('[data-slot="select-value"]')).toHaveText('低');
   await expect(region.getByRole('button', { name: '保存选择', exact: true })).toBeEnabled();

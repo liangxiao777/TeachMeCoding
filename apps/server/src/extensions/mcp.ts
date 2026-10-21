@@ -6,11 +6,13 @@ import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type 
 import { Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { mcpConfigurationSchema, mcpServerEntrySchema, type McpConfiguration, type McpSettings, type McpServerConfiguration } from '@teach-me-coding/contracts';
-import type { EnvLookup } from '../config/model.js';
 import { terminalEnvironment } from '../runtime/terminal-env.js';
 import { BusinessError } from '../modules/learning.js';
 
 const mask = '••••••••';
+function hasEnvironmentReference(config: McpServerConfiguration) {
+  return [...Object.values(config.env ?? {}), ...Object.values(config.headers ?? {})].some((value) => /\$\{[A-Za-z_][A-Za-z0-9_]*\}/.test(value));
+}
 type Connection = { config: McpServerConfiguration; status: McpSettings['servers'][number]; client: McpClient;
   tools: AgentTool[]; ready: Promise<void> };
 
@@ -27,26 +29,18 @@ export class McpService {
   private writes: Promise<unknown> = Promise.resolve();
   private closed = false;
   constructor(private path: string, private options: {
-    env: EnvLookup; cwd: string; transport?: (config: McpServerConfiguration) => McpTransport;
+    cwd: string; transport?: (config: McpServerConfiguration) => McpTransport;
   }) {
     const info = lstatSync(path, { throwIfNoEntry: false });
     if (info && (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)) throw new Error('MCP config must be a regular file.');
     this.configuration = info ? mcpConfigurationSchema.parse(JSON.parse(readFileSync(path, 'utf8'))) : { mcpServers: {} };
   }
-  private expand(value: string) {
-    return value.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_match, name: string) => {
-      const found = this.options.env(name);
-      if (found === undefined) throw new Error('Required MCP environment variable is missing.');
-      return found;
-    });
-  }
   private transport(config: McpServerConfiguration): McpTransport {
     if (this.options.transport) return this.options.transport(config);
-    const fields = (values?: Record<string, string>) => Object.fromEntries(Object.entries(values ?? {}).map(([key, value]) => [key, this.expand(value)]));
-    if (config.url) return new StreamableHttpTransport({ url: config.url, headers: fields(config.headers) });
+    if (config.url) return new StreamableHttpTransport({ url: config.url, headers: config.headers });
     const cwd = config.cwd?.startsWith('~/') ? resolve(homedir(), config.cwd.slice(2)) : resolve(this.options.cwd, config.cwd ?? '.');
     return new StdioTransport({ command: config.command!, args: config.args, cwd, inheritEnv: false,
-      env: { ...terminalEnvironment(process.env), ...fields(config.env) }, stderr: 'pipe' });
+      env: { ...terminalEnvironment(process.env), ...config.env }, stderr: 'pipe' });
   }
   start() {
     if (this.closed) return;
@@ -57,6 +51,10 @@ export class McpService {
         status: { name, state: config.enabled === false ? 'disabled' : 'connecting', error: null, tools: [] } };
       this.connections.set(name, connection);
       if (config.enabled === false) continue;
+      if (hasEnvironmentReference(config)) {
+        connection.status.state = 'failed'; connection.status.error = { code: 'MCP_ENV_REFERENCE_UNSUPPORTED' };
+        continue;
+      }
       client.onClose(() => {
         if (connection.status.state === 'connected') {
           connection.status.state = 'failed'; connection.status.error = { code: 'MCP_DISCONNECTED' }; connection.tools = [];
@@ -104,7 +102,7 @@ export class McpService {
   settings(): McpSettings {
     const configuration = structuredClone(this.configuration);
     for (const config of Object.values(configuration.mcpServers)) for (const key of ['env', 'headers'] as const) {
-      if (config[key]) config[key] = Object.fromEntries(Object.entries(config[key]).map(([name, value]) => [name, /^(?:Bearer )?\$\{[A-Z_][A-Z0-9_]*\}$/i.test(value) || !value ? value : mask]));
+      if (config[key]) config[key] = Object.fromEntries(Object.entries(config[key]).map(([name, value]) => [name, value ? mask : value]));
     }
     return { configuration, servers: Object.keys(configuration.mcpServers).flatMap((name) => {
       const entry = this.connections.get(name);
@@ -134,7 +132,14 @@ export class McpService {
     const operation = this.writes.then(async () => {
       if (this.closed) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
       const parsed = mcpConfigurationSchema.parse(update());
-      for (const [name, config] of Object.entries(parsed.mcpServers)) this.restoreSecrets(config, this.configuration.mcpServers[name]);
+      for (const [name, config] of Object.entries(parsed.mcpServers)) {
+        const previous = this.configuration.mcpServers[name];
+        this.restoreSecrets(config, previous);
+        if (hasEnvironmentReference(config) && (JSON.stringify(config.env) !== JSON.stringify(previous?.env)
+          || JSON.stringify(config.headers) !== JSON.stringify(previous?.headers))) {
+          throw new BusinessError(400, { code: 'MCP_ENV_REFERENCE_UNSUPPORTED' });
+        }
+      }
       const temporary = `${this.path}.tmp`;
       rmSync(temporary, { force: true });
       writeFileSync(temporary, JSON.stringify(parsed, null, 2), { mode: 0o600, flag: 'wx' });

@@ -5,29 +5,28 @@ import { Type } from '@earendil-works/pi-ai';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { searchModelSchema, searchProviderSchema, searchRegionSchema, searchSettingsUpdateSchema, webSearchInputSchema,
   type SearchProvider, type SearchSettings, type WebSearchResponse } from '@teach-me-coding/contracts';
-import type { EnvLookup } from '../config/model.js';
 import { BusinessError } from '../modules/learning.js';
 import { HttpSearchError, runHttpSearch, searchModelDefaults } from './search-http.js';
 import { runCodexSearch, type CodexAuthSource, type CodexSearchLaunchOptions } from './codex-search.js';
 
-type Provider = Omit<SearchSettings['providers'][number], 'configured' | 'ready'> & { env?: string[] };
+type Provider = Omit<SearchSettings['providers'][number], 'configured' | 'ready'>;
 const providers: Provider[] = [
-  { id: 'brave', name: 'Brave Search', authentication: 'api_key', env: ['BRAVE_API_KEY'], apiKeyUrl: 'https://api-dashboard.search.brave.com/app/keys' },
-  { id: 'tavily', name: 'Tavily', authentication: 'api_key', env: ['TAVILY_API_KEY'], apiKeyUrl: 'https://app.tavily.com/home' },
-  { id: 'exa', name: 'Exa', authentication: 'api_key', env: ['EXA_API_KEY'], apiKeyUrl: 'https://dashboard.exa.ai/api-keys' },
-  { id: 'firecrawl', name: 'Firecrawl', authentication: 'api_key', env: ['FIRECRAWL_API_KEY'], apiKeyUrl: 'https://www.firecrawl.dev/app/api-keys' },
-  { id: 'parallel', name: 'Parallel', authentication: 'api_key', env: ['PARALLEL_API_KEY'], apiKeyUrl: 'https://platform.parallel.ai/' },
-  { id: 'perplexity', name: 'Perplexity Search', authentication: 'api_key', env: ['PERPLEXITY_API_KEY'], apiKeyUrl: 'https://www.perplexity.ai/account/api/keys' },
-  { id: 'minimax', name: 'MiniMax Search', authentication: 'api_key', env: ['MINIMAX_CODE_PLAN_KEY', 'MINIMAX_CODING_API_KEY', 'MINIMAX_OAUTH_TOKEN', 'MINIMAX_API_KEY'],
+  { id: 'brave', name: 'Brave Search', authentication: 'api_key', apiKeyUrl: 'https://api-dashboard.search.brave.com/app/keys' },
+  { id: 'tavily', name: 'Tavily', authentication: 'api_key', apiKeyUrl: 'https://app.tavily.com/home' },
+  { id: 'exa', name: 'Exa', authentication: 'api_key', apiKeyUrl: 'https://dashboard.exa.ai/api-keys' },
+  { id: 'firecrawl', name: 'Firecrawl', authentication: 'api_key', apiKeyUrl: 'https://www.firecrawl.dev/app/api-keys' },
+  { id: 'parallel', name: 'Parallel', authentication: 'api_key', apiKeyUrl: 'https://platform.parallel.ai/' },
+  { id: 'perplexity', name: 'Perplexity Search', authentication: 'api_key', apiKeyUrl: 'https://www.perplexity.ai/account/api/keys' },
+  { id: 'minimax', name: 'MiniMax Search', authentication: 'api_key',
     apiKeyUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key', region: 'global' },
-  { id: 'gemini', name: 'Gemini', authentication: 'api_key', env: ['GEMINI_API_KEY'], apiKeyUrl: 'https://aistudio.google.com/api-keys', model: searchModelDefaults.gemini },
-  { id: 'grok', name: 'Grok', authentication: 'api_key', env: ['XAI_API_KEY'], apiKeyUrl: 'https://console.x.ai/', model: searchModelDefaults.grok },
-  { id: 'kimi', name: 'Kimi', authentication: 'api_key', env: ['KIMI_API_KEY', 'MOONSHOT_API_KEY'], apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
+  { id: 'gemini', name: 'Gemini', authentication: 'api_key', apiKeyUrl: 'https://aistudio.google.com/api-keys', model: searchModelDefaults.gemini },
+  { id: 'grok', name: 'Grok', authentication: 'api_key', apiKeyUrl: 'https://console.x.ai/', model: searchModelDefaults.grok },
+  { id: 'kimi', name: 'Kimi', authentication: 'api_key', apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
     model: searchModelDefaults.kimi, region: 'global' },
   { id: 'codex', name: 'Codex Hosted Search', authentication: 'oauth' },
   { id: 'duckduckgo', name: 'DuckDuckGo', authentication: 'none' },
   { id: 'firecrawl-free', name: 'Firecrawl Free', authentication: 'none' },
-  { id: 'ollama', name: 'Ollama Web Search', authentication: 'api_key', env: ['OLLAMA_API_KEY'], apiKeyUrl: 'https://ollama.com/settings/keys' },
+  { id: 'ollama', name: 'Ollama Web Search', authentication: 'api_key', apiKeyUrl: 'https://ollama.com/settings/keys' },
 ];
 const providerOptionsSchema = z.object({ model: searchModelSchema.optional(), region: searchRegionSchema.optional() }).strict();
 const configurationSchema = z.object({
@@ -50,15 +49,15 @@ export class SearchService {
   private configuration: Configuration;
   private shutdown = new AbortController();
   private agentCalls = new AbortController();
-  constructor(private path: string, private options: { env: EnvLookup; fetch?: typeof fetch;
-    codex?: CodexAuthSource; codexLaunch?: CodexSearchLaunchOptions }) {
+  constructor(private path: string, private options: { fetch?: typeof fetch;
+    codex?: CodexAuthSource; codexLaunch?: CodexSearchLaunchOptions } = {}) {
     const info = lstatSync(path, { throwIfNoEntry: false });
     if (info && (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1)) throw new Error('Search config must be a regular file.');
     this.configuration = info ? configurationSchema.parse(JSON.parse(readFileSync(path, 'utf8'))) : { enabled: false, provider: 'brave', apiKeys: {} };
   }
   private key(provider: Provider, configuration = this.configuration) {
     if (provider.authentication !== 'api_key') return undefined;
-    return configuration.apiKeys[provider.id] || provider.env?.map((name) => this.options.env(name)).find(Boolean);
+    return configuration.apiKeys[provider.id];
   }
   private async ready(provider: Provider, configuration: Configuration, signal?: AbortSignal) {
     if (provider.authentication === 'none') return true;
@@ -71,11 +70,10 @@ export class SearchService {
     const account = await this.ready(providers.find((provider) => provider.id === 'codex')!, configuration);
     return { enabled: configuration.enabled, provider: configuration.provider,
       providers: providers.map((provider) => {
-        const { env: _env, ...summary } = provider;
         const configured = provider.authentication === 'oauth' ? account ? 'account' : null
-          : configuration.apiKeys[provider.id] ? 'saved' : this.key(provider, configuration) ? 'environment' : null;
+          : configuration.apiKeys[provider.id] ? 'saved' : null;
         const options = configuration.providerOptions?.[provider.id];
-        return { ...summary, ...options, configured,
+        return { ...provider, ...options, configured,
           ready: provider.authentication === 'none' || !!configured,
           ...(options?.region === 'cn' && provider.id === 'kimi' ? { apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys' } : {}),
           ...(options?.region === 'cn' && provider.id === 'minimax' ? { apiKeyUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key' } : {}),

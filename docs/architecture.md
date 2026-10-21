@@ -70,13 +70,13 @@ Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsou
 
 已有路线保留 `add_route_stage`、`add_route_unit`、`update_route_stage`、`update_route_unit`、`remove_route_unit`、`remove_route_stage`，通过已有 ID 定位并保留课件、测评和学习记录。更新中省略字段意味着保留原值；新增单元的概要和目标允许省略。最后调用 `submit_route_proposal({note?})` 提交组装后的调整，不重复整份路线。所有编辑暂存于本轮；只有实际内容或顺序变化才使提交失效，`changed=false` 的更新无需重新提交。运行正常结束并通过版本校验才保存，首次路线自动应用，调整仍待用户确认。模型可根据工具错误修正参数，单次错误不会永久锁死后续有效提交。
 
-必要时显式设置 `TMC_AGENT_DEBUG_SNAPSHOTS=1`，服务会在所选数据目录的 `agent-debug/` 写入完整请求快照（新目录 700、文件 600）。**快照可能含源码、路径、引用和私有评分标准**；不要提交、上传或公开它们。取消该环境变量并重启即停止新增；停止服务后，可检查并删除该目录中的快照文件，不要删除 `app.db` 或项目文件。关闭快照不自动删除已有文件。
+必要时显式设置 `TMC_AGENT_DEBUG_SNAPSHOTS=1`，服务会在所选数据目录的 `agent-debug/` 写入完整请求快照（新目录 700、文件 600）。**快照可能含源码、路径、引用和私有评分标准**；不要提交、上传或公开它们。设为 `TMC_AGENT_DEBUG_SNAPSHOTS=0` 并重启即停止新增；停止服务后，可检查并删除该目录中的快照文件，不要删除 `app.db` 或项目文件。关闭快照不自动删除已有文件。
 
 评估绑定不可变提交、题目/rubric 版本及证据；重试原任务不会增加提交尝试或评估新草稿。真实执行证据必须与提交、代码摘要、题目版本和执行方案匹配；完成运行的代码题标记为 `execution-verified`，是否通过还取决于输出匹配和模型评估。执行未完成或失败、仅有静态反馈或模拟执行夹具时，代码题结果为 `unverified`；纯分析题可产生有效的 `non-execution` 评分。需求、路线或课件变化后，旧记录保留为历史，其有效性按来源版本判定。
 
 ## 模型调用策略
 
-教学模型和推理强度来自应用设置，环境变量仅提供尚未保存选择时的默认值。宿主不额外设置输入或输出 token 预算，不按长度裁剪上下文，也不累计输出 token 来终止运行。按 2026-10-10 用户决定，兼容性冒烟和教学运行保留与 pi-coding-agent 1.0.0 普通调用相同的 simple-stream 策略：调用 `Models.streamSimple`，不额外传 `maxTokens` 或重写 Pi 输出预算，继续由 Models 处理鉴权、Provider 适配器处理推理映射及派生输出上限。Provider 自身限制仍存在；这不是无限输出，也不包含自动 compaction。
+教学模型和推理强度只来自当前实例保存的应用设置，不从环境变量或 `.env` 选择默认模型。宿主不额外设置输入或输出 token 预算，不按长度裁剪上下文，也不累计输出 token 来终止运行。按 2026-10-10 用户决定，兼容性冒烟和教学运行保留与 pi-coding-agent 1.0.0 普通调用相同的 simple-stream 策略：调用 `Models.streamSimple`，不额外传 `maxTokens` 或重写 Pi 输出预算，继续由 Models 处理鉴权、Provider 适配器处理推理映射及派生输出上限。Provider 自身限制仍存在；这不是无限输出，也不包含自动 compaction。
 
 教学运行没有总时长、模型请求次数或工具调用次数上限，工具仍顺序执行。参照 Pi coding-agent 默认策略，模型请求注入 300 秒 `timeoutMs`（具体支持取决于 SDK）；支持自定义 fetch 的 HTTP 适配器另有 300 秒响应头／正文空闲保护，不替换全局 fetch。Google／Vertex、Bedrock 和未知 API 保留原生 SDK 传输，WebSocket 仍由 Pi 管理，不宣称具有宿主 HTTP 空闲保护。持续输出的 OpenAI 兼容流不会因整轮累计超过 300 秒被取消。
 

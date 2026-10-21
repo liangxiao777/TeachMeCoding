@@ -2,15 +2,17 @@ import { defineConfig } from 'vite';
 import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 import { parsePreviewOrigin, previewFrameAncestors } from '@teach-me-coding/contracts';
+import { startupEnvironment } from '@teach-me-coding/contracts/startup';
 
-const previewOrigin = parsePreviewOrigin(process.env.TMC_PREVIEW_ORIGIN);
+const environment = startupEnvironment();
+const previewOrigin = parsePreviewOrigin(environment.TMC_PREVIEW_ORIGIN);
 
 export default defineConfig({
   plugins: [tailwindcss()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
-    host: process.env.HOST ?? '127.0.0.1',
-    port: Number(process.env.TMC_WEB_PORT ?? 5173),
+    host: environment.HOST ?? '127.0.0.1',
+    port: Number(environment.TMC_WEB_PORT ?? 5173),
     strictPort: true,
     cors: false,
     headers: {
@@ -21,7 +23,7 @@ export default defineConfig({
       'Referrer-Policy': 'no-referrer',
     },
     proxy: { '/api': {
-      target: `http://127.0.0.1:${process.env.PORT ?? '4310'}`,
+      target: `http://127.0.0.1:${environment.PORT ?? '4310'}`,
       changeOrigin: false,
       ws: true,
     } },

@@ -1,11 +1,11 @@
 import { serve } from '@hono/node-server';
+import { startupEnvironment } from '@teach-me-coding/contracts/startup';
 import { serverConfig } from './config/server.js';
 import { createApp } from './http/app.js';
 import { createLocalAccess, terminalUpgradeGate } from './http/local-access.js';
 import { dataDirectory, openDataDirectory } from './storage/data-directory.js';
 import { Learning } from './modules/learning.js';
 import { Projects } from './modules/projects.js';
-import { defaultModel, serverEnvironment } from './config/model.js';
 import { FileCredentialStore } from './models/credentials.js';
 import { ModelService } from './models/service.js';
 import { TeachingRuntime } from './agents/runtime.js';
@@ -20,23 +20,23 @@ import { codexAuthSource } from './extensions/codex-search.js';
 import { Library } from './modules/library.js';
 
 try {
-  const config = serverConfig();
+  const environment = startupEnvironment();
+  const config = serverConfig(environment);
   const { port, hostname } = config;
-  const data = openDataDirectory(dataDirectory());
+  const data = openDataDirectory(dataDirectory(environment));
   const access = createLocalAccess(config);
-  const env = serverEnvironment();
   const credentials = new FileCredentialStore(join(data.root, 'credentials.json'));
   let models: ModelService | null = null;
   try {
-    models = new ModelService(data.db, { env, credentials, fallback: defaultModel(env) });
+    models = new ModelService(data.db, { credentials });
     await models.refresh();
   } catch { /* Missing or unreadable model configuration must not block saved learning data. */ }
   let mcp: McpService | undefined, skills: SkillService | undefined, search: SearchService | undefined;
-  try { mcp = new McpService(join(data.root, 'mcp.json'), { env, cwd: data.root }); mcp.start(); }
+  try { mcp = new McpService(join(data.root, 'mcp.json'), { cwd: data.root }); mcp.start(); }
   catch { /* Invalid MCP files remain untouched and their settings API reports unavailable. */ }
   try { skills = new SkillService(data.db, data.root); }
   catch { /* Preserve unreadable Skills configuration, rather than resetting it. */ }
-  try { search = new SearchService(join(data.root, 'search.json'), { env,
+  try { search = new SearchService(join(data.root, 'search.json'), {
     ...(models ? { codex: codexAuthSource(models.models, credentials) } : {}),
   }); }
   catch { /* Invalid search configuration must not block learning or other settings. */ }
@@ -51,7 +51,7 @@ try {
   const agents = new TeachingRuntime(learning, models, {
     actions, executions, mcp, skills, search, library,
     projectDirectory: (space) => projects.root(space),
-    debugDirectory: process.env.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
+    debugDirectory: environment.TMC_AGENT_DEBUG_SNAPSHOTS === '1' ? join(data.root, 'agent-debug') : undefined,
   });
   const server = serve({ fetch: createApp(access, learning, projects, agents, models ?? undefined, mcp, skills, search, library).fetch, hostname, port }, () => {
     console.log(`TeachMeCoding listening on http://${hostname}:${port}`);
@@ -68,6 +68,6 @@ try {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void close().finally(() => server.close()); });
 } catch (error) {
   console.error('Cannot open local data. Check TMC_DATA_DIR, directory permissions and database version.');
-  if (error instanceof Error && (error.message.startsWith('Database ') || error.message.startsWith('Data ') || error.message.startsWith('TMC_DATA_DIR') || error.message.startsWith('TMC_PREVIEW_ORIGIN'))) console.error(error.message);
+  if (error instanceof Error && (error.message.startsWith('Database ') || error.message.startsWith('Data ') || error.message.startsWith('TMC_DATA_DIR') || error.message.startsWith('TMC_PREVIEW_ORIGIN') || error.message.startsWith('Startup .env'))) console.error(error.message);
   process.exitCode = 1;
 }

@@ -1,17 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
-import { clampThinkingLevel, getSupportedThinkingLevels, InMemoryCredentialStore, type Api, type AuthContext, type AuthEvent, type AuthPrompt,
+import { getSupportedThinkingLevels, InMemoryCredentialStore, type Api, type AuthEvent, type AuthPrompt,
   type CredentialStore, type Model, type MutableModels } from '@earendil-works/pi-ai';
-import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { loginAnswerSchema, loginStartSchema, modelSelectionSchema, type LoginEvent, type LoginSession, type ModelSelection,
   type BusinessErrorDetail, type ModelSettings, type ModelSummary, type ProviderSummary } from '@teach-me-coding/contracts';
-import type { EnvLookup } from '../config/model.js';
 import { BusinessError } from '../modules/learning.js';
+import { storedAuthContext, storedModels } from './auth.js';
 import { classifyModelFailure } from './failure.js';
 
 export interface ModelChoice { selection: ModelSelection; model: Model<Api> }
@@ -22,13 +18,6 @@ export interface ModelSource {
   resolve(selection: ModelSelection): Model<Api> | undefined;
   sessionRuntime(model: Model<Api>): Promise<ModelRuntime>;
   stream?: StreamFn;
-}
-
-export function authContext(env: EnvLookup): AuthContext {
-  return {
-    env: async (name) => env(name),
-    fileExists: async (path) => existsSync(path.startsWith('~') ? join(homedir(), path.slice(1)) : path),
-  };
 }
 
 type Live = LoginSession & { controller: AbortController; answer?: (value: string) => void; secrets: string[]; finishedAt?: number };
@@ -44,15 +33,15 @@ export class ModelService implements ModelSource {
   private authIssues = new Map<string, BusinessErrorDetail>();
   private authEpochs = new Map<string, number>();
   private logins = new Map<string, Live>();
-  constructor(private db: Database.Database | null, private options: {
-    env: EnvLookup; credentials?: CredentialStore; fallback?: { provider: string; model: string } | null;
-  }) {
+  constructor(private db: Database.Database | null, options: { credentials?: CredentialStore } = {}) {
     this.credentials = options.credentials ?? new InMemoryCredentialStore();
-    this.models = builtinModels({ credentials: this.credentials, authContext: authContext(options.env) });
+    this.models = storedModels(this.credentials);
   }
   readonly stream: StreamFn = async (model, context, options) => {
     const epoch = this.authEpochs.get(model.provider) ?? 0;
-    const stream = this.models.streamSimple(model, context, options);
+    // Runtime request options must not replace the app-owned credential source.
+    const { apiKey: _key, env: _env, headers: _headers, ...transport } = options ?? {};
+    const stream = this.models.streamSimple(model, context, transport);
     void stream.result().then((message) => {
       // A request using old credentials must not invalidate a later login.
       if (epoch !== (this.authEpochs.get(model.provider) ?? 0)) return;
@@ -74,16 +63,8 @@ export class ModelService implements ModelSource {
   async sessionRuntime(model: Model<Api>) {
     const provider = this.models.getProvider(model.provider);
     if (!provider) throw new BusinessError(503, { code: 'MODEL_PROVIDER_UNAVAILABLE' });
-    const runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, refreshOnCreate: false });
-    const context = authContext(this.options.env);
-    // Pi sessions and the teaching transport share credentials and the app's
-    // injected environment. Never discover the user's CLI model configuration.
-    runtime.registerNativeProvider({ ...provider, auth: { ...provider.auth,
-      ...(provider.auth.apiKey ? { apiKey: { ...provider.auth.apiKey,
-        ...(provider.auth.apiKey.check ? { check: (input) => provider.auth.apiKey!.check!({ ...input, ctx: { ...input.ctx, ...context } }) } : {}),
-        resolve: (input) => provider.auth.apiKey!.resolve({ ...input, ctx: { ...input.ctx, ...context } }),
-      } } : {}),
-    } });
+    const runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, refreshOnCreate: false,
+      authContext: storedAuthContext, providers: [provider] });
     await runtime.refresh({ providers: [provider.id], allowNetwork: false });
     return runtime;
   }
@@ -97,11 +78,7 @@ export class ModelService implements ModelSource {
   }
   selection(): ModelSelection | null {
     const saved = modelSelectionSchema.safeParse(this.setting('model'));
-    if (saved.success) return saved.data;
-    const fallback = this.options.fallback;
-    if (!fallback) return null;
-    const model = this.models.getModel(fallback.provider, fallback.model);
-    return { ...fallback, thinkingLevel: model ? clampThinkingLevel(model, 'high') : 'high' };
+    return saved.success ? saved.data : null;
   }
   resolve(selection: ModelSelection) { return this.models.getModel(selection.provider, selection.model); }
   current(): ModelChoice | null {

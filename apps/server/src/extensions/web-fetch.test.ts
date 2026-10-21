@@ -294,7 +294,7 @@ test('caller cancellation propagates into HTTP and rejects late successful respo
 
 test('DeepSeek receives ordinary web_fetch without a search key or enabled search, and only provenance is retained', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-fetch-runtime-')), db = openDatabase(':memory:');
-  const search = new SearchService(join(root, 'search.json'), { env: () => undefined });
+  const search = new SearchService(join(root, 'search.json'));
   const model = { ...teachingModel, id: 'deepseek-chat', provider: 'deepseek' };
   const selection = { provider: model.provider, model: model.id, thinkingLevel: 'high' as const };
   let turns = 0, pages = 0;
@@ -329,7 +329,7 @@ test('DeepSeek receives ordinary web_fetch without a search key or enabled searc
 test('a teaching model can follow an ordinary web_search result with web_fetch in the same run', async () => {
   const root = mkdtempSync(join(tmpdir(), 'tmc-search-fetch-')), db = openDatabase(':memory:');
   let searches = 0, pages = 0, turns = 0;
-  const search = new SearchService(join(root, 'search.json'), { env: () => undefined, fetch: async () => {
+  const search = new SearchService(join(root, 'search.json'), { fetch: async () => {
     searches++; return Response.json({ results: [{ title: 'Rust Reference', url: address, content: 'SEARCH-SNIPPET' }] });
   } });
   search.save({ enabled: true, provider: 'tavily', apiKey: 'synthetic-search-secret' });

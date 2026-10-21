@@ -420,8 +420,8 @@ test('research writing only needs Markdown, accepts paraphrases and preserves co
 
 test('Markdown research preserves route/lesson pins, source diagnostics and exact downloads without retaining whole fetched pages', async () => {
   const { db, learning, spaceId, sessionId, routeSession } = setup();
-  // Missing config + no environment credentials: read-only, never creates a settings file.
-  const search = new SearchService(new URL(`./.absent-search-${randomUUID()}.json`, import.meta.url).pathname, { env: () => undefined });
+  // Missing config: read-only, never creates a settings file.
+  const search = new SearchService(new URL(`./.absent-search-${randomUUID()}.json`, import.meta.url).pathname);
   let requests = 0, pages = 0, fetchedText = '';
   const runtime = new TeachingRuntime(learning, syntheticSource, { search, webFetch: fetchFixture(() => { pages++; }), stream: (_m, context) => {
     const system = context.messages.find((m) => m.role === 'system'); assert.ok(system?.role === 'system');

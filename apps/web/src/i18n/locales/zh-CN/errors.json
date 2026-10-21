@@ -103,6 +103,7 @@
   "MODEL_OAUTH_REAUTH_REQUIRED": "{{provider}} 登录已失效，请在应用设置中重新登录。",
   "MODEL_OAUTH_REFRESH_FAILED": "{{provider}} 登录暂时无法续期，请稍后重试。",
   "MCP_SECRET_REQUIRED": "新的认证字段需要填写实际值。",
+  "MCP_ENV_REFERENCE_UNSUPPORTED": "不再支持 ${VAR} 等环境引用，请编辑此服务器并填写实际值。",
   "SERVICE_CLOSING": "服务正在关闭。",
   "MCP_SERVER_NOT_FOUND": "MCP 服务器不存在。",
   "MCP_SERVER_NAME_CONFLICT": "已存在同名 MCP 服务器，请换一个名称。",

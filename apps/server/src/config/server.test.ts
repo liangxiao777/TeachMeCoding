@@ -1,6 +1,52 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { startupEnvironment } from '@teach-me-coding/contracts/startup';
 import { serverConfig } from './server.js';
+
+test('startup files load only the six startup options, without exporting credentials or choosing the runtime mode', () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-startup-config-'));
+  const path = join(root, '.env');
+  const before = process.env.PORT;
+  try {
+    writeFileSync(path, [
+      'TMC_DATA_DIR="/tmp/synthetic data #17"', 'HOST=0.0.0.0', 'PORT=4431 # API', 'TMC_WEB_PORT=5531',
+      'TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492', 'TMC_AGENT_DEBUG_SNAPSHOTS=1',
+      'NODE_ENV=development', 'OPENROUTER_API_KEY=synthetic-secret', 'OPENROUTER_MODEL=ignored/model',
+      'BRAVE_API_KEY=synthetic-search-secret', 'VITE_SECRET=not-public', 'HTTPS_PROXY=http://ignored.test',
+    ].join('\n'));
+    assert.deepEqual(startupEnvironment({}, path), {
+      TMC_DATA_DIR: '/tmp/synthetic data #17', HOST: '0.0.0.0', PORT: '4431', TMC_WEB_PORT: '5531',
+      TMC_PREVIEW_ORIGIN: 'http://127.0.0.1:54492', TMC_AGENT_DEBUG_SNAPSHOTS: '1',
+    });
+    assert.equal(process.env.PORT, before);
+    const environment = {
+      TMC_DATA_DIR: '/tmp/override', HOST: '127.0.0.1', PORT: '4432', TMC_WEB_PORT: '5532',
+      TMC_PREVIEW_ORIGIN: 'http://localhost:54493', TMC_AGENT_DEBUG_SNAPSHOTS: '0', NODE_ENV: 'production',
+      OPENROUTER_API_KEY: 'synthetic-ambient-secret',
+    };
+    const original = { ...environment };
+    assert.deepEqual(startupEnvironment(environment, path), {
+      TMC_DATA_DIR: '/tmp/override', HOST: '127.0.0.1', PORT: '4432', TMC_WEB_PORT: '5532',
+      TMC_PREVIEW_ORIGIN: 'http://localhost:54493', TMC_AGENT_DEBUG_SNAPSHOTS: '0', NODE_ENV: 'production',
+    });
+    assert.deepEqual(environment, original);
+    assert.throws(() => serverConfig(startupEnvironment({ PORT: '' }, path)), /PORT must be an integer/);
+    writeFileSync(path, 'TMC_DATA_DIR=${HOME}/data\n');
+    assert.equal(startupEnvironment({}, path).TMC_DATA_DIR, '${HOME}/data');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a startup file is optional, but unreadable files fail without exposing their contents', () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-startup-file-'));
+  try {
+    assert.deepEqual(startupEnvironment({ HOST: '127.0.0.1', NODE_ENV: 'development' }, join(root, 'missing.env')), { HOST: '127.0.0.1', NODE_ENV: 'development' });
+    assert.deepEqual(serverConfig(startupEnvironment({}, join(root, 'missing.env'))), { hostname: '127.0.0.1', port: 4310, development: false });
+    assert.throws(() => startupEnvironment({}, root), { message: 'Startup .env file cannot be read.' });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('network binding is explicit and host and ports are validated', () => {
   assert.deepEqual(serverConfig({}), { hostname: '127.0.0.1', port: 4310, development: false });

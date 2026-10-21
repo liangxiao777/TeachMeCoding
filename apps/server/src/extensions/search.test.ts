@@ -14,14 +14,14 @@ import { reply, response, syntheticSource, teachingModel } from '../agents/test-
 import { BusinessError, Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
-function fixture(request: typeof fetch = async () => { throw new Error('Unexpected network request'); }, env = (_name: string): string | undefined => undefined) {
+function fixture(request: typeof fetch = async () => { throw new Error('Unexpected network request'); }) {
   const root = mkdtempSync(join(tmpdir(), 'tmc-search-')), path = join(root, 'search.json');
-  const service = new SearchService(path, { env, fetch: request });
+  const service = new SearchService(path, { fetch: request });
   return { service, root, path, close() { service.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 test('all requested providers are registered, no-key services are ready without leaking or falling back to teaching credentials', async () => {
-  const { service, close } = fixture(undefined, (name) => name === 'OPENROUTER_API_KEY' ? 'teaching-only-secret' : undefined);
+  const { service, close } = fixture();
   try {
     const settings = await service.settings();
     assert.deepEqual(settings.providers.map((entry) => entry.id), ['brave', 'tavily', 'exa', 'firecrawl', 'parallel', 'perplexity', 'minimax',
@@ -64,7 +64,7 @@ test('HTTP services dispatch saved configuration through ordinary tools, includi
       case 'duckduckgo': return new Response(`<div class="result"><a class="result__a" href="${url}">Rust Reference</a><div class="result__snippet">Documentation</div></div>`);
       default: return Response.json({ results: [result] });
     }
-  }, (name) => name === 'FIRECRAWL_API_KEY' ? 'unused-paid-firecrawl-key' : undefined);
+  });
   try {
     for (const entry of (await service.settings()).providers.filter((entry) => entry.id !== 'codex')) {
       provider = entry.id;
@@ -110,7 +110,7 @@ test('provider model/region options persist independently and tools freeze their
     assert.equal(metadata.find((entry) => entry.id === 'gemini')?.model, 'gemini-2.5-flash');
     assert.equal(metadata.find((entry) => entry.id === 'minimax')?.region, 'cn');
     assert.equal(metadata.find((entry) => entry.id === 'grok')?.model, 'grok-4.7');
-    const reopened = new SearchService(path, { env: () => undefined });
+    const reopened = new SearchService(path);
     assert.deepEqual(await reopened.settings(), await service.settings()); reopened.close();
     for (const input of [{ provider: 'brave', model: 'wrong' }, { provider: 'grok', region: 'cn' }, { provider: 'codex', model: 'wrong' },
       { provider: 'gemini', model: '../private' }, { provider: 'kimi', region: 'private' }]) assert.throws(() => service.save(input));
@@ -128,7 +128,7 @@ test('Codex readiness follows login, executes a private hosted worker, and the m
   const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-one' } })).toString('base64url');
   const auth: CodexAuthSource = { checkAuth: async () => loggedIn ? { type: 'oauth' } : undefined,
     getAuth: async () => loggedIn ? { source: 'OAuth', auth: { apiKey: `eyJhbGciOiJub25lIn0.${payload}.c3ludGhldGlj` } } : undefined };
-  const service = new SearchService(join(root, 'search.json'), { env: () => undefined, codex: auth,
+  const service = new SearchService(join(root, 'search.json'), { codex: auth,
     fetch: async () => { throw new Error('Codex must not use HTTP search or teaching-model requests'); },
     codexLaunch: { launch(command, args, options) {
       privateRoot = dirname(String(options.cwd));
@@ -182,7 +182,7 @@ test('search defaults off, keeps provider-specific credentials, and writes a pri
     assert.equal(lstatSync(path).mode & 0o777, 0o600);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { enabled: false, provider: 'brave',
       apiKeys: { brave: 'synthetic-brave-secret', tavily: 'synthetic-tavily-secret' } });
-    const reopened = new SearchService(path, { env: () => undefined });
+    const reopened = new SearchService(path);
     assert.deepEqual(await reopened.settings(), await service.settings()); reopened.close();
     assert.doesNotMatch(JSON.stringify(await service.settings()), /synthetic-.*-secret/);
     for (const invalid of [{}, { provider: 'unknown' }, { enabled: 'true' }, { apiKey: 'bad\nheader' }, { apiKey: null }, { enabled: true, extra: 1 }]) {
@@ -194,30 +194,42 @@ test('search defaults off, keeps provider-specific credentials, and writes a pri
     assert.equal((await service.settings()).enabled, false); assert.equal(readFileSync(path, 'utf8'), before);
     rmSync(`${path}.tmp`, { recursive: true });
     writeFileSync(join(root, 'invalid.json'), '{broken');
-    assert.throws(() => new SearchService(join(root, 'invalid.json'), { env: () => undefined }));
+    assert.throws(() => new SearchService(join(root, 'invalid.json')));
     assert.equal(readFileSync(join(root, 'invalid.json'), 'utf8'), '{broken');
     symlinkSync(path, join(root, 'linked.json'));
-    assert.throws(() => new SearchService(join(root, 'linked.json'), { env: () => undefined }), /regular file/);
+    assert.throws(() => new SearchService(join(root, 'linked.json')), /regular file/);
   } finally { close(); }
 });
 
-test('environment credentials remain private, saved keys take precedence, and selecting a missing key never falls back', async () => {
+test('search ignores ambient credentials, uses only the saved key, and reopening cannot recover a removed key', async () => {
   const keys: string[] = [];
-  const { service, close } = fixture(async (_url, options) => {
+  const { service, path, close } = fixture(async (_url, options) => {
     keys.push(new Headers(options?.headers).get('x-api-key')!); return Response.json({ results: [] });
-  }, (name) => name === 'EXA_API_KEY' ? 'synthetic-env-secret' : name === 'OPENROUTER_API_KEY' ? 'private-model-secret' : undefined);
+  });
+  const previous = { EXA_API_KEY: process.env.EXA_API_KEY, TAVILY_API_KEY: process.env.TAVILY_API_KEY };
+  process.env.EXA_API_KEY = 'synthetic-env-secret'; process.env.TAVILY_API_KEY = 'synthetic-other-env-secret';
   try {
-    assert.equal((await service.settings()).providers.find((entry) => entry.id === 'exa')?.configured, 'environment');
-    service.save({ provider: 'exa' });
-    await service.test({ query: 'documentation' });
-    assert.equal((await service.settings()).enabled, false, 'manual testing must not enable Agent search');
-    service.save({ apiKey: 'synthetic-saved-secret' }); await service.test({ query: 'documentation' });
-    assert.deepEqual(keys, ['synthetic-env-secret', 'synthetic-saved-secret']);
-    service.save({ provider: 'tavily', enabled: true });
+    assert.equal((await service.settings()).providers.find((entry) => entry.id === 'exa')?.configured, null);
+    await service.save({ provider: 'exa', enabled: true });
     assert.deepEqual(await service.tools(), []);
     assert.throws(() => service.test({ query: 'documentation' }), { message: 'SEARCH_API_KEY_REQUIRED' });
-    assert.equal(keys.length, 2); assert.doesNotMatch(JSON.stringify(await service.settings()), /secret/);
-  } finally { close(); }
+    await service.save({ apiKey: 'synthetic-saved-secret', enabled: false }); await service.test({ query: 'documentation' });
+    assert.equal((await service.settings()).enabled, false, 'manual testing must not enable Agent search');
+    assert.deepEqual(keys, ['synthetic-saved-secret']);
+    await service.save({ provider: 'tavily', enabled: true });
+    assert.deepEqual(await service.tools(), []);
+    assert.throws(() => service.test({ query: 'documentation' }), { message: 'SEARCH_API_KEY_REQUIRED' });
+    const stored = JSON.parse(readFileSync(path, 'utf8')); delete stored.apiKeys.exa; stored.provider = 'exa';
+    writeFileSync(path, JSON.stringify(stored));
+    const reopened = new SearchService(path);
+    assert.deepEqual(await reopened.tools(), []);
+    assert.throws(() => reopened.test({ query: 'documentation' }), { message: 'SEARCH_API_KEY_REQUIRED' });
+    reopened.close();
+    assert.equal(keys.length, 1); assert.doesNotMatch(JSON.stringify(await service.settings()), /secret/);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    close();
+  }
 });
 
 for (const provider of ['brave', 'tavily', 'exa'] as const) {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtempSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, lstatSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,13 +15,12 @@ import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
 const fixture = fileURLToPath(new URL('../../../../tests/fixtures/mcp-server.mjs', import.meta.url));
-const noenv = () => undefined;
 const config = { command: process.execPath, args: [fixture] };
 const temporary = () => realpathSync(mkdtempSync(join(tmpdir(), 'tmc-mcp-')));
 
 test('failed MCP connections expose semantic status without stderr or credentials and reconnect clears the error', async () => {
   const root = temporary();
-  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
+  const service = new McpService(join(root, 'mcp.json'), { cwd: root });
   try {
     await service.save({ mcpServers: { broken: { command: process.execPath,
       args: ['-e', 'process.stderr.write("PRIVATE-MCP-RESPONSE " + process.env.TOKEN); process.exit(1)'],
@@ -45,7 +44,7 @@ test('failed MCP connections expose semantic status without stderr or credential
 
 test('real stdio tools preserve schemas, structured content, error state and cancellation', async () => {
   const root = temporary();
-  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
+  const service = new McpService(join(root, 'mcp.json'), { cwd: root });
   try {
     await service.save({ mcpServers: { arithmetic: config } });
     const tools = await service.tools();
@@ -78,7 +77,7 @@ test('real stdio tools preserve schemas, structured content, error state and can
 
 test('teaching runtime exposes MCP tools on every turn and records their native results', async () => {
   const root = temporary(), db = openDatabase(':memory:');
-  const mcp = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
+  const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
   let calls = 0;
   const tool = mcpToolName('arithmetic', 'subtract');
   const agents = new TeachingRuntime(new Learning(db), syntheticSource, { mcp, stream: (_model, context) => {
@@ -107,9 +106,9 @@ test('configuration survives reopening, masks secrets, and disabled servers neve
   const root = temporary(), path = join(root, 'mcp.json');
   const previousAmbient = process.env.TMC_AMBIENT_SECRET;
   process.env.TMC_AMBIENT_SECRET = 'ambient-secret-must-not-reach-child';
-  let service = new McpService(path, { env: (name) => name === 'SYNTHETIC_TOKEN' ? 'explicit-env-token' : undefined, cwd: root });
+  let service = new McpService(path, { cwd: root });
   try {
-    const saved = await service.save({ mcpServers: { local: { ...config, env: { TMC_FIXTURE_TOKEN: '${SYNTHETIC_TOKEN}' } },
+    const saved = await service.save({ mcpServers: { local: { ...config, env: { TMC_FIXTURE_TOKEN: 'explicit-env-token' } },
       disabled: { command: '/does/not/exist', env: { KEY: 'synthetic-private-key' }, enabled: false } } });
     assert.ok(!JSON.stringify(saved).includes('synthetic-private-key'));
     assert.equal(saved.configuration.mcpServers.disabled!.env!.KEY, '••••••••');
@@ -121,7 +120,7 @@ test('configuration survives reopening, masks secrets, and disabled servers neve
     await service.save(service.settings().configuration);
     assert.equal(JSON.parse(readFileSync(path, 'utf8')).mcpServers.disabled.env.KEY, 'synthetic-private-key', 'masked round-trip must not overwrite a credential');
     await service.close();
-    service = new McpService(path, { env: () => 'explicit-env-token', cwd: root });
+    service = new McpService(path, { cwd: root });
     assert.equal((await service.tools()).length, 4);
     assert.equal(service.settings().servers.find((server) => server.name === 'disabled')!.state, 'disabled');
     await assert.rejects(async () => service.save({ mcpServers: { bad: { command: 'node', url: 'http://localhost/mcp' } } }));
@@ -150,9 +149,9 @@ test('HTTP authentication, discovery and calls use the real Streamable HTTP tran
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
-  const service = new McpService(join(root, 'mcp.json'), { env: () => 'synthetic-http-key', cwd: root });
+  const service = new McpService(join(root, 'mcp.json'), { cwd: root });
   try {
-    await service.save({ mcpServers: { remote: { url: `http://127.0.0.1:${address.port}/mcp`, headers: { Authorization: 'Bearer ${HTTP_TOKEN}' } } } });
+    await service.save({ mcpServers: { remote: { url: `http://127.0.0.1:${address.port}/mcp`, headers: { Authorization: 'Bearer synthetic-http-key' } } } });
     const [tool] = await service.tools(); assert.ok(tool);
     const result = await tool.execute('http', {});
     assert.deepEqual(result.structuredContent, { transport: 'http' });
@@ -167,7 +166,7 @@ test('names remain distinct after sanitization/truncation and owned child proces
   assert.notEqual(mcpToolName('x'.repeat(100), 'a'), mcpToolName('x'.repeat(100), 'b'));
   assert.ok(mcpToolName('x'.repeat(100), 'y'.repeat(100)).length <= 64);
   const root = temporary(); let transport: StdioTransport | undefined;
-  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root,
+  const service = new McpService(join(root, 'mcp.json'), { cwd: root,
     transport: (config) => transport = new StdioTransport({ command: config.command!, args: config.args, cwd: root, inheritEnv: false }) });
   try {
     await service.save({ mcpServers: { owned: config } }); await service.tools();
@@ -179,7 +178,7 @@ test('names remain distinct after sanitization/truncation and owned child proces
 
 test('single-server writes preserve concurrent additions and masked credentials through rename', async () => {
   const root = temporary(), path = join(root, 'mcp.json');
-  const service = new McpService(path, { env: noenv, cwd: root });
+  const service = new McpService(path, { cwd: root });
   try {
     await Promise.all([
       service.saveServer({ name: 'docs', configuration: { url: 'https://example.invalid/mcp', enabled: false,
@@ -210,7 +209,7 @@ test('single-server writes preserve concurrent additions and masked credentials 
 test('reconnecting and deleting one server leaves the other live transport untouched', async () => {
   const root = temporary();
   const transports = new Map<string, StdioTransport[]>();
-  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root, transport: (entry) => {
+  const service = new McpService(join(root, 'mcp.json'), { cwd: root, transport: (entry) => {
     const name = entry.env!.FIXTURE_NAME!;
     const transport = new StdioTransport({ command: entry.command!, args: entry.args, cwd: root, inheritEnv: false });
     transports.set(name, [...transports.get(name) ?? [], transport]); return transport;
@@ -235,7 +234,7 @@ test('reconnecting and deleting one server leaves the other live transport untou
 
 test('stopping during MCP initialization does not wait for the connection timeout', async () => {
   const root = temporary(), db = openDatabase(':memory:');
-  const mcp = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
+  const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
   let calls = 0;
   const agents = new TeachingRuntime(new Learning(db), syntheticSource, { mcp, stream: () => {
     calls++; return response(reply([{ type: 'text', text: 'should not be called' }]));
@@ -251,4 +250,37 @@ test('stopping during MCP initialization does not wait for the connection timeou
     assert.equal(agents.get(space.id, run.id).state, 'interrupted');
     assert.equal(calls, 0);
   } finally { clearTimeout(timeout); await Promise.all([agents.close(), mcp.close()]); db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('legacy environment references fail only their server, reject new references and remain removable or repairable', async () => {
+  const root = temporary(), path = join(root, 'mcp.json');
+  writeFileSync(path, JSON.stringify({ mcpServers: {
+    legacy: { ...config, env: { TMC_FIXTURE_TOKEN: '${SYNTHETIC_TOKEN}' } },
+    healthy: config,
+    disabled: { url: 'https://example.invalid/mcp', enabled: false, headers: { Authorization: 'Bearer ${HTTP_TOKEN}' } },
+  } }));
+  const service = new McpService(path, { cwd: root });
+  try {
+    assert.equal((await service.tools()).length, 4);
+    const initial = service.settings();
+    assert.deepEqual(initial.servers.find((server) => server.name === 'legacy')?.error, { code: 'MCP_ENV_REFERENCE_UNSUPPORTED' });
+    assert.equal(initial.servers.find((server) => server.name === 'disabled')?.state, 'disabled');
+    assert.doesNotMatch(JSON.stringify(initial), /SYNTHETIC_TOKEN|HTTP_TOKEN/);
+    await service.save(initial.configuration);
+    await service.saveServer({ name: 'healthy', configuration: { ...config, timeout: 9 } }, 'healthy');
+    const before = readFileSync(path, 'utf8');
+    for (const configuration of [{ ...config, env: { TOKEN: '${NEW_TOKEN}' } },
+      { url: 'https://example.invalid/mcp', enabled: false, headers: { Authorization: 'Bearer ${NEW_TOKEN}' } }]) {
+      await assert.rejects(service.saveServer({ name: 'new', configuration }), { message: 'MCP_ENV_REFERENCE_UNSUPPORTED' });
+    }
+    assert.equal(readFileSync(path, 'utf8'), before);
+    await service.removeServer('disabled');
+    await service.saveServer({ name: 'legacy', configuration: { ...config, env: { TMC_FIXTURE_TOKEN: 'literal-replacement' } } }, 'legacy');
+    const tools = await service.tools(); assert.equal(tools.length, 8);
+    const environment = tools.find((tool) => tool.name === mcpToolName('legacy', 'environment'))!;
+    const result = await environment.execute('repaired', {});
+    assert.ok(result.content[0]?.type === 'text');
+    assert.equal(JSON.parse(result.content[0].text).explicit, 'literal-replacement');
+    assert.equal(service.settings().servers.find((server) => server.name === 'legacy')?.error, null);
+  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
 });

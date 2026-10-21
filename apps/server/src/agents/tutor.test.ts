@@ -63,7 +63,7 @@ test('tool errors reach the model and remain visible without discarding a valid 
       const root = mkdtempSync(join(tmpdir(), 'tmc-tool-error-'));
       const db = openDatabase(':memory:'), l = new Learning(db), { space, units } = populated(l), unit = units[0]!.id;
       const lesson = { title: 'Handling errors', content: '## Reading files\n\nKeep the useful result and explain a failed lookup.\n' };
-      const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
+      const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
       mcp.tools = async () => [{ name: 'mcp__fixture__lookup', label: 'Lookup', description: 'Synthetic lookup',
         parameters: Type.Object({ count: Type.Number() }), async execute() {
           if (error !== 'result') throw new Error('Lookup unavailable.');

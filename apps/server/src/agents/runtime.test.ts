@@ -887,8 +887,8 @@ test('tool name conflicts fail before requesting a model, executing tools or com
 
 test('each request records the same run tool inventory while provider selection happens only once', async () => {
   const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), 'tmc-tool-inventory-'));
-  const mcp = new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root });
-  const search = new SearchService(join(root, 'search.json'), { env: () => undefined });
+  const mcp = new McpService(join(root, 'mcp.json'), { cwd: root });
+  const search = new SearchService(join(root, 'search.json'));
   const skills = new SkillService(db, root), skill = join(skills.directory, 'inventory-fixture');
   mkdirSync(skill);
   writeFileSync(join(skill, 'SKILL.md'), '---\nname: inventory-fixture\ndescription: Inspect the fixture tools.\n---\nPRIVATE-SKILL-BODY');
@@ -951,7 +951,7 @@ test('each request records the same run tool inventory while provider selection 
 
 test('stopping during search tool selection rejects late tools without a model request or commit', async () => {
   const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), 'tmc-tool-selection-'));
-  const search = new SearchService(join(root, 'search.json'), { env: () => undefined });
+  const search = new SearchService(join(root, 'search.json'));
   let enter!: () => void, release!: () => void, requests = 0, commits = 0;
   const entered = new Promise<void>((resolve) => { enter = resolve; });
   const held = new Promise<void>((resolve) => { release = resolve; });

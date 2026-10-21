@@ -12,7 +12,7 @@ import { Learning } from '../apps/server/dist/modules/learning.js';
 
 const entry = fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url));
 function launch(root, port, cwd) {
-  const child = spawn(process.execPath, [entry], { cwd, env: { PATH: process.env.PATH, PORT: String(port), TMC_DATA_DIR: root, OPENROUTER_API_KEY: '', OPENROUTER_MODEL: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [entry], { cwd, env: { PATH: process.env.PATH, PORT: String(port), TMC_DATA_DIR: root }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', (chunk) => { logs += chunk; }); child.stderr.on('data', (chunk) => { logs += chunk; });
   const exited = once(child, 'exit');

@@ -1,35 +1,40 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createAssistantMessageEventStream, createProvider, InMemoryCredentialStore, normalizeContext } from '@earendil-works/pi-ai';
 import { openDatabase } from '../storage/database.js';
 import { ModelService } from './service.js';
+import { FileCredentialStore } from './credentials.js';
 import { BusinessError } from '../modules/learning.js';
+import { reply, response } from '../agents/test-support.js';
 
-const env = (name: string) => name === 'OPENROUTER_API_KEY' ? 'synthetic-env-key' : undefined;
-const noenv = () => undefined;
 const stealth = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' };
 
-function service(db = openDatabase(':memory:'), lookup: (n: string) => string | undefined = noenv, fallback = stealth) {
-  const models = new ModelService(db, { env: lookup, fallback });
-  return { db, models };
+function service(db = openDatabase(':memory:')) {
+  const credentials = new InMemoryCredentialStore(), models = new ModelService(db, { credentials });
+  db.prepare("INSERT INTO app_settings VALUES ('model', ?)").run(JSON.stringify({ ...stealth, thinkingLevel: 'high' }));
+  return { db, models, credentials };
 }
 
-test('fallback selection is used only until an explicit choice is saved', async () => {
-  const { db, models } = service();
-  assert.deepEqual(models.selection(), { ...stealth, thinkingLevel: 'high' });
-  await models.select({ ...stealth, thinkingLevel: 'low' });
-  assert.deepEqual(models.selection(), { ...stealth, thinkingLevel: 'low' });
-  // A second service over the same database restores the saved choice.
-  const again = new ModelService(db, { env: noenv, fallback: null });
-  assert.deepEqual(again.selection(), { ...stealth, thinkingLevel: 'low' });
-  // Without fallback and without a saved choice there is no selection at all.
-  const empty = new ModelService(openDatabase(':memory:'), { env: noenv, fallback: null });
-  assert.equal(empty.selection(), null);
-  assert.equal(empty.current(), null);
-  await empty.refresh();
-  assert.deepEqual(empty.issue, { code: 'MODEL_NOT_SELECTED' });
-  assert.deepEqual((await empty.settings()).issue, { code: 'MODEL_NOT_SELECTED' });
-  db.close();
+test('selection comes only from the database and survives reopening without an environment default', async () => {
+  const db = openDatabase(':memory:'), models = new ModelService(db);
+  const previous = process.env.OPENROUTER_MODEL;
+  process.env.OPENROUTER_MODEL = stealth.model;
+  try {
+    assert.equal(models.selection(), null);
+    assert.equal(models.current(), null);
+    await models.refresh();
+    assert.deepEqual(models.issue, { code: 'MODEL_NOT_SELECTED' });
+    assert.deepEqual((await models.settings()).issue, { code: 'MODEL_NOT_SELECTED' });
+    await models.select({ ...stealth, thinkingLevel: 'low' });
+    assert.deepEqual(models.selection(), { ...stealth, thinkingLevel: 'low' });
+    assert.deepEqual(new ModelService(db).selection(), { ...stealth, thinkingLevel: 'low' });
+  } finally {
+    if (previous === undefined) delete process.env.OPENROUTER_MODEL; else process.env.OPENROUTER_MODEL = previous;
+    models.close(); db.close();
+  }
 });
 
 test('readiness reports the exact missing piece instead of a bare unavailable', async () => {
@@ -39,16 +44,17 @@ test('readiness reports the exact missing piece instead of a bare unavailable', 
   await models.refresh();
   assert.equal(models.current(), null, 'provider key missing, so not ready');
   assert.deepEqual((await models.settings()).issue, { code: 'MODEL_CREDENTIALS_MISSING' });
-  const keyed = service(openDatabase(':memory:'), env).models;
-  await keyed.refresh();
-  assert.notEqual(keyed.current(), null);
-  const settings = await keyed.settings();
+  const keyed = service();
+  await keyed.credentials.modify('openrouter', async () => ({ type: 'api_key', key: 'synthetic-stored-key' }));
+  await keyed.models.refresh();
+  assert.notEqual(keyed.models.current(), null);
+  const settings = await keyed.models.settings();
   assert.equal(settings.ready, true);
   assert.equal(settings.issue, null);
   assert.equal('issueDetail' in settings, false);
   // A saved model that is gone from the catalog is a distinct, actionable issue.
   const lost = service();
-  lost.db.prepare("INSERT INTO app_settings VALUES ('model', ?)").run(JSON.stringify({ provider: 'openrouter', model: 'gone/model', thinkingLevel: 'high' }));
+  lost.db.prepare("UPDATE app_settings SET value=? WHERE key='model'").run(JSON.stringify({ provider: 'openrouter', model: 'gone/model', thinkingLevel: 'high' }));
   await lost.models.refresh();
   assert.equal(lost.models.current(), null);
   assert.deepEqual((await lost.models.settings()).issue, { code: 'MODEL_SELECTION_UNAVAILABLE' });
@@ -56,7 +62,7 @@ test('readiness reports the exact missing piece instead of a bare unavailable', 
   await lost.models.refresh();
   assert.deepEqual(lost.models.issue, { code: 'MODEL_THINKING_UNAVAILABLE' });
   assert.deepEqual((await lost.models.settings()).issue, { code: 'MODEL_THINKING_UNAVAILABLE' });
-  db.close(); lost.db.close();
+  db.close(); keyed.db.close(); lost.db.close();
 });
 
 test('OAuth refresh rejection changes readiness without deleting credentials, and a new login restores it', async () => {
@@ -71,7 +77,9 @@ test('OAuth refresh rejection changes readiness without deleting credentials, an
     const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
     const original = { type: 'oauth' as const, access: 'synthetic-access-secret', refresh: 'synthetic-refresh-secret', expires: 0 };
     await credentials.modify('openai', async () => original);
-    const models = new ModelService(db, { env, credentials, fallback: { provider: 'openai', model: 'gpt-6.1-sol' } });
+    await credentials.modify('openrouter', async () => ({ type: 'api_key', key: 'synthetic-stored-key' }));
+    const models = new ModelService(db, { credentials });
+    await models.select({ provider: 'openai', model: 'gpt-6.1-sol', thinkingLevel: 'high' });
     const provider = models.models.getProvider('openai')!;
     models.models.setProvider({ ...provider, auth: { ...provider.auth, oauth: { ...provider.auth.oauth!,
       refresh: async () => { throw new Error(detail); },
@@ -114,7 +122,8 @@ test('an older successful request cannot clear a known OAuth refresh rejection',
   const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
   const credential = { type: 'oauth' as const, access: 'synthetic-access', refresh: 'synthetic-refresh', expires: Date.now() + 3_600_000 };
   await credentials.modify('openai', async () => credential);
-  const models = new ModelService(db, { env: noenv, credentials, fallback: { provider: 'openai', model: 'gpt-6.1-sol' } });
+  const models = new ModelService(db, { credentials });
+  await models.select({ provider: 'openai', model: 'gpt-6.1-sol', thinkingLevel: 'high' });
   const provider = models.models.getProvider('openai')!, held = createAssistantMessageEventStream();
   let entered!: () => void;
   const started = new Promise<void>((resolve) => { entered = resolve; });
@@ -146,12 +155,13 @@ test('selection validation rejects unknown providers, unknown models and unsuppo
   await assert.rejects(models.select({ ...stealth, model: 'gone/model', thinkingLevel: 'high' }), BusinessError);
   await assert.rejects(models.select({ ...stealth, thinkingLevel: 'off' }), BusinessError);
   await assert.rejects(models.select({ ...stealth, thinkingLevel: 'ludicrous' }));
-  assert.deepEqual(models.selection(), { ...stealth, thinkingLevel: 'high' }, 'failed selection must not overwrite the fallback');
+  assert.deepEqual(models.selection(), { ...stealth, thinkingLevel: 'high' }, 'failed selection must not overwrite the saved choice');
   db.close();
 });
 
 test('settings enumerates pi-ai providers and catalog models without leaking secrets', async () => {
-  const { db, models } = service(undefined, env);
+  const { db, models, credentials } = service();
+  await credentials.modify('openrouter', async () => ({ type: 'api_key', key: 'synthetic-stored-key' }));
   const settings = await models.settings();
   assert.ok(settings.providers.length > 20, 'pi-ai catalog lists many providers');
   const openrouter = settings.providers.find((p) => p.id === 'openrouter')!;
@@ -159,8 +169,8 @@ test('settings enumerates pi-ai providers and catalog models without leaking sec
   assert.ok(openrouter.models > 100);
   assert.equal(openrouter.auth.apiKey?.login, true);
   assert.equal(openrouter.auth.oauth?.name, 'OpenRouter OAuth');
-  assert.deepEqual(openrouter.configured, { type: 'api_key', source: 'OPENROUTER_API_KEY' });
-  assert.ok(!JSON.stringify(settings).includes('synthetic-env-key'));
+  assert.deepEqual(openrouter.configured, { type: 'api_key' });
+  assert.ok(!JSON.stringify(settings).includes('synthetic-stored-key'));
   const list = models.modelsOf('openrouter');
   const model = list.find((m) => m.id === stealth.model)!;
   assert.equal(model.reasoning, true);
@@ -170,25 +180,98 @@ test('settings enumerates pi-ai providers and catalog models without leaking sec
   db.close();
 });
 
-test('native sessions share app credentials and injected auth rather than discovering CLI configuration', async () => {
-  const db = openDatabase(':memory:'), credentials = new InMemoryCredentialStore();
-  const models = new ModelService(db, { env, credentials, fallback: stealth });
+test('model requests and native sessions use only the app file; logout and reopening never resurrect ambient keys', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-model-auth-')), path = join(root, 'credentials.json');
+  const db = openDatabase(':memory:'), credentials = new FileCredentialStore(path), models = new ModelService(db, { credentials });
+  const previous = { OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
+  process.env.OPENROUTER_API_KEY = 'synthetic-ambient-key'; process.env.ANTHROPIC_API_KEY = 'synthetic-unrelated-key';
   try {
-    await models.refresh();
-    const model = models.current()!.model, native = await models.sessionRuntime(model);
-    assert.deepEqual(await native.checkAuth(model.provider), { type: 'api_key', source: 'OPENROUTER_API_KEY' });
-    assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-env-key');
+    await models.select({ ...stealth, thinkingLevel: 'high' });
+    assert.equal(models.current(), null);
+    const model = models.resolve(models.selection()!)!, native = await models.sessionRuntime(model);
+    assert.equal(await native.checkAuth(model.provider), undefined);
+    assert.equal(await native.getAuth(model), undefined);
+    assert.deepEqual(native.getProviders().map((provider) => provider.id), ['openrouter']);
     // A session created before a login sees the same credential store afterward.
     await credentials.modify('openrouter', async () => ({ type: 'api_key', key: 'synthetic-stored-key' }));
+    await models.refresh(); assert.ok(models.current());
     assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-stored-key');
     assert.equal((await models.models.getAuth(model))?.auth.apiKey, 'synthetic-stored-key');
-    await credentials.delete('openrouter');
-    assert.equal((await native.getAuth(model))?.auth.apiKey, 'synthetic-env-key');
-    const unconfigured = new ModelService(db, { env: noenv, fallback: stealth });
-    const isolated = await unconfigured.sessionRuntime(model);
-    assert.equal(await isolated.checkAuth(model.provider), undefined);
-    assert.equal(await isolated.getAuth(model), undefined);
-  } finally { models.close(); db.close(); }
+    let requests = 0;
+    const provider = models.models.getProvider(model.provider)!;
+    models.models.setProvider({ ...provider, streamSimple: (_model, _context, options) => {
+      requests++; assert.equal(options?.apiKey, 'synthetic-stored-key'); assert.deepEqual(options?.env, {});
+      assert.ok(!Object.keys(options?.headers ?? {}).some((name) => name.toLowerCase() === 'authorization'));
+      return response(reply([{ type: 'text', text: 'Stored credentials only.' }]));
+    } });
+    const context = normalizeContext({ messages: [] });
+    assert.equal((await (await models.stream(model, context, { apiKey: 'synthetic-request-key', env: { OPENROUTER_API_KEY: 'synthetic-request-env' },
+      headers: { Authorization: 'Bearer synthetic-request-header' } })).result()).stopReason, 'stop');
+    await models.logout('openrouter');
+    assert.equal(models.current(), null);
+    assert.equal(await native.getAuth(model), undefined);
+    assert.equal((await (await models.stream(model, context)).result()).stopReason, 'error');
+    assert.equal(requests, 1, 'missing credentials fail before entering a transport');
+    const reopened = new ModelService(db, { credentials: new FileCredentialStore(path) });
+    await reopened.refresh(); assert.deepEqual(reopened.issue, { code: 'MODEL_CREDENTIALS_MISSING' });
+    assert.equal(await reopened.models.getAuth(model), undefined);
+    assert.ok((await reopened.settings()).providers.every((provider) => provider.configured === null));
+    reopened.close();
+  } finally {
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    models.close(); db.close(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('provider transports cannot supplement saved config with ambient endpoints or cloud identities', async (t) => {
+  const { db, models, credentials } = service();
+  const previous = process.env.AZURE_OPENAI_BASE_URL;
+  process.env.AZURE_OPENAI_BASE_URL = 'http://127.0.0.1:1/ambient-endpoint';
+  const request = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 401 }));
+  try {
+    assert.equal(models.models.getProvider('amazon-bedrock'), undefined);
+    for (const key of [undefined, 'gcp-vertex-credentials', '<service-account>']) {
+      await credentials.modify('google-vertex', async () => ({ type: 'api_key', key,
+        env: { GOOGLE_APPLICATION_CREDENTIALS: '/external/credentials.json', GOOGLE_CLOUD_PROJECT: 'external', GOOGLE_CLOUD_LOCATION: 'global' } }));
+      assert.equal(await models.models.checkAuth('google-vertex'), undefined);
+    }
+    await credentials.modify('google-vertex', async () => ({ type: 'api_key', key: 'synthetic-stored-vertex-key' }));
+    assert.deepEqual(await models.models.checkAuth('google-vertex'), { type: 'api_key' });
+    await credentials.modify('azure-openai-responses', async () => ({ type: 'api_key', key: 'synthetic-stored-azure-key' }));
+    const model = { ...models.models.getModels('azure-openai-responses')[0]!, baseUrl: '' }, context = normalizeContext({ messages: [] });
+    const native = await models.sessionRuntime(model);
+    for (const result of [await (await models.stream(model, context)).result(), await native.streamSimple(model, context).result()]) {
+      assert.equal(result.stopReason, 'error'); assert.match(result.errorMessage!, /Azure OpenAI base URL is required/);
+    }
+    assert.equal(request.mock.callCount(), 0, 'an ambient endpoint must never receive a saved credential');
+  } finally {
+    if (previous === undefined) delete process.env.AZURE_OPENAI_BASE_URL; else process.env.AZURE_OPENAI_BASE_URL = previous;
+    models.close(); db.close();
+  }
+});
+
+test('native OAuth refresh writes back to the same private credential file', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-oauth-refresh-')), path = join(root, 'credentials.json');
+  const db = openDatabase(':memory:'), credentials = new FileCredentialStore(path), models = new ModelService(db, { credentials });
+  const original = { type: 'oauth' as const, access: 'synthetic-expired-access', refresh: 'synthetic-old-refresh', expires: 0 };
+  const renewed = { ...original, access: 'synthetic-renewed-access', refresh: 'synthetic-new-refresh', expires: Date.now() + 3_600_000 };
+  let refreshes = 0;
+  try {
+    await credentials.modify('openai', async () => original);
+    const provider = models.models.getProvider('openai')!;
+    models.models.setProvider({ ...provider, auth: { ...provider.auth, oauth: { ...provider.auth.oauth!,
+      refresh: async (saved) => { assert.deepEqual(saved, original); refreshes++; return renewed; },
+      toAuth: async (saved) => ({ apiKey: saved.access }),
+    } } });
+    const model = models.resolve({ provider: 'openai', model: 'gpt-6.1-sol', thinkingLevel: 'high' })!;
+    const native = await models.sessionRuntime(model);
+    assert.equal(refreshes, 0, 'creating a native session must not refresh or make a request');
+    assert.equal((await native.getAuth(model))?.auth.apiKey, renewed.access);
+    assert.deepEqual(await new FileCredentialStore(path).read('openai'), renewed);
+    assert.equal((await models.models.getAuth(model))?.auth.apiKey, renewed.access);
+    assert.equal(refreshes, 1);
+    assert.doesNotMatch(JSON.stringify(await models.settings()), /synthetic-.*(access|refresh)/);
+  } finally { models.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 // A fully offline provider: login asks for a secret and stores it; auth is

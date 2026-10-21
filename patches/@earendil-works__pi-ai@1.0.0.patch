@@ -1,0 +1,20 @@
+diff --git a/dist/utils/provider-env.js b/dist/utils/provider-env.js
+index c50f7d233be7a6470a9e98bf4c85fa062065bf12..12d5fe51baf4a53f7fb82be48e0a22fd7e6bf17c 100644
+--- a/dist/utils/provider-env.js
++++ b/dist/utils/provider-env.js
+@@ -32,12 +32,11 @@ function getBunSandboxEnvValue(name) {
+     return procEnvCache.get(name);
+ }
+ /**
+- * Resolve a provider env value from scoped overrides, normal process.env, then
+- * the duplicated Bun sandbox fallback for direct pi-ai consumers.
++ * Explicit scoped env is complete; only unscoped callers discover ambient env.
+  */
+ export function getProviderEnvValue(name, env) {
+-    return (env?.[name] ||
+-        (typeof process !== "undefined" ? process.env[name] : undefined) ||
++    if (env !== undefined) return env[name] || undefined;
++    return ((typeof process !== "undefined" ? process.env[name] : undefined) ||
+         getBunSandboxEnvValue(name) ||
+         undefined);
+ }

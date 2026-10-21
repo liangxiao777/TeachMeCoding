@@ -4,11 +4,19 @@
 
 ## 模型
 
-在全屏「设置 → 模型配置」中选择 pi-ai 提供的 Provider、模型、推理强度及登录方式；保存的选择用于新运行，进行中的运行继续使用创建时的模型。API Key / OAuth 凭据只保存在服务端数据目录的 `credentials.json`（600），不返回浏览器。原有 `.env` 的 `OPENROUTER_API_KEY` 和 `OPENROUTER_MODEL=stealth/space-bunny-alpha` 可继续作为初始配置；服务端环境变量优先，保存模型选择后不再使用模型回退值。缺少配置时仍可查看数据和使用终端；设置页说明缺少哪项配置。实际模型检查见[模型兼容性检查](development.md#模型兼容性检查)。
+在全屏「设置 → 模型配置」中选择 pi-ai 提供的 Provider、模型、推理强度及登录方式；保存的选择用于新运行，进行中的运行继续使用创建时的模型。模型选择和 API Key / OAuth 凭据只从当前实例的数据目录读取（默认 `~/.teach-me-coding/`）；凭据保存在其中的 `credentials.json`（600），不返回浏览器。不从 `.env` 读取模型或凭据，不使用凭据环境变量或其他应用的登录文件作为回退。原先使用环境凭据时，需在设置页重新保存 API Key 或登录。缺少配置时仍可查看数据和使用终端；设置页说明缺少哪项配置。实际模型检查见[模型兼容性检查](development.md#模型兼容性检查)。
+
+不支持依赖外部云身份文件的隐式认证：暂不提供 Amazon Bedrock，Google Vertex AI 仅接受保存的 API Key，不读取 AWS profiles、Google ADC 或外部 service-account 文件。Provider 所需的额外配置也只能来自实例内保存的凭据，不能再用宿主环境补齐。
 
 ## 端口与启动
 
-`Ctrl+C` 停止服务。API 端口可通过 `PORT` 设置，开发前端可通过 `TMC_WEB_PORT` 设置；`pnpm dev` 将相同配置用于代理和本地访问白名单。编译产物可从任意工作目录用 `node /绝对路径/apps/server/dist/index.js` 启动，静态资源和默认数据目录不依赖当前目录。
+`Ctrl+C` 停止服务。API 端口可通过 `PORT` 设置，开发前端可通过 `TMC_WEB_PORT` 设置；`pnpm dev` 将相同配置用于代理和本地访问白名单。
+
+启动时只从**项目根目录**的 `.env` 加载 `TMC_DATA_DIR`、`HOST`、`PORT`、`TMC_WEB_PORT`、`TMC_PREVIEW_ORIGIN`、`TMC_AGENT_DEBUG_SNAPSHOTS` 六项，其他键被忽略，不写入全局进程环境。优先级为**启动环境 > 根 `.env` > 默认值**；显式空值也优先，不会被文件值覆盖，端口、目录及预览来源填空会被拒绝。按需复制 [.env.example](../.env.example)，已有 `.env` 请手动合并；该文件可省略，修改后须重启。
+
+支持引号和注释，值不展开 `~`、`${VAR}` 或命令；例如自定义目录应填 `TMC_DATA_DIR="/absolute/path/with spaces"`，不能填 `$HOME/data`。不额外加载 `.env.local` 或模式文件。`NODE_ENV` 只来自启动命令，`pnpm dev` 固定开发模式、`pnpm start` 固定生产模式。模板默认关闭请求快照，仅 `TMC_AGENT_DEBUG_SNAPSHOTS=1` 启用，可能记录敏感内容。
+
+服务端、开发前端和显式收费检查共用这套启动配置读取方式；不会据此加载模型、搜索或 MCP 密钥。编译产物可从任意工作目录用 `node /绝对路径/apps/server/dist/index.js` 启动，根 `.env`、静态资源和默认数据目录不依赖当前目录。
 
 ## 数据目录与恢复
 
@@ -62,9 +70,9 @@ TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm dev
 TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm start
 ```
 
-该配置仅接受一个准确的 HTTP `127.0.0.1` 或 `localhost` 来源，可带端口及末尾斜杠，不接受其他主机、路径、凭据或通配符；`localhost` 与 `127.0.0.1` 不互相替代。重新创建预览导致端口改变时，需更新变量并重启项目服务。变量由启动环境读取，不从模型配置 `.env` 自动加载。
+该配置仅接受一个准确的 HTTP `127.0.0.1` 或 `localhost` 来源，可带端口及末尾斜杠，不接受其他主机、路径、凭据或通配符；`localhost` 与 `127.0.0.1` 不互相替代。重新创建预览导致端口改变时，需在启动环境或根 `.env` 中更新配置并重启项目服务。
 
-启用后允许指定代理来源，嵌入范围限定为同源、该预览来源及 Devin／VS Code 编辑器 webview。API 和终端仍需原有令牌，外部 Origin、其他未配置端口及跨站 API 请求仍被拒绝，不开放 CORS；仅非 API 的 GET/HEAD iframe 导航可通过嵌入所需的 Fetch Metadata 检查。取消变量并重启即恢复默认策略。不要将其作为公网嵌入或登录鉴权方案。
+启用后允许指定代理来源，嵌入范围限定为同源、该预览来源及 Devin／VS Code 编辑器 webview。API 和终端仍需原有令牌，外部 Origin、其他未配置端口及跨站 API 请求仍被拒绝，不开放 CORS；仅非 API 的 GET/HEAD iframe 导航可通过嵌入所需的 Fetch Metadata 检查。从启动环境及根 `.env` 中移除该配置并重启即恢复默认策略。不要将其作为公网嵌入或登录鉴权方案。
 
 ## 搜索服务
 
@@ -72,8 +80,9 @@ TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm start
 
 - DuckDuckGo、Firecrawl Free 无需 API Key；Free 模式不会发送付费 Firecrawl 凭据。匿名搜索仍可能限流、遇到验证码或受上游可用性影响。
 - Codex Hosted Search 使用「登录 Codex」的 ChatGPT OAuth，复用模型设置中的同一账号，不改变教学模型选择。退出会移除该账号凭据，也会影响使用该账号的 Codex 教学模型。
-- 其他服务使用各自的 API Key。Gemini、Grok、Kimi 可独立配置搜索模型；MiniMax、Kimi 可选择全球或中国服务区域。Ollama 使用 `ollama.com/api/web_search` 托管服务，不调用本地 Ollama 模型或守护进程。MiniMax Search 需要支持搜索接口的 Coding Plan 凭据。
-- 服务端环境变量为 `BRAVE_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`、`FIRECRAWL_API_KEY`、`PARALLEL_API_KEY`、`PERPLEXITY_API_KEY`、`GEMINI_API_KEY`、`XAI_API_KEY`、`OLLAMA_API_KEY`。MiniMax 按顺序读取 `MINIMAX_CODE_PLAN_KEY`、`MINIMAX_CODING_API_KEY`、`MINIMAX_OAUTH_TOKEN`、`MINIMAX_API_KEY`；Kimi 优先 `KIMI_API_KEY`，其次 `MOONSHOT_API_KEY`。设置页保存的密钥优先；不借用教学模型的凭据，也不自动读取本机 Codex 登录文件。
+- 其他服务使用各自的 API Key，在设置页保存，不借用教学模型的凭据。Gemini、Grok、Kimi 可独立配置搜索模型；MiniMax、Kimi 可选择全球或中国服务区域。Ollama 使用 `ollama.com/api/web_search` 托管服务，不调用本地 Ollama 模型或守护进程。MiniMax Search 需要支持搜索接口的 Coding Plan 凭据。
+
+搜索凭据只从当前实例的数据目录读取，不读取 `.env`、凭据环境变量或本机 Codex 登录文件。
 
 开关直接保存，关闭时保留配置，阻止后续内置搜索调用并取消正在执行的搜索请求；不保证服务商撤销已接收的请求或费用，也不关闭 MCP、Skills 或其他联网路径。服务商、搜索模型、区域和 API Key 在每次 Agent 运行开始时固定，修改用于新运行；Codex OAuth 在调用时检查。API Key 及搜索配置原子保存在数据目录的 `search.json`（600），OAuth 使用已有服务端凭据存储。读取设置只返回配置状态，不返回密钥；输入留空保留当前服务的凭据，切换服务不会覆盖其他服务的配置。损坏配置不会自动重建，也不阻止其他设置和学习数据读取。
 
@@ -97,21 +106,21 @@ Agent 默认提供模型无关的 `web_fetch`，用于读取已知公开网址�
 
 **MCP：**默认展示服务器列表，每行右侧开关直接保存启用状态，连接是否成功另行显示；仅在连接成功后显示工具数量。点击「添加 MCP Server」打开表单，选择本地进程（stdio）或远程地址（HTTP）；每行菜单可编辑、重连或删除该服务器，不重连其他服务器。弹窗也支持 JSON：粘贴单个服务器配置，或仅包含一个服务器的 `mcpServers` 配置；取消不会保存草稿。
 
-支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。表单中的启动参数每行一个，工作目录、环境变量和超时位于高级配置。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 支持 `${变量名}`，从私有服务端环境查询；不执行 `!command`。命令是可执行程序名，不是 shell 命令串。
+支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。表单中的启动参数每行一个，工作目录、环境变量和超时位于高级配置。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 接受直接填写的字面值，不支持 `${变量名}` 宿主环境引用，也不执行 `!command`。新保存的环境引用会被拒绝；已有引用只使对应连接失败，不影响其他服务器或学习数据读取。命令是可执行程序名，不是 shell 命令串。
 
 ```json
 {
   "mcpServers": {
     "remote": {
       "url": "https://example.com/mcp",
-      "headers": { "Authorization": "Bearer ${MCP_TOKEN}" },
+      "headers": { "Authorization": "Bearer replace-with-your-token" },
       "enabled": false
     }
   }
 }
 ```
 
-配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的字面值，保存未改动的掩码会保留原值，重命名也保留；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
+配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的值，保存未改动的 `••••••••` 掩码会保留原值，重命名也保留；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
 
 使用 `@earendil-works/pi-mcp@1.0.0` 的客户端、stdio / HTTP transport 和结果转换，将远端动态 JSON Schema 适配为现有 Agent 的原生工具，保留结构化结果、错误状态、取消和工具列表变更通知。工具使用稳定的独立名称，不覆盖教学工具；每次运行固定当时的工具集合，后续配置和工具列表更新供新运行使用。关闭应用会关闭连接并清理其拥有的 stdio 进程。单次取消会发送 MCP 取消通知，但不保证远端撤销已发生的操作。
 

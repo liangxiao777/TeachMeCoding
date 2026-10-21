@@ -364,10 +364,6 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
               <h3 className="font-medium">{t('model.credentials')}</h3>
               <ProviderAuth provider={current} />
             </div>
-            <p className="text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
-              {current.stored ? current.stored === 'oauth' ? t('model.savedOauth') : t('model.savedApiKey') : t('model.serverCredentials')}
-              {current.configured?.source && t('model.credentialSource', { source: current.configured.source })}
-            </p>
             <div className="flex flex-wrap items-center gap-2">
               {current.auth.apiKey?.login && (
                 <Button variant="outline" size="lg" disabled={loggingIn} onClick={() => void startLogin('api_key')}>
