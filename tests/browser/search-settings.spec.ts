@@ -44,8 +44,8 @@ async function mockSearch(page: Page, initial = searchFixture()) {
   // Every diagnostic request is intercepted: no paid search/model calls.
   await page.route('**/api/settings/search/test', (route) => {
     fixture.searches++;
-    expect(route.request().postDataJSON()).toEqual({ query: 'Rust 官方文档', count: 5 });
-    return route.fulfill({ json: { provider: fixture.settings.provider, query: 'Rust 官方文档', tookMs: 19, untrusted: true, results: [] } });
+    expect(route.request().postDataJSON()).toEqual({ query: 'Rust official documentation', count: 5 });
+    return route.fulfill({ json: { provider: fixture.settings.provider, query: 'Rust official documentation', tookMs: 19, untrusted: true, results: [] } });
   });
   return fixture;
 }
@@ -181,9 +181,9 @@ test('failed search writes keep drafts and toggle state; diagnostics show safe e
   });
   // Diagnostic fixtures never call a paid search API or a model.
   await page.route('**/api/settings/search/test', async (route) => {
-    searches++; expect(route.request().postDataJSON()).toEqual({ query: 'Rust 官方文档', count: 5 });
+    searches++; expect(route.request().postDataJSON()).toEqual({ query: 'Rust official documentation', count: 5 });
     if (failTest) return route.fulfill({ status: 503, json: { error: 'Tavily 认证失败，请检查 API Key。' } });
-    return route.fulfill({ json: { provider: 'tavily', query: 'Rust 官方文档', tookMs: 37, untrusted: true, results: empty ? [] : [
+    return route.fulfill({ json: { provider: 'tavily', query: 'Rust official documentation', tookMs: 37, untrusted: true, results: empty ? [] : [
       { title: '合成检索结果：Rust 官方文档', url: 'https://doc.rust-lang.org/book/', snippet: '<script>window.searchSnippetExecuted=true</script> 不可信外部片段只作为文本显示。' },
     ] } });
   });
@@ -398,7 +398,7 @@ test('returning to settings refreshes shared account readiness without replacing
   fixture.search.settings.providers = fixture.search.settings.providers.map((entry) => entry.id === 'codex'
     ? { ...entry, configured: 'account', ready: true } : entry.id === 'kimi' ? { ...entry, configured: 'environment' } : entry);
   fixture.teaching.providers[0]!.configured = null;
-  fixture.teaching.ready = false; fixture.teaching.issue = '合成教学凭据已移除';
+  fixture.teaching.ready = false; fixture.teaching.issue = { code: 'MODEL_CREDENTIALS_MISSING' };
   await region.getByRole('tab', { name: '搜索服务', exact: true }).click();
   await expect(panel.getByLabel('搜索模型', { exact: true })).toHaveValue('kimi-preserved-draft');
   await expect(panel.getByLabel('API Key', { exact: true })).toHaveValue('synthetic-preserved-key');
@@ -461,7 +461,7 @@ test('Codex OAuth uses existing login routes without selecting a teaching model;
   let withSources = true, securityPayload = true;
   const answer = '合成搜索回答\n  保留缩进与换行。\n<script>window.searchAnswerExecuted=true</script>\n<img src="https://evil.example/track.png" onerror="window.searchAnswerExecuted=true">\n![追踪图](https://evil.example/markdown.png)\n' + 'long-unbroken-answer-'.repeat(35);
   const previewAnswer = 'Rust 官方文档主要包括《Rust 程序设计语言》和标准库 API 文档。\n\n入门学习可以从 Rust Book 开始，再按需要查询标准库中的类型与方法。';
-  await page.route('**/api/settings/search/test', (route) => route.fulfill({ json: { provider: 'codex', query: 'Rust 官方文档', tookMs: 23, untrusted: true,
+  await page.route('**/api/settings/search/test', (route) => route.fulfill({ json: { provider: 'codex', query: 'Rust official documentation', tookMs: 23, untrusted: true,
     answer: securityPayload ? answer : previewAnswer,
     results: withSources ? [
       { title: 'Rust 官方来源', url: 'https://doc.rust-lang.org/book/', snippet: securityPayload ? '<img src="https://evil.example/snippet.png">只显示文本' : 'Rust Book：从基础概念到实际项目。' },

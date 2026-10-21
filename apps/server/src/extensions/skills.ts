@@ -38,7 +38,7 @@ export class SkillService {
   }
   save(raw: unknown) {
     const config = skillConfigurationSchema.parse(raw);
-    if (config.paths.some((path) => !isAbsolute(path) && !path.startsWith('~/'))) throw new BusinessError(400, 'Skills 路径需要使用绝对路径或 ~/。');
+    if (config.paths.some((path) => !isAbsolute(path) && !path.startsWith('~/'))) throw new BusinessError(400, { code: 'SKILL_PATH_ABSOLUTE_REQUIRED' });
     this.db.prepare("INSERT INTO app_settings VALUES ('skills',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(config));
     this.configuration = config;
     return this.reload();
@@ -51,7 +51,7 @@ export class SkillService {
   private requireSkill(filePath: string) {
     this.reload();
     const skill = this.loaded.skills.find((skill) => skill.filePath === filePath);
-    if (!skill) throw new BusinessError(404, '未找到这个技能，请刷新列表。');
+    if (!skill) throw new BusinessError(404, { code: 'SKILL_NOT_FOUND' });
     return skill;
   }
   details(filePath: string): SkillDetails {
@@ -63,10 +63,10 @@ export class SkillService {
     const skill = this.requireSkill(filePath), root = realpathSync(skill.baseDir);
     const path = resolve(root, name), part = relative(root, path);
     if (!part || part === '..' || part.startsWith(`..${sep}`) || isAbsolute(part) || !this.library.files(root).includes(part.split(sep).join('/'))) {
-      throw new BusinessError(400, '请选择技能目录中的文件。');
+      throw new BusinessError(400, { code: 'SKILL_FILE_REQUIRED' });
     }
     try { return { content: new TextDecoder('utf8', { fatal: true }).decode(readFileSync(path)) }; }
-    catch { throw new BusinessError(422, '这个文件不能作为文本预览。'); }
+    catch { throw new BusinessError(422, { code: 'SKILL_TEXT_PREVIEW_UNSUPPORTED' }); }
   }
   async install(raw: unknown) {
     const { source, skill } = skillInstallSchema.parse(raw);
@@ -76,10 +76,10 @@ export class SkillService {
   }
   local(raw: unknown) {
     const { path } = skillLocalSchema.parse(raw);
-    if (!isAbsolute(path) && !path.startsWith('~/')) throw new BusinessError(400, '请填写绝对目录路径或 ~/ 路径。');
+    if (!isAbsolute(path) && !path.startsWith('~/')) throw new BusinessError(400, { code: 'SKILL_LOCAL_PATH_REQUIRED' });
     const source = path.startsWith('~/') ? resolve(homedir(), path.slice(2)) : resolve(path);
     const loaded = loadSkills({ cwd: this.directory, agentDir: this.directory, includeDefaults: false, skillPaths: [source] });
-    if (!loaded.skills.length) throw new BusinessError(422, '这个位置没有可加载的 SKILL.md，请检查路径和格式。');
+    if (!loaded.skills.length) throw new BusinessError(422, { code: 'SKILL_NOT_LOADABLE' });
     return this.save({ ...this.configuration, paths: [...new Set([...this.configuration.paths, source])],
       excluded: this.configuration.excluded.filter((path) => !loaded.skills.some((skill) => skill.filePath === path)) });
   }
@@ -106,7 +106,7 @@ export class SkillService {
     let expanded = text;
     if (command) {
       const skill = skills.find((skill) => skill.name === command[1]);
-      if (!skill) throw new BusinessError(422, '这个 Skill 不存在或已停用，请在设置中检查。');
+      if (!skill) throw new BusinessError(422, { code: 'SKILL_DISABLED_OR_MISSING' });
       const body = readFileSync(skill.filePath, 'utf8');
       expanded = `<skill_instructions name="${xmlText(skill.name)}" directory="${xmlText(skill.baseDir)}">${xmlText(body)}</skill_instructions>\n${command[2] ?? ''}`;
     }

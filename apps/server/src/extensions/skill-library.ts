@@ -46,7 +46,7 @@ export async function searchSkills(query: string, request: typeof fetch = fetch)
     const response = await request(url, { signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new Error('catalog unavailable');
     return catalogSchema.parse(await response.json());
-  } catch { throw new BusinessError(503, '暂时无法搜索 skills.sh，请重试。'); }
+  } catch { throw new BusinessError(503, { code: 'SKILL_SEARCH_UNAVAILABLE' }); }
 }
 
 /** The public leaderboard has no search id; retain its order and its view-specific metrics. */
@@ -57,17 +57,17 @@ export async function skillLeaderboard(view: SkillLeaderboardView, page: number,
     const data = leaderboardSchema.parse(await response.json());
     if (data.page !== page || view === 'hot' && data.skills.some((skill) => skill.change === undefined)) throw new Error('unexpected leaderboard');
     return { ...data, skills: data.skills.map((skill) => ({ ...skill, id: `${skill.source}/${skill.skillId}` })) };
-  } catch { throw new BusinessError(503, '暂时无法读取 skills.sh 榜单，请重试。'); }
+  } catch { throw new BusinessError(503, { code: 'SKILL_LEADERBOARD_UNAVAILABLE' }); }
 }
 
 export function skillSource(source: string, skill?: string) {
   if (source.startsWith('https://')) {
     let url: URL;
-    try { url = new URL(source); } catch { throw new BusinessError(400, '来源链接不是有效的 HTTPS 地址。'); }
-    if (url.username || url.password) throw new BusinessError(400, '来源链接不能包含登录凭据。');
+    try { url = new URL(source); } catch { throw new BusinessError(400, { code: 'SKILL_SOURCE_URL_INVALID' }); }
+    if (url.username || url.password) throw new BusinessError(400, { code: 'SKILL_SOURCE_CREDENTIALS' });
     if (url.hostname === 'skills.sh' || url.hostname === 'www.skills.sh') {
       const parts = url.pathname.split('/').filter(Boolean);
-      if (parts.length !== 3 || parts.some((part) => !/^[\w.-]+$/.test(part)) || parts[2]!.startsWith('-')) throw new BusinessError(400, '请填写具体技能的 skills.sh 链接。');
+      if (parts.length !== 3 || parts.some((part) => !/^[\w.-]+$/.test(part)) || parts[2]!.startsWith('-')) throw new BusinessError(400, { code: 'SKILL_SOURCE_LINK_REQUIRED' });
       if (parts[0] === 'site') return skillSource(parts[1]!, skill ?? parts[2]);
       return { source: `${parts[0]}/${parts[1]}`, skill: skill ?? parts[2] };
     }
@@ -76,7 +76,7 @@ export function skillSource(source: string, skill?: string) {
   if (/^[\w][\w.-]*\.[a-z]{2,}$/i.test(source)) return { source: `https://${source}/`, skill };
   // Absolute local sources are also useful for offline acquisition; reference-only loading is a separate operation.
   if (isAbsolute(source) || /^[\w.-]+\/[\w.-]+(?:\/[^\s]+|[#@][^\s]+)?$/.test(source)) return { source, skill };
-  throw new BusinessError(400, '请填写 skills.sh 链接、HTTPS 仓库链接或 owner/repo。');
+  throw new BusinessError(400, { code: 'SKILL_SOURCE_INVALID' });
 }
 
 /** File bundles and provenance belong to the app; Pi still owns discovery and runtime loading. */
@@ -120,10 +120,10 @@ export class SkillLibrary {
       for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
         if (entry.name === metadataFile) continue;
         const file = join(path, entry.name);
-        if (entry.isSymbolicLink()) throw new BusinessError(409, '技能文件中包含链接，请先检查本地改动。');
+        if (entry.isSymbolicLink()) throw new BusinessError(409, { code: 'SKILL_SYMLINK_UNSUPPORTED' });
         if (entry.isDirectory()) walk(file);
         else if (entry.isFile()) result.push(relative(folder, file).split(sep).join('/'));
-        else throw new BusinessError(409, '技能包含不支持的文件类型。');
+        else throw new BusinessError(409, { code: 'SKILL_FILE_TYPE_UNSUPPORTED' });
       }
     };
     walk(folder); return result;
@@ -141,7 +141,7 @@ export class SkillLibrary {
       const root = realpathSync(join(project, '.pi/skills'));
       if (!within(realpathSync(project), root)) throw new Error('Skill acquisition escaped staging');
       const folders = readdirSync(root);
-      if (folders.length > 1) throw new BusinessError(422, '来源中包含多个技能，请填写要安装的技能名称。');
+      if (folders.length > 1) throw new BusinessError(422, { code: 'SKILL_NAME_REQUIRED' });
       if (!folders.length) throw new Error('Publisher did not install a bundle');
       const folder = realpathSync(join(root, folders[0]!));
       if (!within(root, folder)) throw new Error('Skill acquisition escaped staging');
@@ -156,7 +156,7 @@ export class SkillLibrary {
       return { name: basename(folder), path: folder, status: 'installed', scope: 'project', mode: 'copy', agents: ['Pi'], hash: lock.wellKnownDigest ?? lock.computedHash };
     } catch (error) {
       if (error instanceof BusinessError) throw error;
-      throw new BusinessError(503, '无法校验技能文件和来源记录，请检查来源后重试。');
+      throw new BusinessError(503, { code: 'SKILL_PROVENANCE_INVALID' });
     }
   }
   private async run(project: string, source: string, skill: string | undefined, signal: AbortSignal) {
@@ -187,23 +187,23 @@ export class SkillLibrary {
     child.stderr.resume(); // CLI diagnostics can contain source credentials; do not forward them into app logs.
     try {
       const code = await new Promise<number | null>((done, fail) => { child.once('error', fail); child.once('close', done); });
-      if (signal.aborted) throw new BusinessError(503, '技能安装已停止，请重试。');
+      if (signal.aborted) throw new BusinessError(503, { code: 'SKILL_INSTALL_STOPPED' });
       let json: unknown;
       if (wellKnown) {
-        if (code !== 0) throw new BusinessError(503, '无法获取这个技能，请检查来源和技能名称后重试。');
+        if (code !== 0) throw new BusinessError(503, { code: 'SKILL_ACQUISITION_FAILED' });
         json = [this.publisherBundle(project, source)];
       } else {
-        try { json = JSON.parse(stdout || '[]'); } catch { throw new BusinessError(503, '技能来源返回了无法识别的安装结果，请重试。'); }
+        try { json = JSON.parse(stdout || '[]'); } catch { throw new BusinessError(503, { code: 'SKILL_INSTALL_RESULT_INVALID' }); }
       }
       const entries = acquiredSchema.safeParse(json);
-      if (code !== 0 || !entries.success || entries.data.some((entry) => entry.status !== 'installed')) throw new BusinessError(503, '无法获取这个技能，请检查来源和技能名称后重试。');
-      if (entries.data.length !== 1) throw new BusinessError(422, '来源中包含多个技能，请填写要安装的技能名称。');
+      if (code !== 0 || !entries.success || entries.data.some((entry) => entry.status !== 'installed')) throw new BusinessError(503, { code: 'SKILL_ACQUISITION_FAILED' });
+      if (entries.data.length !== 1) throw new BusinessError(422, { code: 'SKILL_NAME_REQUIRED' });
       const entry = entries.data[0]!;
       if (!entry.path || !entry.name || entry.scope !== 'project' || entry.mode !== 'copy' || !entry.agents?.includes('Pi')) throw new Error('Unexpected Skills CLI result');
       const folder = realpathSync(entry.path);
       if (!within(realpathSync(project), folder)) throw new Error('Skill acquisition escaped staging');
       const loaded = loadSkills({ cwd: project, agentDir: project, includeDefaults: false, skillPaths: [folder] });
-      if (loaded.skills.length !== 1 || loaded.skills[0]!.filePath !== join(folder, 'SKILL.md') || loaded.diagnostics.length) throw new BusinessError(422, '技能的 SKILL.md 不符合 Pi 格式，请检查来源。');
+      if (loaded.skills.length !== 1 || loaded.skills[0]!.filePath !== join(folder, 'SKILL.md') || loaded.diagnostics.length) throw new BusinessError(422, { code: 'SKILL_FORMAT_INVALID' });
       let lock: { sourceUrl?: string; skillPath?: string } = {};
       try { lock = JSON.parse(readFileSync(join(project, 'skills-lock.json'), 'utf8')).skills[entry.name] ?? {}; } catch { /* Direct downloads need not write a project lock. */ }
       const installation: SkillInstallation = { source, skill: loaded.skills[0]!.name, ref: entry.ref ?? null,
@@ -214,8 +214,8 @@ export class SkillLibrary {
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); }
   }
   private async acquire<T>(source: string, skill: string | undefined, use: (bundle: Awaited<ReturnType<SkillLibrary['run']>>) => T): Promise<T> {
-    if (this.closed) throw new BusinessError(503, '服务正在关闭，请稍后重试。');
-    if (this.pending.size) throw new BusinessError(409, '正在处理另一个技能，请稍后再试。');
+    if (this.closed) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
+    if (this.pending.size) throw new BusinessError(409, { code: 'SKILL_OPERATION_RUNNING' });
     const controller = new AbortController(); this.running.add(controller);
     const project = mkdtempSync(join(this.staging, 'acquire-'));
     const operation = this.run(project, source, skill, controller.signal).then(use);
@@ -227,7 +227,7 @@ export class SkillLibrary {
     const request = skillSource(source, skill);
     return this.acquire(request.source, request.skill, (bundle) => {
       const target = join(this.directory, bundle.name);
-      if (existsSync(target) || existingNames().includes(bundle.installation.skill)) throw new BusinessError(409, '已存在同名技能，请检查已安装列表。');
+      if (existsSync(target) || existingNames().includes(bundle.installation.skill)) throw new BusinessError(409, { code: 'SKILL_NAME_CONFLICT' });
       writeFileSync(join(bundle.folder, metadataFile), JSON.stringify(bundle.installation), { mode: 0o600 });
       renameSync(bundle.folder, target);
       return join(target, 'SKILL.md');
@@ -235,18 +235,18 @@ export class SkillLibrary {
   }
   update(filePath: string, apply: boolean) {
     const original = this.metadata(filePath);
-    if (!original) throw new BusinessError(422, '本地引用的技能请在原目录中更新。');
+    if (!original) throw new BusinessError(422, { code: 'SKILL_REFERENCE_UPDATE' });
     const folder = dirname(filePath);
     const before = this.contentHash(folder);
     return this.acquire(original.source, original.skill, (bundle) => {
       const available = original.contentHash !== bundle.installation.contentHash;
       const modified = this.contentHash(folder) !== original.contentHash;
       if (apply) {
-        if (modified || this.contentHash(folder) !== before) throw new BusinessError(409, '技能有本地改动，未覆盖文件。请先保留或还原改动再更新。');
-        if (bundle.name !== basename(folder)) throw new BusinessError(409, '来源中的技能名称发生变化，请重新安装。');
+        if (modified || this.contentHash(folder) !== before) throw new BusinessError(409, { code: 'SKILL_LOCAL_CHANGES' });
+        if (bundle.name !== basename(folder)) throw new BusinessError(409, { code: 'SKILL_SOURCE_NAME_CHANGED' });
         if (available) {
           const backup = join(this.backups, basename(folder));
-          if (existsSync(backup)) throw new BusinessError(409, '技能有尚未恢复的安装记录，请重新启动后重试。');
+          if (existsSync(backup)) throw new BusinessError(409, { code: 'SKILL_RECOVERY_REQUIRED' });
           writeFileSync(join(bundle.folder, metadataFile), JSON.stringify(bundle.installation), { mode: 0o600 });
           renameSync(folder, backup);
           try { renameSync(bundle.folder, folder); } catch (error) { renameSync(backup, folder); throw error; }
@@ -257,8 +257,8 @@ export class SkillLibrary {
     });
   }
   remove(filePath: string) {
-    if (this.pending.size) throw new BusinessError(409, '正在处理另一个技能，请稍后再试。');
-    if (!this.metadata(filePath)) throw new BusinessError(422, '这个技能不是应用安装的技能。');
+    if (this.pending.size) throw new BusinessError(409, { code: 'SKILL_OPERATION_RUNNING' });
+    if (!this.metadata(filePath)) throw new BusinessError(422, { code: 'SKILL_NOT_MANAGED' });
     rmSync(dirname(filePath), { recursive: true });
   }
   async close() {

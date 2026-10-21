@@ -14,13 +14,12 @@ export function createTask(learning: Learning, input: FrozenContext, taskId: str
       parameters: Type.Unsafe<ReturnType<typeof assessmentArtifactSchema.parse>>(JSON.parse(JSON.stringify(assessmentArtifactSchema.toJSONSchema({ io: 'input' })))),
       async execute(_id, args) {
         const submitted = assessmentArtifactSchema.parse(args);
-        if (submitted.public.q2Kind === 'code' && !submitted.public.execution) throw new BusinessError(422,
-          '代码题必须提供 public.execution（支持的 language 和公开 cases）。请补充执行方案；纯分析题请将 q2Kind 设为 reasoning，无需执行方案。');
+        if (submitted.public.q2Kind === 'code' && !submitted.public.execution) throw new BusinessError(422, { code: 'CODE_PLAN_UNAVAILABLE' });
         artifact = submitted;
         return { content: [{ type: 'text', text: '题目和私有标准已暂存。' }], details: {} };
       },
     }], commit() {
-      if (!artifact) throw new BusinessError(422, '模型未提交有效题目。');
+      if (!artifact) throw new BusinessError(422, { code: 'ASSESSMENT_ARTIFACT_MISSING' });
       new Assessments(learning).saveSpec(input.spaceId, input.unitId!, artifact, baseline(input), input.assessmentRevision!);
     } };
   }
@@ -33,7 +32,7 @@ export function createTask(learning: Learning, input: FrozenContext, taskId: str
         return { content: [{ type: 'text', text: '评估已暂存。' }], details: {} };
       },
     }], commit() {
-      if (!artifact) throw new BusinessError(422, '模型未提交有效评估；没有通过记录。');
+      if (!artifact) throw new BusinessError(422, { code: 'EVALUATION_ARTIFACT_MISSING' });
       new Assessments(learning).grade(input.spaceId, input.unitId!, input.evaluation!, artifact);
     } };
   }
@@ -46,7 +45,7 @@ export function createTask(learning: Learning, input: FrozenContext, taskId: str
       return { content: [{ type: 'text', text: '课件已暂存。' }], details: {} };
     },
   }], commit() {
-    if (!lesson) throw new BusinessError(422, '模型没有提交有效课件；旧课件保持不变。');
+    if (!lesson) throw new BusinessError(422, { code: 'LESSON_ARTIFACT_MISSING' });
     learning.assertUnitUnlocked(input.spaceId, input.unitId!);
     learning.checkLessonReferences(input.spaceId, references.consumed());
     if (input.lesson) learning.proposeLesson(input.spaceId, input.unitId!, lesson, baseline(input), { kind: 'task', id: taskId }, references.consumed(), input.approvalSessionId);

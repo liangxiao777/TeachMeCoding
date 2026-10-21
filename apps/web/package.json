@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
-    "test": "tsx --test src/fixtures/*.test.ts"
+    "test": "tsx --test src/fixtures/*.test.ts src/i18n/*.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.5.0",
@@ -31,6 +31,7 @@
     "cmdk": "1.1.1",
     "cn": "0.4.0",
     "diff": "8.0.4",
+    "i18next": "26.5.3",
     "katex": "0.16.47",
     "lucide-react": "1.17.0",
     "mdast-util-to-string": "4.0.0",
@@ -38,6 +39,7 @@
     "nanoid": "6.0.1",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-i18next": "17.1.0",
     "react-resizable-panels": "4.14.1",
     "remark-directive": "4.0.0",
     "remark-gfm": "4.0.1",

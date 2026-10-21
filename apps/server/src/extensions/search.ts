@@ -7,7 +7,7 @@ import { searchModelSchema, searchProviderSchema, searchRegionSchema, searchSett
   type SearchProvider, type SearchSettings, type WebSearchResponse } from '@teach-me-coding/contracts';
 import type { EnvLookup } from '../config/model.js';
 import { BusinessError } from '../modules/learning.js';
-import { runHttpSearch, searchModelDefaults } from './search-http.js';
+import { HttpSearchError, runHttpSearch, searchModelDefaults } from './search-http.js';
 import { runCodexSearch, type CodexAuthSource, type CodexSearchLaunchOptions } from './codex-search.js';
 
 type Provider = Omit<SearchSettings['providers'][number], 'configured' | 'ready'> & { env?: string[] };
@@ -83,12 +83,12 @@ export class SearchService {
       }) };
   }
   save(raw: unknown): Promise<SearchSettings> {
-    if (this.shutdown.signal.aborted) throw new BusinessError(503, '服务正在关闭。');
+    if (this.shutdown.signal.aborted) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
     const input = searchSettingsUpdateSchema.parse(raw), id = input.provider ?? this.configuration.provider;
     const provider = providers.find((value) => value.id === id)!;
-    if (input.apiKey && provider.authentication !== 'api_key') throw new BusinessError(422, '当前搜索服务不使用 API Key。');
-    if (input.model !== undefined && provider.model === undefined) throw new BusinessError(422, '当前搜索服务不支持搜索模型配置。');
-    if (input.region !== undefined && provider.region === undefined) throw new BusinessError(422, '当前搜索服务不支持区域配置。');
+    if (input.apiKey && provider.authentication !== 'api_key') throw new BusinessError(422, { code: 'SEARCH_API_KEY_UNSUPPORTED' });
+    if (input.model !== undefined && provider.model === undefined) throw new BusinessError(422, { code: 'SEARCH_MODEL_UNSUPPORTED' });
+    if (input.region !== undefined && provider.region === undefined) throw new BusinessError(422, { code: 'SEARCH_REGION_UNSUPPORTED' });
     const changedOptions = input.model !== undefined || input.region !== undefined;
     const next = configurationSchema.parse({ ...this.configuration, enabled: input.enabled ?? this.configuration.enabled, provider: id,
       apiKeys: { ...this.configuration.apiKeys, ...(input.apiKey ? { [id]: input.apiKey } : {}) },
@@ -107,9 +107,9 @@ export class SearchService {
   private run(provider: Provider, key: string | undefined, configuration: Configuration, raw: unknown, signal?: AbortSignal) {
     const input = webSearchInputSchema.parse(raw);
     if (provider.id === 'brave' && (input.query.length > 600 || input.query.split(/\s+/).length > 75)) {
-      throw new BusinessError(422, 'Brave Search 查询最多 600 个字符和 75 个词。');
+      throw new BusinessError(422, { code: 'BRAVE_QUERY_TOO_LONG' });
     }
-    if (provider.id === 'parallel' && input.query.length > 200) throw new BusinessError(422, 'Parallel 查询最多 200 个字符。');
+    if (provider.id === 'parallel' && input.query.length > 200) throw new BusinessError(422, { code: 'PARALLEL_QUERY_TOO_LONG' });
     const deadline = AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
     return this.execute(provider, key, configuration, input, deadline);
   }
@@ -118,7 +118,7 @@ export class SearchService {
     const started = Date.now();
     try {
       signal.throwIfAborted();
-      if (provider.id === 'codex' && !await this.ready(provider, configuration, signal)) throw new BusinessError(422, '请先登录 Codex。');
+      if (provider.id === 'codex' && !await this.ready(provider, configuration, signal)) throw new BusinessError(422, { code: 'CODEX_LOGIN_REQUIRED' });
       const result = provider.id === 'codex'
         ? await runCodexSearch(input.query, input.count, this.options.codex!, signal, this.options.codexLaunch)
         : await runHttpSearch(provider.id, key, input, { model: provider.model, region: provider.region,
@@ -126,16 +126,22 @@ export class SearchService {
       signal.throwIfAborted();
       return { provider: provider.id, query: input.query, ...result, tookMs: Date.now() - started, untrusted: true };
     } catch (error) {
-      if (signal.aborted) throw new BusinessError(503, signal.reason?.name === 'TimeoutError' ? '搜索请求超时，请重试。' : '搜索请求已取消。');
-      if (error instanceof BusinessError) throw new BusinessError(error.status, `${provider.name} ${error.message}`);
-      throw new BusinessError(503, provider.id === 'codex' ? 'Codex 搜索不可用，请检查登录状态或稍后重试。' : '无法取得有效搜索结果，请检查网络或稍后重试。');
+      if (signal.aborted) throw new BusinessError(503, { code: signal.reason?.name === 'TimeoutError' ? 'SEARCH_TIMEOUT' : 'SEARCH_CANCELLED' });
+      if (error instanceof HttpSearchError && error.kind !== 'invalid') {
+        const code = { auth: 'SEARCH_AUTH_FAILED', 'rate-limit': 'SEARCH_RATE_LIMITED', unavailable: 'SEARCH_PROVIDER_UNAVAILABLE' } as const;
+        throw new BusinessError(error.status, { code: code[error.kind], params: { provider: provider.name } });
+      }
+      // Transport bodies stay private; our sanitized diagnostic retains its identity.
+      if (error instanceof BusinessError) throw new BusinessError(error.status, error.detail?.code === 'CODEX_LOGIN_REQUIRED' ? { code: 'SEARCH_CODEX_LOGIN_REQUIRED', params: { provider: provider.name } }
+          : error instanceof HttpSearchError ? { code: 'SEARCH_RESULTS_UNAVAILABLE' } : error.detail);
+      throw new BusinessError(503, { code: provider.id === 'codex' ? 'CODEX_SEARCH_UNAVAILABLE' : 'SEARCH_RESULTS_UNAVAILABLE' });
     }
   }
   /** Explicit diagnostics work even when Agent search is disabled; they never enable it. */
   test(raw: unknown, signal?: AbortSignal) {
     const configuration = this.configuration, provider = providers.find((value) => value.id === configuration.provider)!, key = this.key(provider, configuration);
-    if (provider.authentication === 'api_key' && !key) throw new BusinessError(422, '请先保存当前搜索服务的 API Key。');
-    if (provider.authentication === 'oauth' && !this.options.codex) throw new BusinessError(422, '请先登录 Codex。');
+    if (provider.authentication === 'api_key' && !key) throw new BusinessError(422, { code: 'SEARCH_API_KEY_REQUIRED' });
+    if (provider.authentication === 'oauth' && !this.options.codex) throw new BusinessError(422, { code: 'CODEX_LOGIN_REQUIRED' });
     return this.run(provider, key, configuration, raw, signal);
   }
   async tools(signal?: AbortSignal): Promise<AgentTool[]> {
@@ -148,7 +154,7 @@ export class SearchService {
         ...(provider.id === 'brave' ? { description: 'Concise search query, at most 75 words.' } : {}) }),
         count: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, default: 5 })) }, { additionalProperties: false }),
       execute: async (_id, args, signal) => {
-        if (!this.configuration.enabled) throw new BusinessError(422, '搜索服务已关闭。');
+        if (!this.configuration.enabled) throw new BusinessError(422, { code: 'SEARCH_DISABLED' });
         const result = await this.run(provider, key, configuration, args, AbortSignal.any([this.agentCalls.signal, ...(signal ? [signal] : [])]));
         const capturedAt = Date.now();
         return { content: [{ type: 'text', text: JSON.stringify(result) }], details: {

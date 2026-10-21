@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { BusinessError } from '../modules/learning.js';
-import { runHttpSearch, searchModelDefaults } from './search-http.js';
+import { HttpSearchError, runHttpSearch, searchModelDefaults } from './search-http.js';
 
 type Provider = Parameters<typeof runHttpSearch>[0];
 type Configuration = Parameters<typeof runHttpSearch>[3];
@@ -11,10 +11,15 @@ const key = 'synthetic-search-key';
 const signal = () => new AbortController().signal;
 const invoke = (provider: Provider, payload: unknown, configuration: Configuration = {}, count = 2) =>
   runHttpSearch(provider, key, { query, count }, configuration, async () => Response.json(payload), signal());
-function safeError(error: unknown, message = /有效搜索结果/): boolean {
+function safeError(error: unknown, code = 'SEARCH_RESULTS_UNAVAILABLE', kind: HttpSearchError['kind'] = 'invalid'): boolean {
   assert.ok(error instanceof BusinessError);
   assert.equal(error.status, 503);
-  assert.match(error.message, message);
+  assert.equal(error.message, code);
+  assert.deepEqual(error.detail, { code });
+  if (code === 'SEARCH_RESULTS_UNAVAILABLE') {
+    assert.ok(error instanceof HttpSearchError);
+    assert.equal(error.kind, kind);
+  }
   assert.doesNotMatch(error.message, /synthetic|UPSTREAM|sensitive|schema-value|secret|Bearer/);
   return true;
 }
@@ -206,7 +211,7 @@ test('DuckDuckGo accepts explicit no-result pages, not challenges, unknown HTML 
     await assert.rejects(runHttpSearch('duckduckgo', undefined, { query, count: 2 }, {}, async () => new Response(html), signal()), safeError);
   }
   await assert.rejects(runHttpSearch('duckduckgo', undefined, { query, count: 2 }, {},
-    async () => new Response('<div class="no-results">No results</div>', { status: 202 }), signal()), (error) => safeError(error, /不可用/));
+    async () => new Response('<div class="no-results">No results</div>', { status: 202 }), signal()), (error) => safeError(error, 'SEARCH_RESULTS_UNAVAILABLE', 'unavailable'));
 });
 
 test('search model defaults and Gemini request are independent of the teaching model', async () => {
@@ -375,18 +380,18 @@ test('controlled HTTP errors never read or reflect upstream bodies, redirect or 
     const body = new ReadableStream<Uint8Array>({ pull() { reads++; throw new Error('UPSTREAM synthetic-search-key'); }, cancel() { cancelled++; } }, { highWaterMark: 0 });
     await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async (_input, options) => {
       calls++; assert.equal(options?.redirect, 'error'); return new Response(body, { status, headers: { location: 'https://other.example/' } });
-    }, signal()), (error) => safeError(error, status === 401 || status === 403 ? /认证/ : status === 429 ? /额度/ : /不可用/));
+    }, signal()), (error) => safeError(error, 'SEARCH_RESULTS_UNAVAILABLE', status === 401 || status === 403 ? 'auth' : status === 429 ? 'rate-limit' : 'unavailable'));
     assert.equal(calls, 1); assert.equal(reads, 0); assert.equal(cancelled, 1);
   }
   const redirected = Response.json({ results: [] }); Object.defineProperty(redirected, 'redirected', { value: true });
-  await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => redirected, signal()), (error) => safeError(error, /不可用/));
+  await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => redirected, signal()), (error) => safeError(error, 'SEARCH_RESULTS_UNAVAILABLE', 'unavailable'));
 });
 
 test('all keyed providers reject missing credentials before transport; unsafe model IDs cannot change endpoints', async () => {
   let calls = 0;
   const request: typeof fetch = async () => { calls++; throw new Error('UPSTREAM synthetic-search-key'); };
   for (const provider of ['brave', 'tavily', 'exa', 'firecrawl', 'parallel', 'perplexity', 'minimax', 'ollama', 'gemini', 'grok', 'kimi'] as const) {
-    await assert.rejects(runHttpSearch(provider, undefined, { query, count: 2 }, {}, request, signal()), (error) => safeError(error, /认证/));
+    await assert.rejects(runHttpSearch(provider, undefined, { query, count: 2 }, {}, request, signal()), (error) => safeError(error, 'SEARCH_RESULTS_UNAVAILABLE', 'auth'));
   }
   for (const provider of ['gemini', 'grok', 'kimi'] as const) {
     for (const model of ['../../other?key=secret', 'https://evil.example', 'a/b', 'bad\nheader', '', 'x'.repeat(101)]) {
@@ -401,7 +406,7 @@ test('malformed JSON, schema values, missing bodies, transport/stream errors and
     new Response(null), new Response(new ReadableStream({ start(controller) { controller.error(new Error('UPSTREAM sensitive')); } }))]) {
     await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => response, signal()), safeError);
   }
-  for (const error of [new Error('UPSTREAM sensitive synthetic-search-key'), new BusinessError(503, 'UPSTREAM sensitive synthetic-search-key')]) {
+  for (const error of [new Error('UPSTREAM sensitive synthetic-search-key'), Object.assign(new BusinessError(503, { code: 'MODEL_UNAVAILABLE' }), { cause: new Error('UPSTREAM sensitive synthetic-search-key') })]) {
     await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => { throw error; }, signal()), safeError);
   }
   const json = '{"results":[]}';
@@ -420,7 +425,7 @@ test('already-aborted and timeout requests never call transport and never expose
   let calls = 0;
   for (const reason of [new Error('UPSTREAM sensitive'), new DOMException('UPSTREAM sensitive', 'TimeoutError')]) {
     await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => { calls++; return Response.json({ results: [] }); },
-      AbortSignal.abort(reason)), (error) => safeError(error, reason.name === 'TimeoutError' ? /超时/ : /取消/));
+      AbortSignal.abort(reason)), (error) => safeError(error, reason.name === 'TimeoutError' ? 'SEARCH_TIMEOUT' : 'SEARCH_CANCELLED'));
   }
   assert.equal(calls, 0);
 });
@@ -431,7 +436,7 @@ test('fetch ignoring cancellation loses immediately; a later response is cleaned
   const pending = runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => {
     calls++; return new Promise<Response>((done) => { resolve = done; });
   }, controller.signal);
-  const rejected = assert.rejects(pending, (error) => safeError(error, /取消/));
+  const rejected = assert.rejects(pending, (error) => safeError(error, 'SEARCH_CANCELLED'));
   controller.abort(new Error('UPSTREAM sensitive'));
   await rejected;
   const body = new ReadableStream<Uint8Array>({ pull() { reads++; }, cancel() { cancelled++; return new Promise(() => {}); } }, { highWaterMark: 0 });
@@ -448,7 +453,7 @@ test('abort wins simultaneous fetch success/rejection and releases listeners', a
       controller.abort();
       return outcome === 'success' ? Promise.resolve(new Response(new ReadableStream({ cancel() { cancelled++; } })))
         : Promise.reject(new Error('UPSTREAM sensitive'));
-    }, controller.signal), (error) => safeError(error, /取消/));
+    }, controller.signal), (error) => safeError(error, 'SEARCH_CANCELLED'));
     await nextTurn();
     assert.equal(cancelled, outcome === 'success' ? 1 : 0);
     assert.ok(add.mock.calls.length > 0); assert.ok(remove.mock.calls.length >= add.mock.calls.length);
@@ -462,7 +467,7 @@ test('pending stream reads race cancellation and cleanup does not wait for cance
   const ready = new Promise<void>((resolve) => { entered = resolve; });
   const body = new ReadableStream<Uint8Array>({ pull() { entered(); return new Promise(() => {}); }, cancel() { cancelled++; return new Promise(() => {}); } }, { highWaterMark: 0 });
   const pending = runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => new Response(body), controller.signal);
-  const rejected = assert.rejects(pending, (error) => safeError(error, /取消/));
+  const rejected = assert.rejects(pending, (error) => safeError(error, 'SEARCH_CANCELLED'));
   await ready; controller.abort(); await rejected;
   assert.equal(cancelled, 1); assert.equal(body.locked, false);
 });
@@ -475,7 +480,7 @@ test('abort wins a simultaneous stream chunk or EOF', async () => {
       controller.abort();
     } }, { highWaterMark: 0 });
     await assert.rejects(runHttpSearch('tavily', key, { query, count: 2 }, {}, async () => new Response(body), controller.signal),
-      (error) => safeError(error, /取消/));
+      (error) => safeError(error, 'SEARCH_CANCELLED'));
     assert.equal(body.locked, false);
   }
 });
@@ -492,7 +497,7 @@ test('Kimi shares one deadline over all rounds and cancellation wins a hanging s
     ] } }] });
     entered(); return new Promise<Response>(() => {});
   }, controller.signal);
-  const rejected = assert.rejects(pending, (error) => safeError(error, /超时/));
+  const rejected = assert.rejects(pending, (error) => safeError(error, 'SEARCH_TIMEOUT'));
   await ready; controller.abort(new DOMException('UPSTREAM sensitive', 'TimeoutError')); await rejected;
   assert.equal(calls.length, 2); assert.ok(calls.every((call) => call.signal === controller.signal));
 });
@@ -507,6 +512,6 @@ test('Kimi cancellation on the first round EOF prevents any tool replay round', 
     if (++reads === 1) stream.enqueue(encoded); else { stream.close(); controller.abort(); }
   } }, { highWaterMark: 0 });
   await assert.rejects(runHttpSearch('kimi', key, { query, count: 2 }, {}, async () => { calls++; return new Response(body); }, controller.signal),
-    (error) => safeError(error, /取消/));
+    (error) => safeError(error, 'SEARCH_CANCELLED'));
   assert.equal(calls, 1);
 });

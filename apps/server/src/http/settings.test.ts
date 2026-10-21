@@ -11,6 +11,7 @@ import { openDatabase } from '../storage/database.js';
 import { McpService } from '../extensions/mcp.js';
 import { SkillService } from '../extensions/skills.js';
 import { SearchService } from '../extensions/search.js';
+import { BusinessError } from '../modules/learning.js';
 
 const stealth = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' };
 
@@ -33,14 +34,16 @@ test('model settings endpoints serve the catalog, persist selection and validate
   assert.equal(initial.status, 200);
   const settings = await initial.json();
   assert.equal(settings.ready, false);
-  assert.match(settings.issue, /凭据/);
+  assert.deepEqual(settings.issue, { code: 'MODEL_CREDENTIALS_MISSING' });
   assert.deepEqual(settings.selection, { ...stealth, thinkingLevel: 'high' });
   assert.ok(settings.providers.some((p: { id: string; models: number }) => p.id === 'openrouter' && p.models > 100));
   const list = await (await app.request('/api/settings/providers/openrouter/models', { headers })).json();
   const model = list.find((m: { id: string }) => m.id === stealth.model);
   assert.equal(model.reasoning, true);
   assert.ok(model.thinkingLevels.includes('high'));
-  assert.equal((await app.request('/api/settings/providers/nope/models', { headers })).status, 404);
+  const missing = await app.request('/api/settings/providers/nope/models', { headers });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { code: 'MODEL_PROVIDER_NOT_FOUND' });
   const saved = await app.request('/api/settings/model', { method: 'POST', headers,
     body: JSON.stringify({ ...stealth, thinkingLevel: 'low' }) });
   assert.equal(saved.status, 200);
@@ -48,8 +51,10 @@ test('model settings endpoints serve the catalog, persist selection and validate
   const invalid = await app.request('/api/settings/model', { method: 'POST', headers,
     body: JSON.stringify({ ...stealth, thinkingLevel: 'off' }) });
   assert.equal(invalid.status, 422);
+  assert.deepEqual(await invalid.json(), { code: 'MODEL_THINKING_UNSUPPORTED' });
   const malformed = await app.request('/api/settings/model', { method: 'POST', headers, body: JSON.stringify({ provider: 1 }) });
   assert.equal(malformed.status, 400);
+  assert.deepEqual(await malformed.json(), { code: 'INVALID_REQUEST' });
   db.close();
 });
 
@@ -104,7 +109,9 @@ test('MCP and Skills work without a model, retain access protection and reject i
   try {
     assert.equal((await app.request('/api/settings/mcp', { headers: { host: 'localhost:4310' } })).status, 401);
     assert.equal((await app.request('/api/settings/skills', { headers: { ...headers, origin: 'http://evil.invalid' } })).status, 403);
-    assert.equal((await app.request('/api/settings/model', { headers })).status, 503);
+    const unavailable = await app.request('/api/settings/model', { headers });
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { code: 'SETTINGS_UNAVAILABLE' });
     const saved = await app.request('/api/settings/mcp', { method: 'POST', headers, body: JSON.stringify({ mcpServers: {
       fixture: { command: '/disabled-fixture', enabled: false, env: { TOKEN: 'synthetic-api-secret' } },
     } }) });
@@ -113,7 +120,9 @@ test('MCP and Skills work without a model, retain access protection and reject i
     assert.equal((await app.request('/api/settings/mcp', { method: 'POST', headers, body: '{"mcpServers":{"invalid":{}}}' })).status, 400);
     assert.equal((await app.request('/api/settings/mcp/reconnect', { method: 'POST', headers, body: '{}' })).status, 200);
     assert.equal((await app.request('/api/settings/skills', { headers })).status, 200);
-    assert.equal((await app.request('/api/settings/skills', { method: 'POST', headers, body: '{"paths":["relative"],"disabled":[]}' })).status, 400);
+    const relative = await app.request('/api/settings/skills', { method: 'POST', headers, body: '{"paths":["relative"],"disabled":[]}' });
+    assert.equal(relative.status, 400);
+    assert.deepEqual(await relative.json(), { code: 'SKILL_PATH_ABSOLUTE_REQUIRED' });
     assert.equal((await app.request('/api/settings/skills/reload', { method: 'POST', headers, body: '{}' })).status, 200);
   } finally { await mcp.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -130,7 +139,9 @@ test('single-server MCP endpoints validate names, protect mutations and preserve
     assert.equal((await app.request('/api/settings/mcp/servers', { method: 'POST', headers: { host: 'localhost:4310' }, body })).status, 401);
     assert.equal((await app.request('/api/settings/mcp/servers', { method: 'POST', headers: { ...headers, origin: 'https://evil.invalid' }, body })).status, 403);
     assert.equal((await post('/servers', body)).status, 201);
-    assert.equal((await post('/servers', body)).status, 409);
+    const duplicate = await post('/servers', body);
+    assert.equal(duplicate.status, 409);
+    assert.deepEqual(await duplicate.json(), { code: 'MCP_SERVER_NAME_CONFLICT' });
     assert.equal((await post('/servers', JSON.stringify({ name: 'bad name', configuration: { command: 'node' } }))).status, 400);
     assert.equal((await post('/servers', JSON.stringify({ name: 'second', configuration: { url: 'https://example.invalid/mcp', enabled: false } }))).status, 201);
     assert.equal((await post('/servers/first', JSON.stringify({ name: 'renamed', configuration: { command: '/not-started', enabled: false } }))).status, 200);
@@ -160,7 +171,16 @@ test('Skills library endpoints protect installation and file access, and complet
     for (const query of ['view=unknown', 'page=-1', 'page=1.5', 'page=not-a-number', 'view=hot&extra=1']) {
       assert.equal((await app.request(`/api/settings/skills/leaderboard?${query}`, { headers })).status, 400);
     }
-    assert.equal((await post('install', { source: '--global' })).status, 400);
+    for (const [source, code] of [
+      ['--global', 'SKILL_SOURCE_INVALID'],
+      ['https://private-user:private-token@example.com/repo', 'SKILL_SOURCE_CREDENTIALS'],
+      ['https://skills.sh/owner/repo', 'SKILL_SOURCE_LINK_REQUIRED'],
+    ] as const) {
+      const invalid = await post('install', { source });
+      assert.equal(invalid.status, 400);
+      assert.deepEqual(await invalid.json(), { code });
+      assert.deepEqual((await (await app.request('/api/settings/skills', { headers })).json()).skills, []);
+    }
     assert.equal((await post('local', { path: 'relative' })).status, 400);
     assert.equal((await post('install', {})).status, 400);
     const installed = await post('install', { source, skill: 'explaining-types' });
@@ -204,7 +224,9 @@ test('search settings and diagnostics work without a model, protect every route 
     const initial = await app.request('/api/settings/search', { headers }); assert.equal(initial.status, 200);
     assert.equal((await initial.json()).enabled, false);
     assert.equal((await app.request('/api/settings/model', { headers })).status, 503);
-    assert.equal((await post('/test', { query: 'Rust references', count: 2 })).status, 422);
+    const missingKey = await post('/test', { query: 'Rust references', count: 2 });
+    assert.equal(missingKey.status, 422);
+    assert.deepEqual(await missingKey.json(), { code: 'SEARCH_API_KEY_REQUIRED' });
     for (const input of [{ provider: 'invalid' }, {}, { enabled: 1 }, { apiKey: 'bad\r\nheader' }, { provider: 'tavily', unknown: true }]) {
       assert.equal((await post('', input)).status, 400);
     }
@@ -219,11 +241,32 @@ test('search settings and diagnostics work without a model, protect every route 
     assert.equal((await search.settings()).enabled, false); assert.equal(requests, 1);
     failed = true;
     const failure = await post('/test', { query: 'Rust references', count: 2 }); assert.equal(failure.status, 503);
-    assert.doesNotMatch(await failure.text(), /synthetic-search-secret|reflected/);
+    assert.deepEqual(await failure.json(), { code: 'SEARCH_AUTH_FAILED', params: { provider: 'Tavily' } },
+      'Provider authentication failures retain their safe category without the reflected response body or credentials');
     assert.equal((await post('', { enabled: true })).status, 200); assert.equal((await search.tools()).length, 1);
     assert.equal((await post('', { enabled: false })).status, 200); assert.deepEqual(await search.tools(), []);
     assert.doesNotMatch(await (await app.request('/api/settings/search', { headers })).text(), /synthetic-search-secret/);
     assert.equal((await createApp(access, undefined, undefined, undefined, undefined, new McpService(join(root, 'mcp.json'), { env: () => undefined, cwd: root }))
       .request('/api/settings/search', { headers })).status, 503);
   } finally { search.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('settings serialize semantic failures without disclosing error causes', async (t) => {
+  const { app, headers, db, models } = await fixture();
+  try {
+    for (const [error, status, body] of [
+      [new BusinessError(409, { code: 'CONTENT_CHANGED' }), 409, { code: 'CONTENT_CHANGED' }],
+      [new BusinessError(503, { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } }), 503,
+        { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } }],
+      [new Error('private configuration path and secret'), 503,
+        { code: 'SETTINGS_READ_FAILED' }],
+    ] as const) {
+      Object.assign(error, { cause: new Error('provider raw body'), secret: 'private-key' });
+      const mock = t.mock.method(models, 'settings', async () => { throw error; });
+      const response = await app.request('/api/settings/model', { headers });
+      assert.equal(response.status, status);
+      assert.deepEqual(await response.json(), body);
+      mock.mock.restore();
+    }
+  } finally { models.close(); db.close(); }
 });

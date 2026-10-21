@@ -11,6 +11,7 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
   return new Promise((resolve) => {
     const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], { cwd, env: terminalEnvironment(process.env), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = Buffer.alloc(0), stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), status: CommandResult['status'] | undefined, cleanup: Promise<void> | undefined;
+    let error: CommandResult['error'];
     const stop = (reason: CommandResult['status']) => {
       if (status) return;
       status = reason;
@@ -30,7 +31,7 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
       if (value.length > remaining) stop('output-limit');
     };
     child.stdout.on('data', (v: Buffer) => data(v, 'stdout')); child.stderr.on('data', (v: Buffer) => data(v, 'stderr'));
-    child.on('error', () => { status = signal.aborted ? 'cancelled' : 'unavailable'; });
+    child.on('error', () => { status = signal.aborted ? 'cancelled' : 'unavailable'; if (!signal.aborted) error = { code: 'LOCAL_EXECUTION_UNAVAILABLE' }; });
     // Kill remaining members of the detached process group even on normal
     // shell exit, so a background writer cannot outlive the operation.
     child.on('exit', () => { clearTimeout(timer); if (child.pid && !cleanup) cleanup = stopProcesses(groupMembers(child.pid)); });
@@ -38,7 +39,7 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
       clearTimeout(timer); signal.removeEventListener('abort', abort);
       void (async () => {
         await cleanup;
-        resolve({ status: status ?? (code === 0 ? 'succeeded' : code === 127 ? 'unavailable' : 'failed'), output: output.toString('utf8'), stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), exitCode: code, signal: exitSignal });
+        resolve({ status: status ?? (code === 0 ? 'succeeded' : code === 127 ? 'unavailable' : 'failed'), output: output.toString('utf8'), stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), exitCode: code, signal: exitSignal, ...(error ? { error } : {}) });
       })();
     });
   });

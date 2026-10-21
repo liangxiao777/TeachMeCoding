@@ -11,7 +11,7 @@ import { SearchService } from './search.js';
 import type { CodexAuthSource } from './codex-search.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { reply, response, syntheticSource, teachingModel } from '../agents/test-support.js';
-import { Learning } from '../modules/learning.js';
+import { BusinessError, Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
 function fixture(request: typeof fetch = async () => { throw new Error('Unexpected network request'); }, env = (_name: string): string | undefined => undefined) {
@@ -37,7 +37,7 @@ test('all requested providers are registered, no-key services are ready without 
     }
     assert.doesNotMatch(JSON.stringify(settings), /teaching-only-secret/);
     for (const provider of ['duckduckgo', 'firecrawl-free', 'codex']) {
-      assert.throws(() => service.save({ provider, apiKey: 'must-not-save' }), /不使用 API Key/);
+      assert.throws(() => service.save({ provider, apiKey: 'must-not-save' }), { message: 'SEARCH_API_KEY_UNSUPPORTED' });
     }
   } finally { close(); }
 });
@@ -116,7 +116,7 @@ test('provider model/region options persist independently and tools freeze their
       { provider: 'gemini', model: '../private' }, { provider: 'kimi', region: 'private' }]) assert.throws(() => service.save(input));
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), stored);
     await service.save({ provider: 'parallel', apiKey: 'synthetic-parallel-key' });
-    assert.throws(() => service.test({ query: 'x'.repeat(201) }), /200/);
+    assert.throws(() => service.test({ query: 'x'.repeat(201) }), { message: 'PARALLEL_QUERY_TOO_LONG' });
     assert.equal(calls.length, 2);
   } finally { close(); }
 });
@@ -147,7 +147,7 @@ test('Codex readiness follows login, executes a private hosted worker, and the m
   });
   try {
     await service.save({ provider: 'codex', enabled: true }); assert.deepEqual(await service.tools(), []);
-    await assert.rejects(service.test({ query: 'Rust' }), /请先登录 Codex/);
+    await assert.rejects(service.test({ query: 'Rust' }), { message: 'SEARCH_CODEX_LOGIN_REQUIRED', detail: { code: 'SEARCH_CODEX_LOGIN_REQUIRED', params: { provider: 'Codex Hosted Search' } } });
     assert.equal(children.length, 0);
     loggedIn = true;
     const settings = await service.settings();
@@ -160,7 +160,7 @@ test('Codex readiness follows login, executes a private hosted worker, and the m
     mode = 'cancel-after-ack';
     const started = new Promise<void>((resolve) => { entered = resolve; });
     const pending = tool.execute('cancel', { query: 'Rust' }); await started;
-    await service.save({ enabled: false }); await assert.rejects(pending, /已取消/);
+    await service.save({ enabled: false }); await assert.rejects(pending, { message: 'SEARCH_CANCELLED' });
     assert.equal(lstatSync(privateRoot, { throwIfNoEntry: false }), undefined);
     const completed = children.at(-1)!;
     assert.ok(completed.signalCode || completed.exitCode !== null);
@@ -215,7 +215,7 @@ test('environment credentials remain private, saved keys take precedence, and se
     assert.deepEqual(keys, ['synthetic-env-secret', 'synthetic-saved-secret']);
     service.save({ provider: 'tavily', enabled: true });
     assert.deepEqual(await service.tools(), []);
-    assert.throws(() => service.test({ query: 'documentation' }), /API Key/);
+    assert.throws(() => service.test({ query: 'documentation' }), { message: 'SEARCH_API_KEY_REQUIRED' });
     assert.equal(keys.length, 2); assert.doesNotMatch(JSON.stringify(await service.settings()), /secret/);
   } finally { close(); }
 });
@@ -277,7 +277,7 @@ test('Brave accepts documented empty responses without web, but never mistakes b
     }
     for (const value of [{}, { type: 'error', query: { original: 'docs' } }, { type: 'search' },
       { type: 'search', query: { original: 'docs' }, web: {} }, { type: 'search', query: { original: 'docs' }, web: { results: 'broken' } }]) {
-      payload = value; await assert.rejects(service.test({ query: 'docs' }), /有效搜索结果/);
+      payload = value; await assert.rejects(service.test({ query: 'docs' }), { message: 'SEARCH_RESULTS_UNAVAILABLE' });
     }
   } finally { close(); }
 });
@@ -291,7 +291,7 @@ test('Brave enforces both its character and word limits before making a request'
   try {
     service.save({ apiKey: 'synthetic-brave-secret' });
     await service.test({ query: 'x'.repeat(600) }); await service.test({ query: Array(75).fill('x').join(' ') });
-    for (const query of ['x'.repeat(601), Array(76).fill('x').join(' ')]) assert.throws(() => service.test({ query }), /600.*75/);
+    for (const query of ['x'.repeat(601), Array(76).fill('x').join(' ')]) assert.throws(() => service.test({ query }), { message: 'BRAVE_QUERY_TOO_LONG' });
     assert.deepEqual(queries, ['x'.repeat(600), Array(75).fill('x').join(' ')]);
   } finally { close(); }
 });
@@ -324,22 +324,27 @@ test('empty results succeed but malformed/error/oversize responses fail safely w
   try {
     service.save({ provider: 'tavily', apiKey: 'synthetic-private-secret' });
     assert.deepEqual((await service.test({ query: 'docs' })).results, []);
-    for (const status of [401, 403, 429, 502]) {
+    for (const status of [401, 403, 429, 502, 503]) {
       payload = new Response('synthetic-private-secret upstream diagnostics', { status });
-      await assert.rejects(service.test({ query: 'docs' }), (error: Error) => {
+      await assert.rejects(service.test({ query: 'docs' }), (error: unknown) => {
+        assert.ok(error instanceof BusinessError);
+        assert.equal(error.status, 503, 'upstream HTTP statuses do not replace the search service boundary status');
+        assert.deepEqual(error.detail, { code: status === 401 || status === 403 ? 'SEARCH_AUTH_FAILED'
+          : status === 429 ? 'SEARCH_RATE_LIMITED' : 'SEARCH_PROVIDER_UNAVAILABLE', params: { provider: 'Tavily' } });
         assert.doesNotMatch(error.message, /synthetic-private-secret|diagnostics/);
-        assert.match(error.message, status === 401 || status === 403 ? /认证/ : status === 429 ? /额度/ : /不可用/); return true;
+        assert.doesNotMatch(JSON.stringify(error), /synthetic-private-secret|diagnostics/);
+        assert.equal(error.message, error.detail.code); return true;
       });
     }
     for (const value of ['not JSON synthetic-private-secret', '{"unexpected":"synthetic-private-secret"}']) {
-      payload = new Response(value); await assert.rejects(service.test({ query: 'docs' }), /有效搜索结果/);
+      payload = new Response(value); await assert.rejects(service.test({ query: 'docs' }), { message: 'SEARCH_RESULTS_UNAVAILABLE' });
     }
     const json = '{"results":[]}';
     payload = new Response(json + ' '.repeat(1024 * 1024 - json.length));
     assert.deepEqual((await service.test({ query: 'docs' })).results, [], 'exactly 1 MiB is accepted');
     payload = new Response(json + ' '.repeat(1024 * 1024 + 1 - json.length));
-    await assert.rejects(service.test({ query: 'docs' }), /有效搜索结果/);
-    assert.equal(calls, 9, 'no automatic retries or provider fallback');
+    await assert.rejects(service.test({ query: 'docs' }), { message: 'SEARCH_RESULTS_UNAVAILABLE' });
+    assert.equal(calls, 10, 'no automatic retries or provider fallback');
   } finally { close(); }
 });
 
@@ -351,8 +356,8 @@ test('deadline and already-aborted requests never call the network', async (t) =
     t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
       assert.equal(milliseconds, 30_000); return AbortSignal.abort(new DOMException('deadline', 'TimeoutError'));
     });
-    await assert.rejects(service.test({ query: 'docs' }), /超时/); t.mock.restoreAll();
-    await assert.rejects(service.test({ query: 'docs' }, AbortSignal.abort()), /取消/);
+    await assert.rejects(service.test({ query: 'docs' }), { message: 'SEARCH_TIMEOUT' }); t.mock.restoreAll();
+    await assert.rejects(service.test({ query: 'docs' }, AbortSignal.abort()), { message: 'SEARCH_CANCELLED' });
     assert.equal(calls, 0);
   } finally { t.mock.restoreAll(); close(); }
 });
@@ -369,8 +374,8 @@ test('disable, shutdown and parent cancellation abort active Agent searches; dis
       const tool = (await service.tools())[0]!, controller = new AbortController();
       const pending = tool.execute('cancel', { query: 'docs' }, controller.signal); await ready;
       if (action === 'disable') service.save({ enabled: false }); else if (action === 'shutdown') service.close(); else controller.abort();
-      await assert.rejects(pending, /取消/);
-      if (action === 'disable') { assert.deepEqual(await service.tools(), []); await assert.rejects(tool.execute('later', { query: 'docs' }), /关闭/); }
+      await assert.rejects(pending, { message: 'SEARCH_CANCELLED' });
+      if (action === 'disable') { assert.deepEqual(await service.tools(), []); await assert.rejects(tool.execute('later', { query: 'docs' }), { message: 'SEARCH_DISABLED' }); }
     } finally { close(); }
   }
 });

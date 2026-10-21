@@ -76,6 +76,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
+import { notice, NoticeError } from "@/i18n/notice";
 
 // ============================================================================
 // Helpers
@@ -127,7 +130,7 @@ const captureScreenshot = async (): Promise<File | null> => {
       // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
       video.onloadedmetadata = () => resolve();
       // oxlint-disable-next-line eslint-plugin-unicorn(prefer-add-event-listener)
-      video.onerror = () => reject(new Error("Failed to load screen stream"));
+      video.onerror = () => reject(new NoticeError(notice('common', 'errors.screen')));
     });
 
     await video.play();
@@ -418,10 +421,11 @@ export type PromptInputActionAddAttachmentsProps = ComponentProps<
 };
 
 export const PromptInputActionAddAttachments = ({
-  label = "Add photos or files",
+  label,
   onClick,
   ...props
 }: PromptInputActionAddAttachmentsProps) => {
+  const { t } = useTranslation();
   const attachments = usePromptInputAttachments();
 
   const handleClick = useCallback<
@@ -440,7 +444,7 @@ export const PromptInputActionAddAttachments = ({
 
   return (
     <DropdownMenuItem closeOnClick={false} {...props} onClick={handleClick}>
-      <ImageIcon className="mr-2 size-4" /> {label}
+      <ImageIcon className="mr-2 size-4" /> {label ?? t('chat.addFiles')}
     </DropdownMenuItem>
   );
 };
@@ -452,10 +456,11 @@ export type PromptInputActionAddScreenshotProps = ComponentProps<
 };
 
 export const PromptInputActionAddScreenshot = ({
-  label = "Take screenshot",
+  label,
   onClick,
   ...props
 }: PromptInputActionAddScreenshotProps) => {
+  const { t } = useTranslation();
   const attachments = usePromptInputAttachments();
 
   const handleClick = useCallback<
@@ -489,7 +494,7 @@ export const PromptInputActionAddScreenshot = ({
   return (
     <DropdownMenuItem {...props} onClick={handleClick}>
       <Monitor className="mr-2 size-4" />
-      {label}
+      {label ?? t('chat.screenshot')}
     </DropdownMenuItem>
   );
 };
@@ -537,6 +542,7 @@ export const PromptInput = ({
   children,
   ...props
 }: PromptInputProps) => {
+  const { t } = useTranslation();
   // Try to use a provider controller if present
   const controller = useOptionalPromptInputController();
   const usingProvider = !!controller;
@@ -595,7 +601,7 @@ export const PromptInput = ({
       if (incoming.length && accepted.length === 0) {
         onError?.({
           code: "accept",
-          message: "No files match the accepted types.",
+          get message() { return i18n.t('errors.fileType'); },
         });
         return;
       }
@@ -605,7 +611,7 @@ export const PromptInput = ({
       if (accepted.length > 0 && sized.length === 0) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          get message() { return i18n.t('errors.fileSize'); },
         });
         return;
       }
@@ -620,7 +626,7 @@ export const PromptInput = ({
         if (typeof capacity === "number" && sized.length > capacity) {
           onError?.({
             code: "max_files",
-            message: "Too many files. Some were not added.",
+            get message() { return i18n.t('errors.fileCount'); },
           });
         }
         const next: (FileUIPart & { id: string })[] = [];
@@ -659,7 +665,7 @@ export const PromptInput = ({
       if (incoming.length && accepted.length === 0) {
         onError?.({
           code: "accept",
-          message: "No files match the accepted types.",
+          get message() { return i18n.t('errors.fileType'); },
         });
         return;
       }
@@ -669,7 +675,7 @@ export const PromptInput = ({
       if (accepted.length > 0 && sized.length === 0) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          get message() { return i18n.t('errors.fileSize'); },
         });
         return;
       }
@@ -684,7 +690,7 @@ export const PromptInput = ({
       if (typeof capacity === "number" && sized.length > capacity) {
         onError?.({
           code: "max_files",
-          message: "Too many files. Some were not added.",
+          get message() { return i18n.t('errors.fileCount'); },
         });
       }
 
@@ -922,12 +928,12 @@ export const PromptInput = ({
     <>
       <input
         accept={accept}
-        aria-label="Upload files"
+        aria-label={t('chat.upload')}
         className="hidden"
         multiple={multiple}
         onChange={handleChange}
         ref={inputRef}
-        title="Upload files"
+        title={t('chat.upload')}
         type="file"
       />
       <form
@@ -972,9 +978,10 @@ export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
   className,
-  placeholder = "What would you like to know?",
+  placeholder,
   ...props
 }: PromptInputTextareaProps) => {
+  const { t } = useTranslation();
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
@@ -1077,7 +1084,7 @@ export const PromptInputTextarea = ({
       onCompositionStart={handleCompositionStart}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
-      placeholder={placeholder}
+      placeholder={placeholder ?? t('chat.placeholder')}
       {...props}
       {...controlledProps}
     />
@@ -1235,6 +1242,7 @@ export const PromptInputSubmit = ({
   children,
   ...props
 }: PromptInputSubmitProps) => {
+  const { t } = useTranslation();
   const isGenerating = status === "submitted" || status === "streaming";
 
   let Icon = <CornerDownLeftIcon className="size-4" />;
@@ -1263,7 +1271,7 @@ export const PromptInputSubmit = ({
 
   return (
     <InputGroupButton
-      aria-label={isGenerating ? "Stop" : "Submit"}
+      aria-label={t(isGenerating ? 'chat.stop' : 'chat.submit')}
       className={cn(className)}
       onClick={handleClick}
       size={size}

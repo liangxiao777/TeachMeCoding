@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { intakeMetadataSchema, questionAnswerSchema, questionInputSchema, researchInputSchema,
-  type IntakeMetadata, type IntakeReadiness, type QuestionRound, type RequirementState, type ResearchDossier, type ResearchRef } from '@teach-me-coding/contracts';
+import { businessErrorResponse, intakeMetadataSchema, questionAnswerSchema, questionInputSchema, researchInputSchema,
+  type BusinessErrorDetail, type IntakeMetadata, type IntakeReadiness, type QuestionRound, type RequirementState, type ResearchDossier, type ResearchRef } from '@teach-me-coding/contracts';
 import { BusinessError } from './learning.js';
 
 export class Intake {
@@ -10,7 +10,7 @@ export class Intake {
   research(space: string, ref: ResearchRef): ResearchDossier {
     const row = this.db.prepare('SELECT value FROM research_dossiers WHERE space_id=? AND id=? AND revision=?')
       .get(space, ref.id, ref.revision) as { value: string } | undefined;
-    if (!row) throw new BusinessError(404, '所属空间的调研资料版本不存在。');
+    if (!row) throw new BusinessError(404, { code: 'RESEARCH_VERSION_NOT_FOUND' });
     return JSON.parse(row.value) as ResearchDossier;
   }
   nextResearch(space: string, previous?: ResearchRef | null): ResearchRef {
@@ -32,18 +32,24 @@ export class Intake {
     intakeMetadataSchema.parse(value);
     if (value.researchRef) this.research(space, value.researchRef);
   }
-  readiness(space: string, requirement: RequirementState, checkQuestions = true): IntakeReadiness {
-    const reasons: string[] = [];
-    if (!requirement.value.rows.some((row) => row.question.trim() && row.answer.trim())) reasons.push('请先整理学习需求。');
+  private readinessIssues(space: string, requirement: RequirementState, checkQuestions: boolean) {
+    const issues: BusinessErrorDetail[] = [];
+    if (!requirement.value.rows.some((row) => row.question.trim() && row.answer.trim())) {
+      issues.push({ code: 'REQUIREMENT_EMPTY' });
+    }
     if (requirement.intake) this.validateMetadata(space, requirement.intake);
     if (checkQuestions && this.db.prepare("SELECT 1 FROM intake_questions WHERE space_id=? AND json_extract(value,'$.state')='pending'").get(space)) {
-      reasons.push('请回答待确认问题，或修改需求后重新核对。');
+      issues.push({ code: 'INTAKE_QUESTIONS_PENDING' });
     }
-    return { ready: reasons.length === 0, reasons };
+    return issues;
+  }
+  readiness(space: string, requirement: RequirementState, checkQuestions = true): IntakeReadiness {
+    const issues = this.readinessIssues(space, requirement, checkQuestions);
+    return { ready: issues.length === 0, issues: issues.map(businessErrorResponse) };
   }
   assertReady(space: string, requirement: RequirementState, checkQuestions = true) {
-    const state = this.readiness(space, requirement, checkQuestions);
-    if (!state.ready) throw new BusinessError(422, state.reasons.join(' '));
+    const issues = this.readinessIssues(space, requirement, checkQuestions);
+    if (issues.length) throw new BusinessError(422, issues.length > 1 ? { code: 'INTAKE_NOT_READY' } : issues[0]!);
   }
   questions(space: string, session: string): QuestionRound[] {
     const rows = this.db.prepare('SELECT value FROM intake_questions WHERE space_id=? AND session_id=? ORDER BY rowid')
@@ -57,7 +63,7 @@ export class Intake {
   prepareQuestions(sessionId: string, runId: string, generationRevision: number, raw: unknown): QuestionRound {
     const value = questionInputSchema.parse(raw);
     for (const question of value.questions) if (new Set(question.options.map((option) => option.label)).size !== question.options.length) {
-      throw new BusinessError(422, '问题选项不能重复。');
+      throw new BusinessError(422, { code: 'DUPLICATE_QUESTION_OPTIONS' });
     }
     return { id: randomUUID(), sessionId, runId, generationRevision, requirementRevision: generationRevision, createdAt: Date.now(),
       state: 'pending', answers: null, questions: value.questions.map((q) => ({ ...q, id: randomUUID(),
@@ -70,17 +76,17 @@ export class Intake {
   }
   acceptAnswer(space: string, session: string, roundId: string, revision: number, raw: unknown): string {
     const round = this.questions(space, session).find((q) => q.id === roundId);
-    if (!round) throw new BusinessError(404, '所属会话的问题不存在。');
-    if (round.state !== 'pending' || round.requirementRevision !== revision) throw new BusinessError(409, '问题已回答或需求已改变，请读取最新问题。');
+    if (!round) throw new BusinessError(404, { code: 'QUESTION_NOT_FOUND' });
+    if (round.state !== 'pending' || round.requirementRevision !== revision) throw new BusinessError(409, { code: 'QUESTION_OUTDATED' });
     const { answers } = questionAnswerSchema.parse(raw);
     if (answers.length !== round.questions.length || new Set(answers.map((a) => a.questionId)).size !== answers.length) {
-      throw new BusinessError(422, '请回答这一轮的每个问题，不要重复提交。');
+      throw new BusinessError(422, { code: 'INCOMPLETE_ANSWERS' });
     }
     const lines = round.questions.map((q) => {
       const a = answers.find((answer) => answer.questionId === q.id);
       if (!a || new Set(a.optionIds).size !== a.optionIds.length || !a.optionIds.every((id) => q.options.some((o) => o.id === id))
         || (!a.optionIds.length && !a.customText) || (!q.multiple && a.optionIds.length + Number(!!a.customText) !== 1)) {
-        throw new BusinessError(422, '回答选项无效；单选只能选择一项或填写自定义回答。');
+        throw new BusinessError(422, { code: 'INVALID_ANSWER_OPTIONS' });
       }
       return `${q.prompt}\n${[...a.optionIds.map((id) => q.options.find((o) => o.id === id)!.label), ...(a.customText ? [a.customText] : [])].join('；')}`;
     });

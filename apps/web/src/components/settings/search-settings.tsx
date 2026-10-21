@@ -1,7 +1,10 @@
 import { ExternalLink, LogIn, LogOut } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { LoginSession, SearchProvider, SearchSettings, WebSearchResponse } from '@teach-me-coding/contracts'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/i18n/format'
+import { formatNotice, notice, type UiNotice } from '@/i18n/notice'
 import { useApp } from '@/app/context'
 import { LoginFlow } from './model-settings'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -15,6 +18,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 
 export function SearchSettingsForm({ active }: { active: boolean }) {
+  const { t } = useTranslation('settings')
   const { refreshCapabilities } = useApp()
   const [settings, setSettings] = useState<SearchSettings | null>(null)
   const [provider, setProvider] = useState<SearchProvider>('brave')
@@ -22,7 +26,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
   const [model, setModel] = useState('')
   const [region, setRegion] = useState<'global' | 'cn' | ''>('')
   const [busy, setBusy] = useState<'save' | 'toggle' | 'test' | 'logout' | 'cancel' | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<Error | UiNotice | null>(null)
   const [result, setResult] = useState<WebSearchResponse | null>(null)
   const [login, setLogin] = useState<LoginSession | null>(null)
   const [startingLogin, setStartingLogin] = useState(false)
@@ -43,20 +47,20 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
   }, [])
   const requested = useRef(false)
   const load = async () => {
-    setError('')
+    setError(null)
     try {
       const next = await api<SearchSettings>('/settings/search')
       setSettings(next); setProvider(next.provider)
       const selected = next.providers.find((entry) => entry.id === next.provider)
       setModel(selected?.model ?? ''); setRegion(selected?.region ?? '')
-    } catch (error) { setError(error instanceof Error ? error.message : '无法读取搜索设置。') }
+    } catch (error) { setError(error instanceof Error ? error : notice('settings', 'errors.loadSearch')) }
   }
   useEffect(() => {
     if (active && !requested.current) { requested.current = true; void load() }
     else if (active) {
       const generation = loginGeneration.current
       void refreshAuth(generation).catch((error: unknown) => {
-        if (generation === loginGeneration.current) setError(error instanceof Error ? error.message : '无法读取搜索设置。')
+        if (generation === loginGeneration.current) setError(error instanceof Error ? error : notice('settings', 'errors.loadSearch'))
       })
     }
   }, [active])
@@ -107,7 +111,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
         if (generation !== loginGeneration.current || loginRef.current?.state !== 'running') return
         await acceptLogin(next, generation)
       } catch (error) {
-        if (generation === loginGeneration.current) setError(error instanceof Error ? error.message : '无法读取登录状态。')
+        if (generation === loginGeneration.current) setError(error instanceof Error ? error : notice('settings', 'errors.loadLogin'))
       }
       if (generation === loginGeneration.current && loginRef.current?.state === 'running') poll.current = setTimeout(tick, 800)
     }
@@ -117,7 +121,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
     if (startingRef.current || loginRef.current?.state === 'running' || busy || !active) return
     const generation = loginGeneration.current
     startingRef.current = true
-    setStartingLogin(true); setError(''); setResult(null)
+    setStartingLogin(true); setError(null); setResult(null)
     try {
       const session = await api<LoginSession>('/settings/providers/openai-codex/login', { type: 'oauth' })
       if (generation !== loginGeneration.current) {
@@ -127,7 +131,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
       await acceptLogin(session, generation)
       if (session.state === 'running') watchLogin(session.id, generation)
     } catch (error) {
-      if (generation === loginGeneration.current) setError(error instanceof Error ? error.message : '无法启动登录。')
+      if (generation === loginGeneration.current) setError(error instanceof Error ? error : notice('settings', 'errors.startLogin'))
     } finally {
       startingRef.current = false; setStartingLogin(false)
     }
@@ -141,7 +145,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
       const next = await api<LoginSession>(`/settings/login/${session.id}/answer`, { promptId, value })
       if (loginRef.current?.id === session.id && loginRef.current.state === 'running') await acceptLogin(next, generation)
     } catch (error) {
-      if (generation === loginGeneration.current) setError(error instanceof Error ? error.message : '无法提交登录信息。')
+      if (generation === loginGeneration.current) setError(error instanceof Error ? error : notice('settings', 'errors.answerLogin'))
     } finally { if (generation === loginGeneration.current) setAnswering(false) }
   }
   const cancelLogin = async () => {
@@ -158,21 +162,21 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
     catch (error) {
       if (generation === loginGeneration.current) {
         setCancellingLogin(false)
-        setError(error instanceof Error ? error.message : '无法取消登录。')
+        setError(error instanceof Error ? error : notice('settings', 'errors.cancelLogin'))
         updateLogin(session); watchLogin(session.id, generation)
       }
     } finally { setBusy(null) }
   }
   const logout = async () => {
-    setBusy('logout'); setError(''); setResult(null); updateLogin(null)
+    setBusy('logout'); setError(null); setResult(null); updateLogin(null)
     try {
       await api('/settings/providers/openai-codex/logout', {})
       await refreshAuth(loginGeneration.current)
-    } catch (error) { setError(error instanceof Error ? error.message : '无法退出登录。') }
+    } catch (error) { setError(error instanceof Error ? error : notice('settings', 'errors.logout')) }
     finally { setBusy(null) }
   }
   const write = async (action: 'save' | 'toggle', input: unknown) => {
-    setBusy(action); setError(''); setResult(null)
+    setBusy(action); setError(null); setResult(null)
     try {
       const next = await api<SearchSettings>('/settings/search', input)
       setSettings(next)
@@ -181,49 +185,49 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
         setProvider(next.provider); setApiKey('')
         setModel(selected?.model ?? ''); setRegion(selected?.region ?? '')
       }
-    } catch (error) { setError(error instanceof Error ? error.message : '无法保存搜索设置。') }
+    } catch (error) { setError(error instanceof Error ? error : notice('settings', 'errors.saveSearch')) }
     finally { setBusy(null) }
   }
   const test = async () => {
-    setBusy('test'); setError(''); setResult(null)
-    try { setResult(await api<WebSearchResponse>('/settings/search/test', { query: 'Rust 官方文档', count: 5 })) }
-    catch (error) { setError(error instanceof Error ? error.message : '测试搜索失败，请重试。') }
+    setBusy('test'); setError(null); setResult(null)
+    try { setResult(await api<WebSearchResponse>('/settings/search/test', { query: 'Rust official documentation', count: 5 })) }
+    catch (error) { setError(error instanceof Error ? error : notice('settings', 'errors.testSearch')) }
     finally { setBusy(null) }
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h2 className="text-2xl font-semibold tracking-tight">搜索服务</h2>
-        <p className="text-sm text-muted-foreground">为 Agent 提供网络搜索，独立于教学模型。</p>
+        <h2 className="text-2xl font-semibold tracking-tight">{t('categories.search')}</h2>
+        <p className="text-sm text-muted-foreground">{t('search.description')}</p>
       </div>
-      {error && <Alert variant="destructive"><AlertDescription>{error}
-        {!settings && <Button variant="outline" size="sm" onClick={() => void load()}>重试</Button>}
+      {error && <Alert variant="destructive"><AlertDescription>{formatNotice(error)}
+        {!settings && <Button variant="outline" size="sm" onClick={() => void load()}>{t('actions.retry')}</Button>}
       </AlertDescription></Alert>}
-      {!settings ? !error && <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner /> 正在读取搜索设置…</div> : <>
+      {!settings ? !error && <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner /> {t('search.loading')}</div> : <>
         <Card>
           <CardContent className="flex items-center justify-between gap-4">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="search-enabled" className="font-medium">启用搜索服务</label>
-              <p className="text-sm text-muted-foreground">关闭后保留配置，停用此搜索工具。</p>
+              <label htmlFor="search-enabled" className="font-medium">{t('search.enable')}</label>
+              <p className="text-sm text-muted-foreground">{t('search.disableDescription')}</p>
             </div>
             <Switch id="search-enabled" checked={settings.enabled} disabled={blocked}
               onCheckedChange={(enabled) => void write('toggle', { enabled })} />
           </CardContent>
         </Card>
         {settings.enabled && !saved?.ready && <Alert><AlertDescription>
-          {saved?.authentication === 'oauth' ? '搜索已启用，但当前服务尚未登录。请先登录 Codex。' : '搜索已启用，但当前服务尚未配置凭据。请先保存 API Key。'}
+          {saved?.authentication === 'oauth' ? t('search.needsLogin') : t('search.needsCredentials')}
         </AlertDescription></Alert>}
         <Card>
-          <CardHeader><CardTitle><h3>服务配置</h3></CardTitle></CardHeader>
+          <CardHeader><CardTitle><h3>{t('search.configuration')}</h3></CardTitle></CardHeader>
           <CardContent>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="search-provider">搜索服务商</FieldLabel>
+                <FieldLabel htmlFor="search-provider">{t('search.provider')}</FieldLabel>
                 <Select value={provider} disabled={!!busy} onValueChange={(value) => {
                   if (value && value !== provider) {
                     const selected = settings.providers.find((entry) => entry.id === value)
-                    setProvider(value as SearchProvider); setApiKey(''); setResult(null); setError('')
+                    setProvider(value as SearchProvider); setApiKey(''); setResult(null); setError(null)
                     setModel(selected?.model ?? ''); setRegion(selected?.region ?? '')
                   }
                 }}>
@@ -233,46 +237,46 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
               </Field>
               {current?.authentication === 'api_key' && <Field>
                 <div className="flex flex-wrap items-center gap-2">
-                  <FieldLabel htmlFor="search-api-key">API Key</FieldLabel>
+                  <FieldLabel htmlFor="search-api-key">{t('search.apiKey')}</FieldLabel>
                   <Badge variant={current?.configured ? 'secondary' : 'outline'} className="font-normal text-muted-foreground">
-                    {current?.configured === 'saved' ? '已保存凭据' : current?.configured === 'environment' ? '使用服务端环境凭据' : '未配置凭据'}
+                    {current?.configured === 'saved' ? t('search.savedCredentials') : current?.configured === 'environment' ? t('search.environmentCredentials') : t('search.missingCredentials')}
                   </Badge>
                   {current.apiKeyUrl && <a href={current.apiKeyUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-                    获取 API Key<ExternalLink className="size-3" />
+                    {t('search.getApiKey')}<ExternalLink className="size-3" />
                   </a>}
                 </div>
                 <Input id="search-api-key" type="password" autoComplete="new-password" value={apiKey} disabled={blocked}
-                  placeholder={current?.configured ? '留空保留已配置的凭据' : '输入 API Key'}
+                  placeholder={current?.configured ? t('search.keepCredentials') : t('search.enterApiKey')}
                   onChange={(event) => { setApiKey(event.target.value); setResult(null) }} />
               </Field>}
-              {current?.authentication === 'none' && <div><Badge variant="secondary" className="font-normal text-muted-foreground">无需 API Key</Badge></div>}
+              {current?.authentication === 'none' && <div><Badge variant="secondary" className="font-normal text-muted-foreground">{t('search.noApiKey')}</Badge></div>}
               {current?.authentication === 'oauth' && <Field>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant={current.configured ? 'secondary' : 'outline'} className="font-normal text-muted-foreground">
-                    {current.configured === 'account' ? '已登录 · Codex' : '未登录 · Codex'}
+                    {current.configured === 'account' ? t('search.signedIn') : t('search.signedOut')}
                   </Badge>
                   <Button variant="outline" disabled={blocked} onClick={() => void startLogin()}>
-                    {startingLogin ? <Spinner aria-hidden="true" /> : <LogIn data-icon="inline-start" />}登录 Codex
+                    {startingLogin ? <Spinner aria-hidden="true" /> : <LogIn data-icon="inline-start" />}{t('search.signIn')}
                   </Button>
                   {current.configured === 'account' && <Button variant="ghost" disabled={blocked} onClick={() => void logout()}>
-                    <LogOut data-icon="inline-start" />退出登录
+                    <LogOut data-icon="inline-start" />{t('search.signOut')}
                   </Button>}
                 </div>
                 {login && login.state !== 'succeeded' && <LoginFlow key={login.id} session={login} answering={answering || cancellingLogin}
                   onAnswer={(id, value) => void answerLogin(id, value)} onCancel={() => void cancelLogin()} />}
               </Field>}
               {current?.model !== undefined && <Field>
-                <FieldLabel htmlFor="search-model">搜索模型</FieldLabel>
+                <FieldLabel htmlFor="search-model">{t('search.model')}</FieldLabel>
                 <Input id="search-model" value={model} maxLength={100} disabled={blocked}
                   onChange={(event) => { setModel(event.target.value); setResult(null) }} />
               </Field>}
               {current?.region !== undefined && <Field>
-                <FieldLabel htmlFor="search-region">服务区域</FieldLabel>
+                <FieldLabel htmlFor="search-region">{t('search.region')}</FieldLabel>
                 <Select value={region} disabled={blocked} onValueChange={(value) => {
                   if (value === 'global' || value === 'cn') { setRegion(value); setResult(null) }
                 }}>
-                  <SelectTrigger id="search-region" className="w-full"><SelectValue>{region === 'cn' ? '中国' : '全球'}</SelectValue></SelectTrigger>
-                  <SelectContent><SelectItem value="global">全球</SelectItem><SelectItem value="cn">中国</SelectItem></SelectContent>
+                  <SelectTrigger id="search-region" className="w-full"><SelectValue>{region === 'cn' ? t('search.china') : t('search.global')}</SelectValue></SelectTrigger>
+                  <SelectContent><SelectItem value="global">{t('search.global')}</SelectItem><SelectItem value="cn">{t('search.china')}</SelectItem></SelectContent>
                 </Select>
               </Field>}
             </FieldGroup>
@@ -284,28 +288,28 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
                 ...(current?.model !== undefined ? { model: model.trim() } : {}),
                 ...(current?.region !== undefined ? { region } : {}),
               })}>
-                {busy === 'save' && <Spinner />}保存配置
+                {busy === 'save' && <Spinner />}{t('search.save')}
               </Button>
               <Button variant="outline" disabled={blocked || dirty || !saved?.ready} onClick={() => void test()}>
-                {busy === 'test' && <Spinner />}测试搜索
+                {busy === 'test' && <Spinner />}{t('search.test')}
               </Button>
             </div>
-            {dirty && <p className="text-xs text-muted-foreground">请先保存配置再测试。</p>}
+            {dirty && <p className="text-xs text-muted-foreground">{t('search.saveBeforeTest')}</p>}
           </CardFooter>
         </Card>
         {result && <Card role="status" aria-live="polite">
           <CardHeader>
-            <CardTitle><h3>测试完成</h3></CardTitle>
-            <CardDescription>{settings.providers.find((entry) => entry.id === result.provider)?.name} · {result.answer ? `已生成回答 · ${result.results.length} 条来源` : `${result.results.length} 条结果`} · <span className="whitespace-nowrap">{result.tookMs} ms</span></CardDescription>
+            <CardTitle><h3>{t('search.testComplete')}</h3></CardTitle>
+            <CardDescription>{settings.providers.find((entry) => entry.id === result.provider)?.name} · {result.answer ? t('search.answerSources', { count: result.results.length, formattedCount: formatNumber(result.results.length) }) : t('search.results', { count: result.results.length, formattedCount: formatNumber(result.results.length) })} · <span className="whitespace-nowrap">{t('search.duration', { duration: formatNumber(result.tookMs) })}</span></CardDescription>
           </CardHeader>
           <CardContent className="flex min-w-0 flex-col gap-4">
             {result.answer && <div className="min-w-0">
-              <h4 className="mb-2 text-sm font-medium">搜索回答</h4>
+              <h4 className="mb-2 text-sm font-medium">{t('search.answer')}</h4>
               <p className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{result.answer}</p>
             </div>}
-            {!result.results.length && !result.answer && <p className="text-sm text-muted-foreground">服务已响应，但没有找到匹配的结果。</p>}
+            {!result.results.length && !result.answer && <p className="text-sm text-muted-foreground">{t('search.noResults')}</p>}
             {!!result.results.length && <>
-              {result.answer && <h4 className="text-sm font-medium">参考来源</h4>}
+              {result.answer && <h4 className="text-sm font-medium">{t('search.sources')}</h4>}
               <ol className="flex flex-col gap-4">{result.results.map((entry, index) => <li key={`${index}:${entry.url}`} className="min-w-0">
                 <a href={/^https?:\/\//i.test(entry.url) ? entry.url : undefined} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-start gap-1.5 font-medium underline underline-offset-4 break-words [overflow-wrap:anywhere]">
                   <span className="min-w-0">{entry.title}</span><ExternalLink className="mt-0.5 size-3 shrink-0" />

@@ -1,4 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { useTranslation } from 'react-i18next'
+import { formatNumber } from '@/i18n/format'
 import { CheckCircle2, ChevronDown, Circle, CircleSlash, LoaderCircle, Wrench, XCircle } from 'lucide-react'
 import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { ToolInput } from '@/components/ai-elements/tool'
@@ -8,16 +10,17 @@ import { uiMotion } from '@/lib/motion'
 type ToolCall = Extract<AgentDisplayPart, { type: 'tool' }>
 
 const statuses = {
-  generating: { label: '准备中', icon: Circle },
-  ready: { label: '等待执行', icon: Circle },
-  running: { label: '执行中', icon: LoaderCircle },
-  done: { label: '成功', icon: CheckCircle2 },
-  error: { label: '失败', icon: XCircle },
-  interrupted: { label: '已中断', icon: CircleSlash },
+  generating: { icon: Circle },
+  ready: { icon: Circle },
+  running: { icon: LoaderCircle },
+  done: { icon: CheckCircle2 },
+  error: { icon: XCircle },
+  interrupted: { icon: CircleSlash },
 }
 
 /** One complete run, including tool calls separated by text or model requests. */
 export function ToolCallGroup({ calls, streaming }: { calls: ToolCall[]; streaming: boolean }) {
+  const { t } = useTranslation('workbench')
   const reducedMotion = useReducedMotion()
   const latest = calls[calls.length - 1]!
   const active = calls.some((call) => ['generating', 'ready', 'running'].includes(call.status))
@@ -27,15 +30,15 @@ export function ToolCallGroup({ calls, streaming }: { calls: ToolCall[]; streami
 
   return (
     <Collapsible className="tool-disclosure group/tool-group min-w-0 rounded-lg border" defaultOpen={false} data-testid="tool-call-group">
-      <CollapsibleTrigger className="flex w-full min-w-0 flex-col gap-2 rounded-lg p-3 text-left hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring" aria-label="工具调用">
+      <CollapsibleTrigger className="flex w-full min-w-0 flex-col gap-2 rounded-lg p-3 text-left hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring" aria-label={t('tools.title')}>
         <span className="flex w-full items-center gap-2.5 text-sm">
           <Wrench className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="font-medium">工具调用</span>
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground" data-testid="tool-call-count">{calls.length} 次调用</span>
+          <span className="font-medium">{t('tools.title')}</span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground" data-testid="tool-call-count">{t('tools.count', { count: calls.length })}</span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground group-data-open/tool-group:rotate-180" aria-hidden />
         </span>
         <span className="flex w-full min-w-0 items-center gap-2 pl-6.5 text-xs" data-testid="tool-call-summary">
-          <span className="shrink-0 text-muted-foreground">{active ? '正在调用：' : streaming ? '最近调用：' : '调用结束：'}</span>
+          <span className="shrink-0 text-muted-foreground">{active ? t('tools.active') : streaming ? t('tools.recent') : t('tools.finished')}</span>
           <span className="relative flex h-6 min-w-0 flex-1 overflow-hidden" data-testid="tool-call-ticker">
             <AnimatePresence initial={false}>
               <motion.code key={latest.id} data-call-id={latest.id} title={latest.name}
@@ -43,19 +46,19 @@ export function ToolCallGroup({ calls, streaming }: { calls: ToolCall[]; streami
                 initial={{ y: reducedMotion ? 0 : '100%', opacity: reducedMotion ? 1 : 0 }}
                 animate={{ y: 0, opacity: 1 }} exit={{ y: reducedMotion ? 0 : '-100%', opacity: reducedMotion ? 1 : 0 }}
                 transition={{ duration: reducedMotion ? 0 : uiMotion.content, ease: uiMotion.ease }}>
-                {latest.name || '工具调用'}
+                {latest.name || t('tools.title')}
               </motion.code>
             </AnimatePresence>
           </span>
-          <span className="shrink-0 text-muted-foreground">{succeeded} 次成功</span>
+          <span className="shrink-0 text-muted-foreground">{t('tools.succeeded', { count: succeeded })}</span>
         </span>
       </CollapsibleTrigger>
       {(failed > 0 || interrupted > 0) && (
         <p className="border-t px-3 py-2 text-xs text-muted-foreground" data-testid="tool-call-issues">
-          {failed > 0 && <span className="text-destructive">{failed} 次失败</span>}
+          {failed > 0 && <span className="text-destructive">{t('tools.failed', { count: failed })}</span>}
           {failed > 0 && interrupted > 0 && ' · '}
-          {interrupted > 0 && <span>{interrupted} 次中断</span>}
-          <span>，展开查看记录</span>
+          {interrupted > 0 && <span>{t('tools.interrupted', { count: interrupted })}</span>}
+          <span>{t('tools.expand')}</span>
         </p>
       )}
       <CollapsibleContent>
@@ -67,11 +70,11 @@ export function ToolCallGroup({ calls, streaming }: { calls: ToolCall[]; streami
             return (
               <Collapsible key={call.id} className="tool-disclosure group/tool-call border-b last:border-b-0" data-testid="tool-call" data-call-id={call.id}>
                 <CollapsibleTrigger disabled={!hasInput} className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default">
-                  <span className="w-5 shrink-0 text-muted-foreground">{index + 1}.</span>
-                  <code className="min-w-0 flex-1 truncate" title={call.name}>{call.name || '工具调用'}</code>
+                  <span className="w-5 shrink-0 text-muted-foreground">{formatNumber(index + 1)}.</span>
+                  <code className="min-w-0 flex-1 truncate" title={call.name}>{call.name || t('tools.title')}</code>
                   <span className={`flex shrink-0 items-center gap-1.5 ${call.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}`}>
                     <StatusIcon className={`size-3.5 ${call.status === 'running' ? 'motion-safe:animate-spin' : ''}`} aria-hidden />
-                    {status.label}
+                    {t(`tools.status.${call.status}`)}
                   </span>
                   <ChevronDown className={`size-3.5 shrink-0 text-muted-foreground group-data-open/tool-call:rotate-180 ${hasInput ? '' : 'invisible'}`} aria-hidden />
                 </CollapsibleTrigger>

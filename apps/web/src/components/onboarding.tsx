@@ -2,6 +2,8 @@
 
 import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Square, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { formatNotice, notice, type NoticeValue } from '@/i18n/notice'
 import { AgentMessage, SessionMenu } from '@/components/agent/agent-panel'
 import { RunContent } from '@/components/agent/run-content'
 import { RunContext } from '@/components/agent/run-context'
@@ -29,6 +31,7 @@ import { ThemeToggle } from '@/app/theme'
 import { LibraryButton } from '@/components/library-page'
 
 function RequirementCard() {
+  const { t } = useTranslation('learning')
   const space = useSpace()
   const { updateRequirement, confirmRequirement, setView, capabilities, persistence } = useApp()
   const [previewEditing, setEditing] = useState(false)
@@ -37,7 +40,7 @@ function RequirementCard() {
   const setDraft = persistence ? persistence.setRequirementDraft : setPreviewDraft
   const editing = persistence ? draft !== null : previewEditing
   const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
+  const [saveError, setSaveError] = useState<NoticeValue>(null)
   const savingRef = useRef(false)
   const req = space.requirement
   const busy = saving || !!persistence && (persistence.busy || !persistence.ready || !!pendingDecision(persistence))
@@ -47,16 +50,16 @@ function RequirementCard() {
     if (!draft || busy || savingRef.current || !validRows) return
     savingRef.current = true
     setSaving(true)
-    setSaveError('')
+    setSaveError(null)
     try {
       const saved = await updateRequirement(draft)
       if (saved === false) {
-        setSaveError('需求未保存，请重试。')
+        setSaveError(notice('learning', 'requirement.saveFailed'))
         return
       }
       setEditing(false)
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : '需求未保存，请重试。')
+      setSaveError(error instanceof Error ? error : notice('learning', 'requirement.saveFailed'))
     } finally {
       savingRef.current = false
       setSaving(false)
@@ -67,14 +70,14 @@ function RequirementCard() {
     return (
       <Card className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
         <CardHeader>
-          <CardTitle>学习需求摘要</CardTitle>
+          <CardTitle>{t('requirement.title')}</CardTitle>
           <CardDescription className="leading-relaxed">
-            {capabilities.agent ? 'Agent 了解你的目标、基础和期望后，会在这里整理出一份需求摘要。你确认之后才会生成学习路线。' : 'Agent 暂不可用。学习需求需手动填写并确认，不会自动生成学习路线。'}
+            {capabilities.agent ? t('requirement.introduction') : t('requirement.unavailableIntroduction')}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4" aria-label="正在整理需求表格">
-            <div className="grid grid-cols-[2fr_3fr] gap-4 text-xs font-medium text-muted-foreground"><span>问题</span><span>回答</span></div>
+          <div className="space-y-4" aria-label={t('requirement.preparing')}>
+            <div className="grid grid-cols-[2fr_3fr] gap-4 text-xs font-medium text-muted-foreground"><span>{t('requirement.question')}</span><span>{t('requirement.answer')}</span></div>
             {[0, 1, 2].map((index) => <div key={index} className="grid grid-cols-[2fr_3fr] gap-4"><Skeleton className="h-3 animate-none" /><Skeleton className="h-3 animate-none" /></div>)}
           </div>
         </CardContent>
@@ -91,21 +94,21 @@ function RequirementCard() {
       <CardHeader>
         <CardTitle id="req-title" className="flex items-center gap-2">
           <ClipboardList className="size-4 text-primary" aria-hidden />
-          学习需求摘要
+          {t('requirement.title')}
         </CardTitle>
-        <CardDescription>{capabilities.agent ? awaitingSummary ? 'Agent 会根据对话整理需求，你也可以直接填写。确认后才会规划路线。' : '确认后 Agent 会据此规划路线' : '手动保存并确认学习需求；Agent 暂不可用，不会自动规划路线'}</CardDescription>
+        <CardDescription>{capabilities.agent ? awaitingSummary ? t('requirement.awaitingSummary') : t('requirement.confirmHint') : t('requirement.manualHint')}</CardDescription>
         <CardAction>
         {editing ? (
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditing(false); setDraft(null); setSaveError('') }}>
-              取消
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditing(false); setDraft(null); setSaveError(null) }}>
+              {t('controls.cancel')}
             </Button>
             <Button
               size="sm"
               disabled={busy || !validRows}
               onClick={() => void save()}
             >
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('controls.saving') : t('controls.save')}
             </Button>
           </div>
         ) : (
@@ -115,73 +118,74 @@ function RequirementCard() {
             disabled={busy}
             onClick={() => {
               setDraft({ ...req, rows: req.rows.length ? structuredClone(req.rows) : [{ question: '', answer: '' }], intake: persistence?.intake })
-              setSaveError('')
+              setSaveError(null)
               setEditing(true)
             }}
           >
             <Pencil data-icon="inline-start" />
-            修改
+            {t('requirement.modify')}
           </Button>
         )}
         </CardAction>
       </CardHeader>
       <CardContent>
-        {saveError && <p role="alert" className="mb-3 text-sm text-destructive">{saveError}</p>}
-        {current.rows.length > 0 ? <table aria-label="学习需求" className="w-full table-fixed text-sm">
+        {!!saveError && <p role="alert" className="mb-3 text-sm text-destructive">{formatNotice(saveError)}</p>}
+        {current.rows.length > 0 ? <table aria-label={t('requirement.table')} className="w-full table-fixed text-sm">
           <thead><tr className="border-b text-left text-xs text-muted-foreground">
-            <th scope="col" className="w-2/5 px-2 pb-3 font-medium">问题</th>
-            <th scope="col" className="px-2 pb-3 font-medium">回答</th>
+            <th scope="col" className="w-2/5 px-2 pb-3 font-medium">{t('requirement.question')}</th>
+            <th scope="col" className="px-2 pb-3 font-medium">{t('requirement.answer')}</th>
           </tr></thead>
           <tbody>{current.rows.map((row, index) => <tr key={index} className="border-b last:border-0">
             <td className="px-2 py-3 align-top whitespace-pre-wrap break-words font-medium leading-relaxed">
-              {editing ? <Textarea aria-label={`问题 ${index + 1}`} rows={2} maxLength={10_000}
+              {editing ? <Textarea aria-label={t('requirement.questionNumber', { number: index + 1 })} rows={2} maxLength={10_000}
                 value={row.question} onChange={(event) => editRow(index, 'question', event.target.value)} className="resize-y leading-relaxed" /> : row.question}
             </td>
             <td className="px-2 py-3 align-top whitespace-pre-wrap break-words leading-relaxed">
-              {editing ? <div className="space-y-2"><Textarea aria-label={`回答 ${index + 1}`} rows={3} maxLength={100_000}
+              {editing ? <div className="space-y-2"><Textarea aria-label={t('requirement.answerNumber', { number: index + 1 })} rows={3} maxLength={100_000}
                 value={row.answer} onChange={(event) => editRow(index, 'answer', event.target.value)} className="resize-y leading-relaxed" />
-                <Button variant="ghost" size="xs" disabled={saving} aria-label={`移除第 ${index + 1} 行`}
-                  onClick={() => setDraft({ ...current, rows: current.rows.filter((_, at) => at !== index) })}><Trash2 aria-hidden />移除</Button>
-              </div> : row.answer || <span className="text-muted-foreground">待补充</span>}
+                <Button variant="ghost" size="xs" disabled={saving} aria-label={t('requirement.removeRow', { number: index + 1 })}
+                  onClick={() => setDraft({ ...current, rows: current.rows.filter((_, at) => at !== index) })}><Trash2 aria-hidden />{t('controls.remove')}</Button>
+              </div> : row.answer || <span className="text-muted-foreground">{t('controls.pendingAnswer')}</span>}
             </td>
           </tr>)}</tbody>
-        </table> : <p className="py-3 text-sm leading-relaxed text-muted-foreground">还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。</p>}
+        </table> : <p className="py-3 text-sm leading-relaxed text-muted-foreground">{t('requirement.empty')}</p>}
         {editing && <div className="mt-4 space-y-3">
           <Button variant="outline" size="sm" disabled={saving || current.rows.length >= 100}
-            onClick={() => setDraft({ ...current, rows: [...current.rows, { question: '', answer: '' }] })}><Plus aria-hidden />添加问题</Button>
-          {!validRows && <p role="status" className="text-xs text-muted-foreground">请填写每行的问题；暂不确定的回答可以留空。</p>}
+            onClick={() => setDraft({ ...current, rows: [...current.rows, { question: '', answer: '' }] })}><Plus aria-hidden />{t('requirement.addQuestion')}</Button>
+          {!validRows && <p role="status" className="text-xs text-muted-foreground">{t('requirement.questionRequired')}</p>}
         </div>}
         {!editing && current.intake?.researchRef && <ResearchCard key={`${space.id}:${current.intake.researchRef.id}`} researchRef={current.intake.researchRef} />}
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t">
         {persistence && !persistence.readiness?.ready && <div id="req-readiness" role="status" className="space-y-2 text-sm">
-          <p className="font-medium">暂不能确认并规划</p>
+          <p className="font-medium">{t('requirement.notReady')}</p>
           <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
-            {(persistence.readiness?.reasons.length ? persistence.readiness.reasons : ['正在读取需求准入状态，请稍后重试。']).map((reason, index) => <li key={index} className="whitespace-pre-wrap break-words">{reason}</li>)}
+            {(persistence.readiness?.issues ?? [notice('learning', 'requirement.loadingReadiness')]).map((reason, index) => <li key={index} className="whitespace-pre-wrap break-words">{formatNotice(reason)}</li>)}
           </ul>
         </div>}
         <Button size="lg" aria-describedby={persistence && !persistence.readiness?.ready ? 'req-readiness' : undefined}
           disabled={editing || busy || awaitingSummary || persistence?.requirementConfirmed || !!persistence && !persistence.readiness?.ready} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
-          {persistence?.requirementConfirmed ? '已确认学习需求' : capabilities.agent ? '确认，开始规划路线' : '确认学习需求'}
+          {persistence?.requirementConfirmed ? t('requirement.confirmed') : capabilities.agent ? t('requirement.confirmAndPlan') : t('requirement.confirm')}
         </Button>
         {persistence?.requirementConfirmed && (
           <Button variant="outline" size="lg" disabled={editing || busy} onClick={() => setView(!space.stages.length && persistence.planning.run ? 'planning' : 'route')}>
-            {!space.stages.length && persistence.planning.run ? '查看规划进度' : '查看学习路线'}
+            {!space.stages.length && persistence.planning.run ? t('requirement.viewPlanning') : t('requirement.viewPath')}
           </Button>
         )}
-        <p className="text-center text-xs text-muted-foreground">{capabilities.agent ? '不准确？直接修改，或在左侧继续告诉 Agent' : '不准确？直接修改。左侧仅保存问题，不会自动整理需求或生成路线。'}</p>
+        <p className="text-center text-xs text-muted-foreground">{capabilities.agent ? t('requirement.correctionHint') : t('requirement.manualCorrectionHint')}</p>
       </CardFooter>
     </Card>
   )
 }
 
 function Chat() {
+  const { t } = useTranslation('learning')
   const space = useSpace()
   const { onboardSend, sendMessage, stopReply, session, setComposerText, capabilities, persistence } = useApp()
   const [previewText, setPreviewText] = useState('')
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState('')
+  const [sendError, setSendError] = useState<NoticeValue>(null)
   const sendingRef = useRef(false)
   const text = persistence ? session?.composerText ?? '' : previewText
   const setText = persistence ? setComposerText : setPreviewText
@@ -191,7 +195,7 @@ function Chat() {
   const replying = capabilities.agent && space.onboarding.agentTyping
   const busy = !!proposal || !!lessonProposal || !persistence && replying || sending || !!persistence && (persistence.busy || !persistence.ready)
 
-  useEffect(() => setSendError(''), [session?.id, messages.length])
+  useEffect(() => setSendError(null), [session?.id, messages.length])
 
   const send = async (value: string, fromComposer = false) => {
     if (!value.trim() || busy || sendingRef.current) return
@@ -202,12 +206,12 @@ function Chat() {
     }
     sendingRef.current = true
     setSending(true)
-    setSendError('')
+    setSendError(null)
     try {
       // Keep the provider draft intact through failed, retried, or delayed requests.
       await sendMessage(fromComposer ? undefined : value)
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : '问题未保存，请重试。')
+      setSendError(error instanceof Error ? error : notice('learning', 'onboarding.saveQuestionFailed'))
     } finally {
       sendingRef.current = false
       setSending(false)
@@ -216,12 +220,12 @@ function Chat() {
   return (
     <div className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-1 flex-col lg:h-auto lg:min-h-0">
       {persistence && <div className="flex h-12 shrink-0 items-center border-b px-4 sm:px-6"><SessionMenu /></div>}
-      <Conversation key={session?.id ?? space.id} className="min-h-0" initial="instant" resize="instant" aria-label="学习需求会话">
+      <Conversation key={session?.id ?? space.id} className="min-h-0" initial="instant" resize="instant" aria-label={t('onboarding.conversation')}>
         <ConversationContent className="gap-6 px-4 py-8 sm:px-6"
           scrollClassName="[scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {(!persistence || messages.length === 0) && <Message from="assistant">
             <MessageContent>
-              {capabilities.agent ? '你好，我是你的学习 Agent。先告诉我你想学什么、想学成什么样，我来帮你规划一条适合你的路线。' : 'Agent 暂不可用。这里仅保存你的问题，不会生成回复；请在右侧手动修改并确认学习需求。'}
+              {capabilities.agent ? t('onboarding.greeting') : t('onboarding.unavailableGreeting')}
             </MessageContent>
           </Message>}
           {messages.map((m) =>
@@ -238,18 +242,18 @@ function Chat() {
           )}
           {!persistence && replying && (
             <div role="status" className="text-sm text-muted-foreground">
-              <Shimmer>等待模型响应…</Shimmer>
+              <Shimmer>{t('onboarding.waiting')}</Shimmer>
             </div>
           )}
         </ConversationContent>
-        <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label="滚动到最新消息" />
+        <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label={t('onboarding.latest')} />
       </Conversation>
 
       <PromptQueue className="px-4 sm:px-6" />
       {proposal ? <RouteProposalDecision key={proposal.id} proposal={proposal} /> : lessonProposal ? <LessonProposalDecision key={lessonProposal.id} proposal={lessonProposal} /> : <div className="flex shrink-0 flex-col gap-3 px-4 pt-4 pb-6 sm:px-6">
         <PromptInput onReset={(event) => event.preventDefault()} onSubmit={() => send(text, true)}>
             <label htmlFor="ob-input" className="sr-only">
-              回复 Agent
+              {t('onboarding.reply')}
             </label>
             <PromptInputTextarea
               id="ob-input"
@@ -263,27 +267,28 @@ function Chat() {
                   void send(text, true)
                 }
               }}
-              placeholder="告诉 Agent 你的学习目标，或继续回复…"
+              placeholder={t('onboarding.placeholder')}
               className="leading-relaxed"
             />
             <PromptInputFooter>
               <YoloSwitch />
               <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.runId ?? session?.messages.findLast((m) => m.role === 'agent')?.id} />
               <span className="hidden text-xs text-muted-foreground sm:inline">
-                <Kbd>Enter</Kbd>{capabilities.agent ? ' 发送 · ' : ' 保存问题 · '}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd> 换行
+                <Kbd>Enter</Kbd>{capabilities.agent ? t('onboarding.sendShortcut') : t('onboarding.saveShortcut')}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd>{t('onboarding.newline')}
               </span>
-              {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label="停止"><Square /></Button>}
+              {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
               <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status="ready"
-                disabled={!text.trim() || busy} aria-label={persistence && replying ? '加入队列' : capabilities.agent ? '发送' : '保存问题'} />
+                disabled={!text.trim() || busy} aria-label={persistence && replying ? t('queue.enqueue', { ns: 'workbench' }) : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
             </PromptInputFooter>
         </PromptInput>
-        {sendError && <p role="alert" className="text-xs text-destructive">{sendError}</p>}
+        {!!sendError && <p role="alert" className="text-xs text-destructive">{formatNotice(sendError)}</p>}
       </div>}
     </div>
   )
 }
 
 export function Onboarding() {
+  const { t } = useTranslation('learning')
   const space = useSpace()
   const { goSpaces, renameSpace, setView, retryReply, stopReply, capabilities, persistence } = useApp()
   const planning = persistence?.planning
@@ -298,25 +303,25 @@ export function Onboarding() {
           <CardContent>
             {planningStopped || persistence && (!capabilities.agent || persistence.error) ? (
               <div className="flex flex-col gap-3">
-                <h1 className="text-base font-semibold">{planning?.run?.state === 'interrupted' ? '路线规划已停止' : '路线规划未完成'}</h1>
-                <p role="alert" className="text-sm text-muted-foreground">{planning?.error || persistence?.error || '完整路线尚未保存。请重新规划，或返回修改学习需求。'}</p>
+                <h1 className="text-base font-semibold">{planning?.run?.state === 'interrupted' ? t('onboarding.planningStopped') : t('onboarding.planningIncomplete')}</h1>
+                <p role="alert" className="text-sm text-muted-foreground">{formatNotice(planning?.error || persistence?.error) || t('onboarding.planningFallback')}</p>
                 <RunContent parts={planningParts} />
               </div>
             ) : <Generating
-              title={`正在为「${space.name}」规划学习路线`}
-              steps={persistence ? ['分析学习需求', '生成路线内容', '校验路线结构', '保存完整路线'] : ['分析你的已有基础与目标', '拆分学习阶段', '安排单元顺序与目标', '整理路线说明']}
-              note="这一步只生成路线和单元概要。每个单元的课件，会在你进入该单元时结合你当时的学习情况再生成。"
+              title={t('onboarding.planningTitle', { name: space.name })}
+              steps={persistence ? [t('onboarding.analyzeRequirements'), t('onboarding.generatePath'), t('onboarding.validatePath'), t('onboarding.savePath')] : [t('onboarding.analyzeBackground'), t('onboarding.splitStages'), t('onboarding.arrangeUnits'), t('onboarding.prepareNotes')]}
+              note={t('onboarding.planningNote')}
               parts={persistence ? planningParts : undefined}
               context={<RunContext runId={planning?.run?.id} />}
             />}
             {persistence && <div className="mt-6 flex flex-wrap gap-2">
               {planning?.run && ['failed', 'interrupted'].includes(planning.run.state) ? (
-                <Button disabled={persistence.busy || !capabilities.agent} onClick={() => retryReply(planning.run!.id)}>重试规划</Button>
+                <Button disabled={persistence.busy || !capabilities.agent} onClick={() => retryReply(planning.run!.id)}>{t('onboarding.retryPlanning')}</Button>
               ) : planning?.run && ['pending', 'running'].includes(planning.run.state) ? (
-                <Button variant="outline" disabled={persistence.busy} onClick={stopReply}>停止规划</Button>
+                <Button variant="outline" disabled={persistence.busy} onClick={stopReply}>{t('onboarding.stopPlanning')}</Button>
               ) : null}
-              <Button variant="ghost" onClick={goSpaces}>全部学习空间</Button>
-              {(!planning?.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>返回修改需求</Button>}
+              <Button variant="ghost" onClick={goSpaces}>{t('controls.allSpaces')}</Button>
+              {(!planning?.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>{t('onboarding.editRequirements')}</Button>}
             </div>}
           </CardContent>
         </Card>
@@ -330,11 +335,11 @@ export function Onboarding() {
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
           <Button variant="ghost" size="sm" onClick={goSpaces}>
             <ArrowLeft data-icon="inline-start" />
-            全部学习空间
+            {t('controls.allSpaces')}
           </Button>
           <Separator orientation="vertical" className="h-5" />
           <label htmlFor="space-name" className="sr-only">
-            学习空间名称
+            {t('onboarding.spaceName')}
           </label>
           <Input
             id="space-name"
@@ -345,7 +350,7 @@ export function Onboarding() {
           />
           <Badge variant="outline" className="ml-auto hidden gap-1.5 lg:inline-flex">
             <span className="size-1.5 rounded-full bg-primary" aria-hidden />
-            第 1 步 · 确认学习需求
+            {t('onboarding.step')}
           </Badge>
           <LibraryButton iconOnly />
           <ThemeToggle />

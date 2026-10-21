@@ -29,6 +29,8 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 
 import { Shimmer } from "./shimmer";
 
@@ -164,12 +166,12 @@ export type ReasoningTriggerProps = ComponentProps<
 
 const defaultGetThinkingMessage = (isStreaming: boolean, duration?: number) => {
   if (isStreaming || duration === 0) {
-    return <Shimmer duration={1}>Thinking...</Shimmer>;
+    return <Shimmer duration={1}>{i18n.t('chat.thinking')}</Shimmer>;
   }
   if (duration === undefined) {
-    return <p>Thought</p>;
+    return <p>{i18n.t('chat.thought')}</p>;
   }
-  return <p>Thought for {duration} seconds</p>;
+  return <p>{i18n.t('chat.duration', { count: duration })}</p>;
 };
 
 export const ReasoningTrigger = memo(
@@ -179,6 +181,7 @@ export const ReasoningTrigger = memo(
     getThinkingMessage = defaultGetThinkingMessage,
     ...props
   }: ReasoningTriggerProps) => {
+    useTranslation();
     const { isStreaming, isOpen, duration } = useReasoning();
 
     return (

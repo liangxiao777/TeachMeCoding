@@ -5,8 +5,8 @@ import { createEntrySchema, idSchema, renameEntrySchema, saveFileSchema, type Pr
 import { BusinessError } from './learning.js';
 
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
-const forbidden = () => new BusinessError(422, '路径无效，或包含符号链接/非普通文件；只允许访问当前空间项目目录。');
-const conflict = () => new BusinessError(409, '文件已被外部修改或目标已存在，请重试。');
+const forbidden = () => new BusinessError(422, { code: 'PROJECT_UNSAFE_PATH' });
+const conflict = () => new BusinessError(409, { code: 'PROJECT_FILE_CONFLICT' });
 const stat = (path: string) => {
   try { return lstatSync(path, { bigint: true }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
@@ -34,7 +34,7 @@ export class Projects {
       const info = stat(path);
       if (!info) {
         if (allowMissing && index === parts.length - 1) return path;
-        throw new BusinessError(404, '项目路径不存在，请刷新目录。');
+        throw new BusinessError(404, { code: 'PROJECT_PATH_NOT_FOUND' });
       }
       if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile()) || (info.isFile() && info.nlink > 1n)) throw forbidden();
       if (index < parts.length - 1 && !info.isDirectory()) throw forbidden();
@@ -46,13 +46,13 @@ export class Projects {
     try {
       const before = fstatSync(fd, { bigint: true });
       if (!before.isFile() || before.nlink > 1n) throw forbidden();
-      if (before.size > 1_000_000n) throw new BusinessError(413, '编辑器只支持不超过 1 MB 的 UTF-8 文本文件。');
+      if (before.size > 1_000_000n) throw new BusinessError(413, { code: 'EDITOR_FILE_TOO_LARGE' });
       const data = readFileSync(fd);
       const after = fstatSync(fd, { bigint: true });
       if (before.mtimeNs !== after.mtimeNs || before.size !== after.size) throw conflict();
       let content: string;
-      try { content = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { throw new BusinessError(422, '编辑器只支持 UTF-8 文本文件。'); }
-      if (content.includes('\0')) throw new BusinessError(422, '编辑器不支持二进制文件。');
+      try { content = new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { throw new BusinessError(422, { code: 'EDITOR_UTF8_REQUIRED' }); }
+      if (content.includes('\0')) throw new BusinessError(422, { code: 'EDITOR_BINARY_UNSUPPORTED' });
       return { path: relative, content, version: hash(`${after.dev}:${after.ino}:${after.mtimeNs}:${after.ctimeNs}:${hash(data)}`) };
     } finally { closeSync(fd); }
   }
@@ -60,7 +60,7 @@ export class Projects {
     const root = this.root(space);
     const entries: ProjectEntry[] = [];
     const visit = (relative: string, depth: number): string => {
-      if (depth > 40 || entries.length > 5000) throw new BusinessError(413, '项目目录过大，无法读取。');
+      if (depth > 40 || entries.length > 5000) throw new BusinessError(413, { code: 'PROJECT_TREE_TOO_LARGE' });
       const path = relative ? this.path(root, relative) : root;
       const info = stat(path)!;
       if (info.isFile()) {
@@ -81,7 +81,7 @@ export class Projects {
   }
   read(space: string, path: string) { return this.file(this.path(this.root(space), path), path); }
   newFile(space: string, relative: string, content: string) {
-    if (Buffer.byteLength(content) > 1_000_000 || content.includes('\0')) throw new BusinessError(413, '文件必须为不超过 1 MB 的 UTF-8 文本。');
+    if (Buffer.byteLength(content) > 1_000_000 || content.includes('\0')) throw new BusinessError(413, { code: 'PROJECT_TEXT_REQUIRED' });
     const path = this.path(this.root(space), relative, true);
     if (stat(path)) throw conflict();
     const fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -98,7 +98,7 @@ export class Projects {
   }
   save(space: string, input: unknown): ProjectFile {
     const v = saveFileSchema.parse(input);
-    if (Buffer.byteLength(v.content) > 1_000_000 || v.content.includes('\0')) throw new BusinessError(413, '文件必须为不超过 1 MB 的 UTF-8 文本。');
+    if (Buffer.byteLength(v.content) > 1_000_000 || v.content.includes('\0')) throw new BusinessError(413, { code: 'PROJECT_TEXT_REQUIRED' });
     const root = this.root(space), path = this.path(root, v.path);
     if (this.file(path, v.path).version !== v.version) throw conflict();
     const temporary = join(dirname(path), `.tmc-write-${randomUUID()}`);

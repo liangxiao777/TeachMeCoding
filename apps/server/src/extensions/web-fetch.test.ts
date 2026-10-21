@@ -12,7 +12,7 @@ import { createWebFetchTool, type WebFetchOptions, type WebFetchResponse } from 
 import { SearchService } from './search.js';
 import { TeachingRuntime } from '../agents/runtime.js';
 import { reply, response, syntheticSource, teachingModel } from '../agents/test-support.js';
-import { Learning } from '../modules/learning.js';
+import { BusinessError, Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 
 const address = 'https://docs.example/guide/start';
@@ -140,7 +140,7 @@ test('invalid inputs, credentials, private/special IP literals, local names and 
   const tool = fixture(async () => { requests++; return new Response('must not call'); }, async () => { lookups++; return publicLookup('unused'); });
   for (const input of [{}, { url: '' }, { url: address, maxChars: 99 }, { url: address, maxChars: 20_001 },
     { url: address, maxChars: 101.5 }, { url: address, extractMode: 'html' }, { url: address, headers: { authorization: 'PRIVATE' } }]) {
-    await assert.rejects(tool.execute('invalid', input), /参数无效/);
+    await assert.rejects(tool.execute('invalid', input), { message: 'WEB_FETCH_INVALID_REQUEST' });
   }
   for (const url of ['file:///etc/passwd', 'ftp://public.example/file', 'data:text/plain,private', 'not a URL',
     'https://user:secret@public.example/', 'http://localhost/', 'http://printer/', 'http://HOST.local./',
@@ -164,7 +164,7 @@ test('DNS validates every answer, including mixed public/private addresses and f
     [{ address: '8.8.8.8', family: 4 }, { address: '10.0.0.1', family: 4 }],
     [{ address: '::1', family: 6 }, { address: '2606:4700:4700::1111', family: 6 }],
     [{ address: '8.8.8.8', family: 6 }], [{ address: 'not an IP', family: 4 }]]) {
-    await assert.rejects(result(tool(answers)), /网络地址/);
+    await assert.rejects(result(tool(answers)), { message: 'WEB_FETCH_ADDRESS_FORBIDDEN' });
   }
   assert.equal(requests, 0);
   for (const url of ['https://8.8.8.8/', 'https://[2606:4700:4700::1111]/', 'https://[::ffff:8.8.8.8]/']) {
@@ -219,44 +219,47 @@ test('redirects allow three safe hops, retain case/query, revalidate each target
   calls = 0; lookupCalls = 0;
   await assert.rejects(result(fixture(async () => { calls++; return new Response(null, { status: 302, headers: { location: '/rebound' } }); }, async () => {
     lookupCalls++; return [{ address: lookupCalls === 1 ? '8.8.8.8' : '127.0.0.1', family: 4 }];
-  })), /网络地址/);
+  })), { message: 'WEB_FETCH_ADDRESS_FORBIDDEN' });
   assert.equal(calls, 1); assert.equal(lookupCalls, 2);
 });
 
 test('redirect loops, missing locations, excessive hops, HTTP errors and unsupported binaries fail safely without retry', async () => {
   let calls = 0;
   const tool = (request: NonNullable<WebFetchOptions['fetch']>) => fixture(async (...args) => { calls++; return request(...args); });
-  await assert.rejects(result(tool(async () => new Response(null, { status: 302, headers: { location: address } }))), /循环/);
+  await assert.rejects(result(tool(async () => new Response(null, { status: 302, headers: { location: address } }))), { message: 'WEB_FETCH_REDIRECT_LOOP' });
   assert.equal(calls, 1); calls = 0;
-  await assert.rejects(result(tool(async () => new Response(null, { status: 302 }))), /无效.*重定向/);
+  await assert.rejects(result(tool(async () => new Response(null, { status: 302 }))), { message: 'WEB_FETCH_INVALID_REDIRECT' });
   assert.equal(calls, 1); calls = 0;
-  await assert.rejects(result(tool(async () => new Response(null, { status: 308, headers: { location: `/hop-${calls}` } }))), /超过 3 次/);
+  await assert.rejects(result(tool(async () => new Response(null, { status: 308, headers: { location: `/hop-${calls}` } }))), { message: 'WEB_FETCH_TOO_MANY_REDIRECTS' });
   assert.equal(calls, 4);
   for (const status of [401, 403, 404, 429, 500]) {
     calls = 0;
-    await assert.rejects(result(tool(async () => new Response('REFLECTED-PRIVATE-BODY', { status }))), (error: Error) => {
-      assert.match(error.message, new RegExp(`HTTP ${status}`)); assert.doesNotMatch(error.message, /PRIVATE/); return true;
+    await assert.rejects(result(tool(async () => new Response('REFLECTED-PRIVATE-BODY', { status }))), (error: unknown) => {
+      assert.ok(error instanceof BusinessError);
+      assert.equal(error.message, 'WEB_FETCH_HTTP_FAILED');
+      assert.deepEqual(error.detail, { code: 'WEB_FETCH_HTTP_FAILED', params: { status } });
+      assert.doesNotMatch(JSON.stringify(error), /PRIVATE/); return true;
     }); assert.equal(calls, 1);
   }
   for (const contentType of ['application/pdf', 'image/png', 'application/octet-stream']) {
-    await assert.rejects(result(fixture(async () => new Response('binary', { headers: { 'content-type': contentType } }))), /二进制/);
+    await assert.rejects(result(fixture(async () => new Response('binary', { headers: { 'content-type': contentType } }))), { message: 'WEB_FETCH_CONTENT_UNSUPPORTED' });
   }
   await assert.rejects(result(fixture(async () => { throw new Error('PRIVATE-DIAGNOSTIC https://user:secret@host/'); })), (error: Error) => {
     assert.doesNotMatch(error.message, /PRIVATE|secret|user:/); return true;
   });
-  await assert.rejects(result(fixture(async () => new Response(null, { status: 204 }))), /可读取的正文/);
-  await assert.rejects(result(fixture(async () => new Response('<html><body><script>app()</script></body></html>', { headers: { 'content-type': 'text/html' } }))), /不执行 JavaScript/);
-  await assert.rejects(result(fixture(async () => new Response('<div>'.repeat(257) + 'Deep' + '</div>'.repeat(257), { headers: { 'content-type': 'text/html' } }))), /结构过于复杂/);
+  await assert.rejects(result(fixture(async () => new Response(null, { status: 204 }))), { message: 'WEB_FETCH_BODY_UNAVAILABLE' });
+  await assert.rejects(result(fixture(async () => new Response('<html><body><script>app()</script></body></html>', { headers: { 'content-type': 'text/html' } }))), { message: 'WEB_FETCH_BODY_UNAVAILABLE' });
+  await assert.rejects(result(fixture(async () => new Response('<div>'.repeat(257) + 'Deep' + '</div>'.repeat(257), { headers: { 'content-type': 'text/html' } }))), { message: 'WEB_FETCH_HTML_TOO_COMPLEX' });
 });
 
 test('already-cancelled/deadline calls never reach DNS or HTTP', async (t) => {
   let calls = 0;
   const tool = fixture(async () => { calls++; return new Response('late'); }, async () => { calls++; return publicLookup('unused'); });
-  await assert.rejects(tool.execute('cancel', { url: address }, AbortSignal.abort()), /取消/);
+  await assert.rejects(tool.execute('cancel', { url: address }, AbortSignal.abort()), { message: 'WEB_FETCH_CANCELLED' });
   t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
     assert.equal(milliseconds, 30_000); return AbortSignal.abort(new DOMException('deadline', 'TimeoutError'));
   });
-  try { await assert.rejects(result(tool), /超时/); assert.equal(calls, 0); }
+  try { await assert.rejects(result(tool), { message: 'WEB_FETCH_TIMEOUT' }); assert.equal(calls, 0); }
   finally { t.mock.restoreAll(); }
 });
 
@@ -270,7 +273,7 @@ test('DNS waits and body reads cancel promptly, including a stream whose cancell
         pull() { entered(); }, cancel() { cancelled = true; return new Promise<void>(() => {}); } }));
     }, stage === 'dns' ? async () => { entered(); return new Promise(() => {}); } : publicLookup);
     const pending = tool.execute('cancel', { url: address }, controller.signal);
-    await ready; controller.abort(); await assert.rejects(pending, /取消/);
+    await ready; controller.abort(); await assert.rejects(pending, { message: 'WEB_FETCH_CANCELLED' });
     assert.equal(requests, stage === 'dns' ? 0 : 1); assert.equal(cancelled, stage === 'body');
   }
 });
@@ -285,7 +288,7 @@ test('caller cancellation propagates into HTTP and rejects late successful respo
       entered();
     }));
     const pending = tool.execute('late', { url: address }, controller.signal);
-    await ready; controller.abort(); finish(); await assert.rejects(pending, /取消/);
+    await ready; controller.abort(); finish(); await assert.rejects(pending, { message: 'WEB_FETCH_CANCELLED' });
   }
 });
 

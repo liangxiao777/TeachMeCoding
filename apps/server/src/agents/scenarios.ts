@@ -19,7 +19,7 @@ export function createScenario(learning: Learning, input: FrozenContext, runId: 
       tools: draft.tools,
       commit() {
         const proposal = draft.proposal();
-        if (initial && !proposal) throw new BusinessError(422, '未生成完整学习路线，请重试规划。');
+        if (initial && !proposal) throw new BusinessError(422, { code: 'ROUTE_ARTIFACT_MISSING' });
         if (proposal) {
           const saved = learning.proposeRoute(input.spaceId, input.sessionId!, proposal, { requirement: input.requirement.revision, route: input.route!.revision }, runId);
           if (initial) learning.applyProposal(input.spaceId, saved.id);

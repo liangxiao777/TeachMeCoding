@@ -1,6 +1,7 @@
 'use client'
 
 import { useLayoutEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { usePanelRef } from 'react-resizable-panels'
 import { IdePanel } from '@/components/workbench/ide-panel'
 import { LeftRail } from '@/components/workbench/left-rail'
@@ -11,6 +12,7 @@ import { useSpace } from '@/app/context'
 const layouts = new Map<string, { height: number; width: number }>()
 
 export function Workbench() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const ide = usePanelRef()
   const explorer = usePanelRef()
@@ -52,7 +54,7 @@ export function Workbench() {
           </div>
         </ResizablePanel>
         <ResizableHandle
-          aria-label="调整文件目录宽度"
+          aria-label={t('layout.resizeExplorer')}
           disabled={!space.explorerOpen}
           className={!space.explorerOpen ? 'hidden' : ''}
         />
@@ -77,7 +79,7 @@ export function Workbench() {
               <LessonReader key={space.currentUnitId} />
             </ResizablePanel>
             <ResizableHandle
-              aria-label="调整 IDE 高度"
+              aria-label={t('layout.resizeIde')}
               disabled={space.ideFullscreen || !space.ideOpen}
               className={
                 space.ideFullscreen || !space.ideOpen

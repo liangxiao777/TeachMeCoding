@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { libraryFileLimit, type LibraryDocument } from '@teach-me-coding/contracts';
 import { Library } from '../modules/library.js';
-import { Learning } from '../modules/learning.js';
+import { BusinessError, Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
 import { createApp } from './app.js';
 import { createLocalAccess } from './local-access.js';
@@ -29,14 +29,18 @@ test('global arbitrary-format uploads preserve bytes, names and retries across r
     assert.equal((await upload('binary.未知格式', bytes, id, { 'X-TMC-Token': '' })).status, 401);
     assert.equal((await upload('binary.未知格式', bytes, id, { Origin: 'http://evil.test' })).status, 403);
     for (const name of ['../escape', 'folder/file.txt', 'back\\slash', '.', '..', 'bad\nname', '学'.repeat(86)]) {
-      assert.equal((await upload(name, bytes)).status, 400, name);
+      const invalid = await upload(name, bytes);
+      assert.equal(invalid.status, 400, name);
+      assert.deepEqual(await invalid.json(), { code: 'INVALID_LIBRARY_REQUEST' });
     }
     const first = await upload('资料.未知格式', bytes, id);
     assert.equal(first.status, 201);
     const file = await first.json() as LibraryDocument;
     const concurrent = await Promise.all([upload(file.name, bytes, id), upload(file.name, bytes, id)]);
     for (const response of concurrent) assert.deepEqual(await response.json(), file);
-    assert.equal((await upload(file.name, Buffer.from('different'), id)).status, 409);
+    const conflict = await upload(file.name, Buffer.from('different'), id);
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), { code: 'LIBRARY_UPLOAD_CONFLICT' });
     assert.equal((await upload('other.bin', bytes, id)).status, 409);
     const duplicateName = await (await upload(file.name, Buffer.from('same name, different file'))).json() as LibraryDocument;
     const html = Buffer.from('<script>window.privateData = true</script>');
@@ -58,11 +62,15 @@ test('global arbitrary-format uploads preserve bytes, names and retries across r
     const deleted = await post(`/files/${file.id}/delete`, {});
     assert.equal(deleted.status, 200);
     assert.equal((await post(`/files/${file.id}/delete`, {})).status, 200, 'Retrying a lost delete response must succeed.');
-    assert.equal((await app().request(`/api/library/files/${file.id}`, { headers })).status, 404);
+    const missing = await app().request(`/api/library/files/${file.id}`, { headers });
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), { code: 'LIBRARY_FILE_NOT_FOUND' });
     assert.equal(library.get(duplicateName.id).name, file.name);
     assert.deepEqual(readFileSync(duplicateName.path), Buffer.from('same name, different file'));
     const outside = join(root, 'app.db'); unlinkSync(duplicateName.path); symlinkSync(outside, duplicateName.path);
-    assert.equal((await app().request(`/api/library/files/${duplicateName.id}`, { headers })).status, 422);
+    const unsafe = await app().request(`/api/library/files/${duplicateName.id}`, { headers });
+    assert.equal(unsafe.status, 422);
+    assert.deepEqual(await unsafe.json(), { code: 'LIBRARY_UNSAFE_PATH' });
     assert.equal((await post(`/files/${duplicateName.id}/delete`, {})).status, 422);
     assert.ok(readFileSync(outside).length > 0);
   } finally { await library.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
@@ -82,7 +90,12 @@ test('streamed size boundary and cancellation never publish partial documents', 
     const signal = new AbortController().signal;
     const file = await library.upload(randomUUID(), 'at-limit.bin', body(libraryFileLimit), signal);
     assert.equal(file.size, libraryFileLimit);
-    await assert.rejects(library.upload(randomUUID(), 'too-large.bin', body(libraryFileLimit + 1), signal), /100 MB/);
+    await assert.rejects(library.upload(randomUUID(), 'too-large.bin', body(libraryFileLimit + 1), signal), (error) => {
+      assert.ok(error instanceof BusinessError);
+      assert.equal(error.status, 413);
+      assert.deepEqual(error.toResponse(), { code: 'LIBRARY_FILE_TOO_LARGE' });
+      return true;
+    });
     const controller = new AbortController();
     const held = new ReadableStream<Uint8Array>({ start(stream) { stream.enqueue(new Uint8Array([1, 2, 3])); } });
     const pending = library.upload(randomUUID(), 'partial.pdf', held, controller.signal);
@@ -97,10 +110,35 @@ test('an unavailable library does not block saved spaces or unrelated APIs', asy
   const app = createApp(access, learning), headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token };
   try {
     const space = learning.create({ name: 'Saved', goal: 'Preserve me' });
-    assert.equal((await app.request('/api/library', { headers })).status, 503);
+    const unavailable = await app.request('/api/library', { headers });
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { code: 'LIBRARY_UNAVAILABLE' });
     assert.equal((await app.request('/api/library/files/missing', { headers })).status, 503);
     assert.equal((await app.request('/api/spaces', { headers })).status, 200);
     assert.deepEqual(await (await app.request(`/api/spaces/${space.id}`, { headers })).json(), space);
     assert.equal((await app.request('/api/missing', { headers })).status, 404);
   } finally { db.close(); }
+});
+
+test('library error responses project safe business details and hide unexpected failures', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-library-errors-')), library = new Library(root);
+  const access = createLocalAccess({ port: 14333 });
+  const app = createApp(access, undefined, undefined, undefined, undefined, undefined, undefined, undefined, library);
+  const headers = { Host: '127.0.0.1:14333', 'X-TMC-Token': access.token };
+  try {
+    for (const [error, status, body] of [
+      [new BusinessError(409, { code: 'LIBRARY_UPLOAD_CONFLICT' }), 409, { code: 'LIBRARY_UPLOAD_CONFLICT' }],
+      [new Error('private file path and content'), 503, { code: 'LIBRARY_STORAGE_UNAVAILABLE' }],
+    ] as const) {
+      Object.assign(error, { cause: new Error('private upstream payload') });
+      const mock = t.mock.method(library, 'state', () => { throw error; });
+      const response = await app.request('/api/library', { headers });
+      assert.equal(response.status, status);
+      assert.deepEqual(await response.json(), body);
+      mock.mock.restore();
+    }
+    const oversized = await app.request('/api/library/files', { method: 'POST', headers: { ...headers, 'Content-Length': String(libraryFileLimit + 1) }, body: '' });
+    assert.equal(oversized.status, 413);
+    assert.deepEqual(await oversized.json(), { code: 'LIBRARY_FILE_TOO_LARGE' });
+  } finally { await library.close(); rmSync(root, { recursive: true, force: true }); }
 });

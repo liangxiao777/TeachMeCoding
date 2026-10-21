@@ -11,7 +11,7 @@ import { idSchema, libraryDocumentSchema, libraryFileLimit, libraryNameSchema, t
 import { bashOperations } from '../runtime/bash.js';
 import { BusinessError } from './learning.js';
 
-const unsafe = () => new BusinessError(422, '资料库路径包含链接或非普通文件，无法访问。');
+const unsafe = () => new BusinessError(422, { code: 'LIBRARY_UNSAFE_PATH' });
 const result = (value: unknown, sources: unknown[] = []) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], details: { sources } });
 
 /** Original bytes plus metadata. No extraction, embeddings or retrieval index. */
@@ -35,7 +35,7 @@ export class Library {
   }
   private checkDirectory(path: string) {
     const info = lstatSync(path, { throwIfNoEntry: false });
-    if (!info) throw new BusinessError(404, '资料不存在，请刷新列表。');
+    if (!info) throw new BusinessError(404, { code: 'LIBRARY_FILE_NOT_FOUND' });
     if (!info.isDirectory() || info.isSymbolicLink()) throw unsafe();
   }
   private folder(id: string) {
@@ -68,7 +68,7 @@ export class Library {
       await pipeline(body ? Readable.fromWeb(body as NodeReadableStream<Uint8Array>) : Readable.from([]), new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           size += chunk.length;
-          if (size > libraryFileLimit) { callback(new BusinessError(413, '单个文件不能超过 100 MB。')); return; }
+          if (size > libraryFileLimit) { callback(new BusinessError(413, { code: 'LIBRARY_FILE_TOO_LARGE' })); return; }
           hash.update(chunk); callback(null, chunk);
         },
       }), createWriteStream(join(temporary, `source${extname(name)}`), { flags: 'wx', mode: 0o600 }), { signal: deadline });
@@ -77,7 +77,7 @@ export class Library {
       deadline.throwIfAborted(); this.checkDirectory(this.directory);
       if (lstatSync(destination, { throwIfNoEntry: false })) {
         const previous = this.get(id);
-        if (previous.name !== name || previous.size !== size || previous.sha256 !== metadata.sha256) throw new BusinessError(409, '上传请求已用于其他文件，请重新选择文件。');
+        if (previous.name !== name || previous.size !== size || previous.sha256 !== metadata.sha256) throw new BusinessError(409, { code: 'LIBRARY_UPLOAD_CONFLICT' });
         return previous;
       }
       // Publishing is synchronous and atomic; partially uploaded files never appear in the list.

@@ -1,4 +1,5 @@
 import type { RouteContent } from '@teach-me-coding/contracts'
+import i18n from '../i18n'
 
 type RouteStage = RouteContent['stages'][number]
 type RouteUnit = RouteStage['units'][number]
@@ -77,8 +78,8 @@ export function diffRoute(before: RouteContent | null, after: RouteContent) {
         : ['title', 'summary', 'goals'].some((field) => JSON.stringify(old.unit[field as keyof RouteUnit]) !== JSON.stringify(replacement[field as keyof RouteUnit])) ? 'modified' : 'unchanged'
       return {
         id: unitId, before: old?.unit, after: replacement, change,
-        movedFrom: old && replacement ? old.stage.id !== id ? `从「${old.stage.title}」移入`
-          : !stableUnits.has(unitId) ? `单元顺序调整（原第 ${old.stage.units.findIndex((unit) => unit.id === unitId) + 1} 个）` : undefined : undefined,
+        movedFrom: old && replacement ? old.stage.id !== id ? i18n.t('route.movedFrom', { ns: 'learning', title: old.stage.title })
+          : !stableUnits.has(unitId) ? i18n.t('route.reordered', { ns: 'learning', number: old.stage.units.findIndex((unit) => unit.id === unitId) + 1 }) : undefined : undefined,
       }
     })
     return {
@@ -104,9 +105,11 @@ export function diffRoute(before: RouteContent | null, after: RouteContent) {
 
 export function routeDiffSummary(diff: ReturnType<typeof diffRoute>) {
   const { counts } = diff
-  const units = [['新增', counts.added], ['修改', counts.modified], ['删除', counts.removed], ['移动', counts.moved]] as const
-  const stages = [['新增阶段', counts.addedStages], ['删除阶段', counts.removedStages], ['调整阶段', counts.changedStages]] as const
-  return [...stages.filter(([, count]) => count).map(([label, count]) => `${label} ${count}`),
-    ...units.filter(([, count]) => count).map(([label, count]) => `${label} ${count} 个单元`),
-    ...(diff.note.before !== diff.note.after ? ['安排说明已修改'] : [])].join(' · ') || '路线内容未改变'
+  const entries = [
+    ['addedStages', counts.addedStages], ['removedStages', counts.removedStages], ['changedStages', counts.changedStages],
+    ['addedUnits', counts.added], ['modifiedUnits', counts.modified], ['removedUnits', counts.removed], ['movedUnits', counts.moved],
+  ] as const
+  return [...entries.filter(([, count]) => count).map(([key, count]) => i18n.t(`route.${key}`, { ns: 'learning', count })),
+    ...(diff.note.before !== diff.note.after ? [i18n.t('route.noteChanged', { ns: 'learning' })] : [])].join(' · ')
+    || i18n.t('route.unchanged', { ns: 'learning' })
 }

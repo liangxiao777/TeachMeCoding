@@ -2,11 +2,11 @@ import { expect, test, type Page } from '@playwright/test';
 import type { AgentContext, AgentDisplayPart, RunEvent, SessionDetail, UnitDetail } from '../../packages/contracts/src/workspace';
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: 'reduce' } });
-async function create(page: Page, goal: string) {
+async function create(page: Page, goal: string, language: 'en' | 'zh-CN' = 'zh-CN') {
   await page.goto('/');
-  await page.getByLabel('你想学什么', { exact: true }).fill(goal);
-  await page.getByRole('button', { name: '开始', exact: true }).click();
-  await expect(page.getByLabel('学习空间名称', { exact: true })).toHaveValue(goal.slice(0, 80));
+  await page.getByLabel(language === 'en' ? 'What would you like to learn?' : '你想学什么', { exact: true }).fill(goal);
+  await page.getByRole('button', { name: language === 'en' ? 'Start' : '开始', exact: true }).click();
+  await expect(page.getByLabel(language === 'en' ? 'Learning space name' : '学习空间名称', { exact: true })).toHaveValue(goal.slice(0, 80));
 }
 async function send(page: Page, text: string) {
   await page.getByLabel('回复 Agent', { exact: true }).fill(text);
@@ -768,48 +768,55 @@ test('AI Elements renders ordered reasoning, tools and Markdown after stream rep
   expect(errors).toEqual([]);
 });
 
-test('prompts queue FIFO during a run and resume their separate replies after reload', async ({ page }, info) => {
-  test.setTimeout(45000);
-  const goal = `慢速排队 ${info.project.name}`;
-  await page.emulateMedia({ colorScheme: 'light' });
-  await create(page, goal);
-  const input = page.getByLabel('回复 Agent', { exact: true });
-  const queue = page.getByRole('region', { name: '待发送消息', exact: true });
-  await input.fill('慢速后续：先解释输入');
-  await input.press('Enter');
-  await expect(queue.getByRole('listitem')).toHaveCount(1);
-  await expect(input).toHaveValue('');
-  await input.fill('后续：再比较边界');
-  await page.getByRole('button', { name: '加入队列', exact: true }).click();
-  await expect(queue.getByRole('listitem')).toHaveCount(2);
-  await input.fill('仍在编辑的下一条');
-  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeEnabled();
-  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-running-${info.project.name}.png`, animations: 'disabled' });
-  await page.reload();
-  await expect(input).toHaveValue('');
-  await expect(queue).toContainText('后续：再比较边界');
-  await expect(page.locator('.is-user').filter({ hasText: '慢速后续：先解释输入' })).toHaveCount(1, { timeout: 15000 });
-  await expect(queue).not.toContainText('慢速后续：先解释输入');
-  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0, { timeout: 20000 });
-  await expect(queue).toHaveCount(0);
-  await expect(page.locator('.is-user').filter({ hasText: '后续：再比较边界' })).toHaveCount(1);
-  await expect(page.locator('.is-assistant')).toHaveCount(3);
-  expect((await workspace(page, goal)).runs).toHaveLength(1);
-  for (const reload of [false, true]) {
-    if (reload) await page.reload();
-    await expect(page.locator('.is-assistant')).toHaveCount(3);
+for (const language of ['zh-CN', 'en'] as const) {
+  test(`prompts queue FIFO during a run and resume their separate replies after reload (${language})`, async ({ page }, info) => {
+    test.setTimeout(45000);
+    const labels = language === 'en' ? { reply: 'Reply to Agent', region: 'Queued messages', enqueue: 'Add to queue', stop: 'Stop', context: 'View context usage', input: 'Input (excluding cache)', output: 'Output' }
+      : { reply: '回复 Agent', region: '待发送消息', enqueue: '加入队列', stop: '停止', context: '查看上下文用量', input: '输入（不含缓存）', output: '输出' };
+    const goal = `慢速排队 ${language} ${info.project.name}`;
+    await page.addInitScript((language) => localStorage.setItem('tmc-language', language), language);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await create(page, goal, language);
+    const input = page.getByLabel(labels.reply, { exact: true });
+    const queue = page.getByRole('region', { name: labels.region, exact: true });
+    await input.fill('慢速后续：先解释输入');
+    await input.press('Enter');
+    await expect(queue.getByRole('listitem')).toHaveCount(1);
+    await expect(queue.getByRole('status')).toHaveText(language === 'en' ? 'Queued · 1' : '待发送 · 1');
+    await expect(input).toHaveValue('');
+    await input.fill('后续：再比较边界');
+    await page.getByRole('button', { name: labels.enqueue, exact: true }).click();
+    await expect(queue.getByRole('listitem')).toHaveCount(2);
+    await expect(queue.getByRole('status')).toHaveText(language === 'en' ? 'Queued · 2' : '待发送 · 2');
+    await input.fill('仍在编辑的下一条');
+    await expect(page.getByRole('button', { name: labels.stop, exact: true })).toBeEnabled();
+    await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-running-${language}-${info.project.name}.png`, animations: 'disabled' });
+    await page.reload();
+    await expect(input).toHaveValue('');
+    await expect(queue).toContainText('后续：再比较边界');
+    await expect(page.locator('.is-user').filter({ hasText: '慢速后续：先解释输入' })).toHaveCount(1, { timeout: 15000 });
+    await expect(queue).not.toContainText('慢速后续：先解释输入');
+    await expect(page.getByRole('button', { name: labels.stop, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: labels.stop, exact: true })).toHaveCount(0, { timeout: 20000 });
     await expect(queue).toHaveCount(0);
-    await page.getByRole('button', { name: '查看上下文用量', exact: true }).click();
-    const context = page.locator('[data-slot="context-content"]');
-    // Four provider requests report 11 input and 7 output tokens apiece.
-    await expect(context.getByText('输入（不含缓存）', { exact: true }).locator('..')).toContainText('44');
-    await expect(context.getByText('输出', { exact: true }).locator('..')).toContainText('28');
-    await page.keyboard.press('Escape');
-    await page.mouse.move(0, 0);
-  }
-  await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-idle-${info.project.name}.png`, animations: 'disabled' });
-});
+    await expect(page.locator('.is-user').filter({ hasText: '后续：再比较边界' })).toHaveCount(1);
+    await expect(page.locator('.is-assistant')).toHaveCount(3);
+    expect((await workspace(page, goal)).runs).toHaveLength(1);
+    for (const reload of [false, true]) {
+      if (reload) await page.reload();
+      await expect(page.locator('.is-assistant')).toHaveCount(3);
+      await expect(queue).toHaveCount(0);
+      await page.getByRole('button', { name: labels.context, exact: true }).click();
+      const context = page.locator('[data-slot="context-content"]');
+      // Four provider requests report 11 input and 7 output tokens apiece.
+      await expect(context.getByText(labels.input, { exact: true }).locator('..')).toContainText('44');
+      await expect(context.getByText(labels.output, { exact: true }).locator('..')).toContainText('28');
+      await page.keyboard.press('Escape');
+      await page.mouse.move(0, 0);
+    }
+    await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-idle-${language}-${info.project.name}.png`, animations: 'disabled' });
+  });
+}
 
 test('tutor queues survive stop and withdrawal restores the reference without overwriting newer input', async ({ page }, info) => {
   test.setTimeout(45000);
@@ -844,7 +851,28 @@ test('tutor queues survive stop and withdrawal restores the reference without ov
   await page.reload();
   await expect(queue).toContainText('针对这段文字补充一个例子');
   await expect(queue).toContainText('已暂停');
+  await expect(queue).toContainText('引用：参数与输入 · 课件');
   await page.screenshot({ path: `.amp/in/artifacts/prompt-queue-paused-${info.project.name}.png`, animations: 'disabled' });
+  await input.fill('语言切换时保留的草稿');
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  await page.getByLabel('语言', { exact: true }).click();
+  await page.getByRole('option', { name: 'English', exact: true }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  const englishQueue = agent.getByRole('region', { name: 'Queued messages', exact: true });
+  await expect(englishQueue.getByRole('status')).toHaveText('Queued · 1 · Paused');
+  await expect(englishQueue).toContainText('Quote: 参数与输入 · Lesson');
+  await expect(englishQueue).toContainText('针对这段文字补充一个例子');
+  await expect(englishQueue.getByRole('button', { name: 'Retrieve queued message 1', exact: true })).toHaveAttribute('title', 'Move back to input');
+  await expect(page.getByLabel('Ask Agent', { exact: true })).toHaveValue('语言切换时保留的草稿');
+  await agent.screenshot({ path: `.amp/in/artifacts/prompt-queue-paused-en-${info.project.name}.png`, animations: 'disabled' });
+  await page.reload();
+  await expect(englishQueue).toContainText('Quote: 参数与输入 · Lesson');
+  await expect(englishQueue.getByRole('status')).toHaveText('Queued · 1 · Paused');
+  await page.getByRole('button', { name: 'Application settings', exact: true }).click();
+  await page.getByLabel('Language', { exact: true }).click();
+  await page.getByRole('option', { name: '简体中文', exact: true }).click();
+  await page.getByRole('button', { name: '返回', exact: true }).click();
+  await expect(queue).toContainText('引用：参数与输入 · 课件');
   await input.fill('慢速说明另一轮');
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
@@ -865,6 +893,43 @@ test('tutor queues survive stop and withdrawal restores the reference without ov
   await queue.getByRole('button', { name: '取回第 1 条待发送消息', exact: true }).click();
   await expect(input).toHaveValue('另一轮待发送\n\n针对这段文字补充一个例子\n\n刷新后正在写的新问题');
   await expect(queue).toHaveCount(0);
+});
+
+test('a failed queued reply keeps later prompts paused and retries the first question without covering the error', async ({ page }, info) => {
+  test.setTimeout(45000);
+  await page.addInitScript(() => localStorage.setItem('tmc-language', 'en'));
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await create(page, `Queued failure ${info.project.name}`, 'en');
+  await page.getByRole('button', { name: 'Confirm and plan Learning path', exact: true }).click();
+  await page.getByRole('button', { name: 'Start learning', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const agent = page.getByRole('complementary', { name: 'Agent', exact: true });
+  const input = page.getByLabel('Ask Agent', { exact: true });
+  await input.fill('慢速 initial reply');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await input.fill('失败 follow-up reply');
+  await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
+  await input.fill('Keep this prompt paused');
+  await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
+  const failure = agent.getByRole('alert');
+  const message = failure.getByText('The model response did not complete normally. Generated artifacts were not saved.', { exact: true });
+  const retry = failure.getByRole('button', { name: 'Retry first question', exact: true });
+  await expect(retry).toBeVisible({ timeout: 15000 });
+  const titleBox = (await message.boundingBox())!, buttonBox = (await retry.boundingBox())!;
+  expect(titleBox.x < buttonBox.x + buttonBox.width && titleBox.x + titleBox.width > buttonBox.x
+    && titleBox.y < buttonBox.y + buttonBox.height && titleBox.y + titleBox.height > buttonBox.y).toBe(false);
+  const queue = agent.getByRole('region', { name: 'Queued messages', exact: true });
+  await expect(queue).toContainText('Queued · 1 · Paused');
+  await expect(agent.locator('.is-assistant').first()).not.toContainText('Retry first question');
+  await agent.screenshot({ path: `.amp/in/artifacts/prompt-queue-segment-error-en-${info.project.name}.png`, animations: 'disabled' });
+  const response = page.waitForResponse((response) => response.request().method() === 'POST' && /\/runs\/.+\/retry$/.test(new URL(response.url()).pathname));
+  await retry.click();
+  expect((await response).ok()).toBe(true);
+  await expect(queue).toContainText('Keep this prompt paused');
+  await expect(queue).toContainText('Paused');
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
 });
 
 test('reasoning cancellation retains partial thought and new input; IME does not submit', async ({ page }, info) => {
@@ -1294,6 +1359,21 @@ test('lesson review exposes link and whitespace changes inline without a source 
   expect((await readUnit(page, original.id, unit)).lesson).toEqual(before.lesson);
   await notes.filter({ hasText: 'https://docs.example.org/args/v1' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `.amp/in/artifacts/lesson-inline-details-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '应用设置', exact: true }).click();
+  await page.getByLabel('语言', { exact: true }).click();
+  await page.getByRole('option', { name: 'English', exact: true }).click();
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(notes.filter({ hasText: 'Link and image addresses' })).toHaveCount(2);
+  await expect(notes.filter({ hasText: 'Markdown / whitespace changes' }).filter({ hasText: '__保留正文__' })).toHaveCount(1);
+  await expect(notes.filter({ hasText: 'Trailing whitespace changed' })).toHaveCount(2);
+  await expect(preview.getByRole('heading', { name: '资料与格式', exact: true })).toHaveCount(1);
+  await notes.filter({ hasText: 'https://docs.example.org/args/v1' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `.amp/in/artifacts/i18n-lesson-diff-en-${info.project.name}.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: 'Application settings', exact: true }).click();
+  await page.getByLabel('Language', { exact: true }).click();
+  await page.getByRole('option', { name: '简体中文', exact: true }).click();
+  await page.getByRole('button', { name: '返回', exact: true }).click();
+  await expect(notes.filter({ hasText: '链接与图片地址' })).toHaveCount(2);
   await finalLine.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `.amp/in/artifacts/lesson-inline-format-${info.project.name}.png`, animations: 'disabled' });
   await expect(page.getByTestId('lesson-accept')).toBeInViewport();
@@ -1330,7 +1410,7 @@ test('lesson review of title-only edits remains actionable in a readonly fullscr
   await expect(preview.getByTestId('lesson-title-before')).toHaveText(before.lesson!.title);
   await expect(preview.getByTestId('lesson-title-after')).toHaveText('参数与输入：边界详解');
   expect((await workspace(page, goal)).lessonProposals.at(-1).content.content).toBe(before.lesson!.content);
-  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
   await expect(preview).toHaveCount(0);
   await expect(page.getByTestId('lesson-review')).toBeVisible();
   await expect(editor).toHaveText('UNSAVED_BUFFER = 17\n', { useInnerText: true });
@@ -1670,9 +1750,9 @@ test('context usage hydrates, updates through SSE and resists stale refreshes wi
   }, { runId, seq, data: { type: 'context', context: next } });
   await expect(trigger).toContainText('50%');
   await trigger.focus(); await page.keyboard.press('Enter');
-  await expect(popup).toContainText('32.8K / 65.5K');
+  await expect(popup).toContainText('3.3万 / 6.6万');
   await expect(popup.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
-  await expect(popup.getByText('输入（不含缓存）', { exact: true }).locator('..')).toContainText('12.3K');
+  await expect(popup.getByText('输入（不含缓存）', { exact: true }).locator('..')).toContainText('1.2万');
   await expect(popup.getByText('输出', { exact: true }).locator('..')).toContainText('567');
   await expect(popup.getByText('缓存读取', { exact: true }).locator('..')).toContainText('89');
   await expect(popup.getByText('缓存写入', { exact: true }).locator('..')).toContainText('10');

@@ -1,0 +1,33 @@
+{
+  "spaceNames": {
+    "new": "新的学习空间",
+    "rust": "Rust 入门",
+    "pytorch": "PyTorch 基础",
+    "learning": "{{topic}} 学习",
+    "topicFallback": "新主题"
+  },
+  "terminal": {
+    "fileNotRunnable": "此文件不可直接运行，原型支持 Rust 和 Python 练习。",
+    "connectionLost": "环境连接已断开，请重新连接后再运行。",
+    "connecting": "环境正在自动连接，请稍候再运行。",
+    "processExited": "进程已结束，退出码 0",
+    "runFailed": "运行失败，退出码 1",
+    "directoryNotFound": "目录不存在：{{path}}",
+    "emptyDirectory": "（空）",
+    "help": "原型模拟终端：pwd、cd <目录>、ls [目录]、clear、rustc <路径>、python <路径>、cargo run（仅模拟入口文件）",
+    "fileNotFound": "error: 找不到文件 {{path}}",
+    "cargoSimulation": "原型仅模拟 src/main.rs，不执行 Cargo 构建或依赖解析。"
+  },
+  "assessment": {
+    "explanation": "解释题",
+    "debugging": "调试题",
+    "coding": "编程题"
+  },
+  "moveDiagram": {
+    "valid": "ptr · len 5 · cap 5",
+    "invalid": "已失效",
+    "stack": "栈 · 执行 {{statement}} 之后",
+    "heap": "堆",
+    "caption": "只有 s2 指向堆上的数据。s2 离开作用域时释放这块内存，s1 不会再次释放它。"
+  }
+}

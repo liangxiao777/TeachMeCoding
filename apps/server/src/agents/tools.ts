@@ -45,7 +45,7 @@ export async function prepareTools(input: {
   const names = new Map<string, PreparedTools['inventory'][number]['source']>();
   for (const { name, source } of inventory) {
     const previous = names.get(name);
-    if (previous !== undefined) throw new BusinessError(422, `工具名称冲突：${name}（${previous} / ${source}）。请检查工具配置。`);
+    if (previous !== undefined) throw new BusinessError(422, { code: 'TOOL_NAME_CONFLICT' });
     names.set(name, source);
   }
   return {

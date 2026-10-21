@@ -44,15 +44,38 @@ test('YOLO serializes successful file approvals, preserves edits and never execu
       if (mode === 'enabled') {
         assert.deepEqual(saved.map((p) => p.state), ['succeeded', 'succeeded']);
         assert.equal(projects.read(space.id, 'second.txt').content, 'new example');
+        assert.ok(saved.every((p) => p.receiptId && learning.session(space.id, session).messages.some((m) => m.id === p.receiptId)));
         // Historical command records use the same consent and execution path.
         const command = actions.prepare(space.id, session, run.id, 'command', { command: 'printf once >> count', reason: 'Legacy record' });
         actions.save(space.id, command);
         await runtime.approveSession(space.id, session); await runtime.approveSession(space.id, session);
         assert.equal(actions.get(space.id, command.id).state, 'succeeded');
+        const receiptId = actions.get(space.id, command.id).receiptId;
+        assert.ok(receiptId);
+        assert.equal(learning.session(space.id, session).messages.filter((m) => m.id === receiptId).length, 1);
+        await runtime.approveSession(space.id, session);
+        assert.equal(actions.get(space.id, command.id).receiptId, receiptId);
         assert.equal(readFileSync(join(projects.root(space.id), 'count'), 'utf8'), 'once');
       } else if (mode === 'stale') {
         assert.deepEqual(saved.map((p) => p.state), ['expired', 'pending']);
-        assert.match(learning.session(space.id, session).messages.at(-1)!.text, /YOLO 自动审批未完成.*版本已变化/);
+        const warning = learning.session(space.id, session).messages.at(-1)!;
+        assert.equal(warning.text, '');
+        assert.deepEqual(warning.notice, { code: 'ACTION_FILE_CHANGED' });
+        const notices = runtime.events(space.id, run.id).events.filter((e) => e.data.type === 'notice');
+        assert.equal(notices.length, 1);
+        assert.deepEqual(notices[0]!.data, { type: 'notice', messageId: warning.id, notice: warning.notice });
+        assert.deepEqual(runtime.events(space.id, run.id, notices[0]!.seq - 1).events, notices);
+        const receiptId = saved[0]!.receiptId;
+        assert.ok(receiptId && receiptId !== warning.id);
+        await runtime.close(); await actions.close(); data.close();
+        const reopened = openDataDirectory(root), hydrated = new Learning(reopened.db);
+        const replay = new TeachingRuntime(hydrated, syntheticSource);
+        try {
+          assert.deepEqual(replay.events(space.id, run.id).events.filter((e) => e.data.type === 'notice'), notices);
+          assert.deepEqual(hydrated.session(space.id, session).messages.find((m) => m.id === warning.id), warning);
+          assert.equal(new Actions(hydrated, projects).get(space.id, saved[0]!.id).receiptId, receiptId);
+          assert.equal(hydrated.session(space.id, session).messages.filter((m) => m.id === receiptId).length, 1);
+        } finally { await replay.close(); reopened.close(); }
       } else assert.deepEqual(saved.map((p) => p.state), mode === 'disabled' ? ['pending', 'pending'] : []);
     } finally { await runtime.close(); await actions.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
   }
@@ -71,7 +94,7 @@ test('immutable proposals require confirmation, fence stale files, and never rep
   try {
     const p = file('first'); actions.save(space.id, p);
     assert.equal(existsSync(join(projects.root(space.id), 'sample.txt')), false);
-    assert.throws(() => actions.decide(space.id, p.id, { digest: 'different', decision: 'confirm' }), /不匹配/);
+    assert.throws(() => actions.decide(space.id, p.id, { digest: 'different', decision: 'confirm' }), { message: 'ACTION_DIGEST_MISMATCH' });
     decide(p, 'reject'); decide(p, 'confirm'); await actions.idle(p.id);
     assert.equal(existsSync(join(projects.root(space.id), 'sample.txt')), false);
     const saved = file('exact content'); actions.save(space.id, saved);
@@ -79,19 +102,22 @@ test('immutable proposals require confirmation, fence stale files, and never rep
     assert.equal(projects.read(space.id, 'sample.txt').content, 'exact content');
     const receipts = learning.session(space.id, session).messages;
     assert.equal(receipts.length, 2);
-    assert.match(receipts[0]!.text, /文件修改.*已拒绝.*sample\.txt/);
-    assert.match(receipts[1]!.text, /文件修改.*已完成.*sample\.txt/);
+    assert.equal(actions.get(space.id, p.id).receiptId, receipts[0]!.id);
+    assert.equal(actions.get(space.id, saved.id).receiptId, receipts[1]!.id);
+    assert.equal(receipts[0]!.text, '');
+    assert.equal(receipts[1]!.text, '');
+    assert.deepEqual(actions.get(space.id, saved.id).result, { status: 'succeeded', output: '', exitCode: 0, signal: null });
     assert.ok(receipts.every((m) => !m.text.includes(p.id) && !m.text.includes(saved.id) && !m.text.includes(projects.root(space.id))));
     const stale = file('must not overwrite'); actions.save(space.id, stale);
     writeFileSync(join(projects.root(space.id), 'sample.txt'), 'external');
-    assert.throws(() => decide(stale, 'confirm'), /版本已变化/);
+    assert.throws(() => decide(stale, 'confirm'), { message: 'ACTION_FILE_CHANGED' });
     assert.equal(projects.read(space.id, 'sample.txt').content, 'external');
     const expired = { ...file('too late'), expiresAt: 0 }; actions.save(space.id, expired);
     assert.equal(decide(expired, 'confirm').state, 'expired');
     const cancelled = command('echo wrong > cancelled'); actions.save(space.id, cancelled);
     const concurrent = file('concurrent'); actions.save(space.id, concurrent);
     decide(cancelled, 'confirm');
-    assert.throws(() => decide(concurrent, 'confirm'), /已有本机操作/);
+    assert.throws(() => decide(concurrent, 'confirm'), { message: 'LOCAL_ACTION_RUNNING' });
     decide(cancelled, 'cancel'); await actions.idle(cancelled.id);
     assert.equal(actions.get(space.id, cancelled.id).state, 'cancelled');
     assert.equal(existsSync(join(projects.root(space.id), 'cancelled')), false);
@@ -100,27 +126,35 @@ test('immutable proposals require confirmation, fence stale files, and never rep
     assert.equal(readFileSync(join(projects.root(space.id), 'count'), 'utf8'), 'once\n');
     assert.equal(actions.get(space.id, once.id).result?.exitCode, 7);
     assert.equal(actions.get(space.id, once.id).result?.output, 'actual-output\n');
+    assert.equal(actions.get(space.id, once.id).result?.error, undefined, 'program output is not a host business failure');
+    assert.equal('errorDetail' in actions.get(space.id, once.id).result!, false);
     assert.equal(actions.get(space.id, once.id).state, 'failed');
-    const receipt = learning.session(space.id, session).messages.at(-1)!.text;
-    assert.match(receipt, /命令执行失败.*退出码 7/);
-    assert.match(receipt, /actual-output/);
+    const receiptMessage = learning.session(space.id, session).messages.at(-1)!;
+    assert.equal(actions.get(space.id, once.id).receiptId, receiptMessage.id);
+    const receipt = receiptMessage.text;
+    assert.equal(receipt, '');
     assert.equal(receipt.includes(once.id), false);
     const staleCommand = command('touch stale-command'); actions.save(space.id, staleCommand);
     writeFileSync(join(projects.root(space.id), 'sample.txt'), 'changed again');
-    assert.throws(() => decide(staleCommand, 'confirm'), /项目已变化/);
+    assert.throws(() => decide(staleCommand, 'confirm'), { message: 'ACTION_PROJECT_CHANGED' });
     assert.equal(existsSync(join(projects.root(space.id), 'stale-command')), false);
     const other = populated(learning).space;
-    assert.throws(() => actions.get(other.id, once.id), /不存在/);
+    assert.throws(() => actions.get(other.id, once.id), { message: 'ACTION_PROPOSAL_NOT_FOUND' });
     const pending = file('after reboot'); actions.save(space.id, pending);
     const interrupted = { ...command('touch should-not-replay'), state: 'running' as const }; actions.save(space.id, interrupted);
     await actions.close(); data.close();
     const reopened = openDataDirectory(root);
     try {
-      const recovered = new Actions(new Learning(reopened.db), projects);
+      const hydrated = new Learning(reopened.db), recovered = new Actions(hydrated, projects);
       assert.equal(recovered.get(space.id, pending.id).state, 'expired');
       assert.equal(recovered.get(space.id, interrupted.id).state, 'interrupted');
       recovered.decide(space.id, interrupted.id, { digest: interrupted.digest, decision: 'confirm' });
       assert.equal(existsSync(join(projects.root(space.id), 'should-not-replay')), false);
+      recovered.decide(space.id, once.id, { digest: once.digest, decision: 'confirm' }); await recovered.idle(once.id);
+      assert.equal(recovered.get(space.id, once.id).receiptId, receiptMessage.id);
+      assert.deepEqual(hydrated.session(space.id, session).messages.find((m) => m.id === receiptMessage.id), receiptMessage);
+      assert.equal(hydrated.session(space.id, session).messages.filter((m) => m.id === receiptMessage.id).length, 1);
+      assert.equal(readFileSync(join(projects.root(space.id), 'count'), 'utf8'), 'once\n');
     } finally { reopened.close(); }
   } finally { await actions.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
 });

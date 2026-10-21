@@ -6,7 +6,7 @@ export default defineConfig({
   outputDir: '.amp/in/artifacts/browser',
   // Both serving modes must match the same platform-specific visual baseline.
   snapshotPathTemplate: '{testDir}/__screenshots__/{platform}/{arg}{ext}',
-  use: { channel: 'chrome', viewport: { width: 1100, height: 760 } },
+  use: { channel: 'chrome', locale: 'zh-CN', viewport: { width: 1100, height: 760 } },
   webServer: [
     { command: 'pnpm exec tsx tests/serve-browser.ts production', url: 'http://127.0.0.1:14320/api/health', reuseExistingServer: false, gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 } },
     { command: 'pnpm exec tsx tests/serve-browser.ts development', url: 'http://127.0.0.1:14321/api/health', reuseExistingServer: false, gracefulShutdown: { signal: 'SIGTERM', timeout: 5000 } },

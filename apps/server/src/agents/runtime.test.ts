@@ -50,7 +50,7 @@ test('runs isolate sessions, replay durable cursors and deduplicate submissions'
     await Promise.all([runtime.idle(first.run.id), runtime.idle(second.run.id)]);
     assert.equal(runtime.get(a.id, first.run.id).state, 'succeeded');
     assert.ok(!contexts[0]!.includes('独立事实 B') && !contexts[1]!.includes('A prompt'));
-    assert.throws(() => runtime.get(b.id, first.run.id), /不存在/);
+    assert.throws(() => runtime.get(b.id, first.run.id), { message: 'RUN_NOT_FOUND' });
     const events = runtime.events(a.id, first.run.id).events;
     assert.deepEqual(events.map((e) => e.seq), Array.from({ length: events.length }, (_, i) => i + 1));
     assert.deepEqual(events.filter((e) => e.data.type !== 'context').map((e) => e.data.type), ['state', 'state', 'text', 'state']);
@@ -95,7 +95,7 @@ test('follow-ups wait for the whole tool chain, consume FIFO and project separat
     assert.equal(new Set(pending.map((p) => p.id)).size, 3);
     assert.equal(last.session.messages.length, 2, 'queued prompts are not delivered chat messages');
     assert.equal(inputs.length, 1, 'a follow-up must not interrupt a running tool');
-    assert.throws(() => runtime.submit(a.id, sa, randomUUID(), message('stale', 2)), /已改变/);
+    assert.throws(() => runtime.submit(a.id, sa, randomUUID(), message('stale', 2)), { message: 'CONTENT_CHANGED' });
     release(); await runtime.idle(first.run.id);
     assert.equal(runtime.get(a.id, first.run.id).state, 'succeeded');
     assert.equal(inputs[1], 'toolResult', 'finish the initial tool chain before consuming follow-ups');
@@ -134,7 +134,7 @@ test('queued prompts can be withdrawn by ID and remain recoverable after stop or
       runtime.submit(a.id, sa, randomUUID(), message('withdraw me', 1));
       const queued = runtime.submit(a.id, sa, randomUUID(), message('keep me', 2));
       const prompts = queued.session.messages[1]!.queuedPrompts!;
-      assert.throws(() => runtime.dequeue(b.id, sb, prompts[0]!.id, randomUUID()), /不存在/);
+      assert.throws(() => runtime.dequeue(b.id, sb, prompts[0]!.id, randomUUID()), { message: 'QUEUED_PROMPT_NOT_FOUND' });
       const key = randomUUID();
       runtime.dequeue(a.id, sa, prompts[0]!.id, key);
       runtime.dequeue(a.id, sa, prompts[0]!.id, key);
@@ -164,10 +164,45 @@ test('cancel before commit wins even if transport finishes; pending shutdown nev
     const { run } = runtime.submit(a.id, sa, randomUUID(), message('cancel me'));
     await ready; runtime.stop(a.id, run.id); finish(); await runtime.idle(run.id);
     assert.equal(runtime.get(a.id, run.id).state, 'interrupted'); assert.equal(commits, 0);
+    assert.deepEqual(runtime.get(a.id, run.id).error, { code: 'RUN_STOPPED' });
     const pending = runtime.submit(b.id, sb, randomUUID(), message('pending'));
     await runtime.close();
     assert.equal(runtime.get(b.id, pending.run.id).state, 'interrupted'); assert.equal(calls, 1);
+    assert.deepEqual(runtime.get(b.id, pending.run.id).error, { code: 'RUN_SHUTDOWN' });
   } finally { db.close(); }
+});
+
+test('a missing Skill fails asynchronously and retains its semantic error through events, session hydration and restart', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-skill-failure-'));
+  let data = openDataDirectory(root), learning = new Learning(data.db);
+  const space = learning.create({ name: 'Missing Skill', goal: 'Test a missing Skill' }), session = space.sessions[0]!.id;
+  const skills = new SkillService(data.db, root);
+  let requests = 0;
+  let runtime = new TeachingRuntime(learning, syntheticSource, { skills,
+    stream: () => { requests++; return response(reply([{ type: 'text', text: 'Must not start.' }])); } });
+  try {
+    const { run } = runtime.submit(space.id, session, randomUUID(), message('/skill:missing-fixture explain'));
+    assert.equal(run.state, 'pending');
+    await runtime.idle(run.id);
+    const events = runtime.events(space.id, run.id).events;
+    for (const reload of [false, true]) {
+      if (reload) {
+        await runtime.close(); await skills.close(); data.close();
+        data = openDataDirectory(root); learning = new Learning(data.db);
+        runtime = new TeachingRuntime(learning, syntheticSource);
+      }
+      const failed = runtime.get(space.id, run.id);
+      assert.equal(failed.state, 'failed');
+      assert.deepEqual(failed.error, { code: 'SKILL_DISABLED_OR_MISSING' });
+      assert.deepEqual(runtime.events(space.id, run.id).events, events);
+      assert.deepEqual(events.at(-1)?.data, { type: 'state', state: 'failed', error: failed.error });
+      const hydrated = learning.session(space.id, session).messages.find((m) => m.id === run.id)!;
+      assert.equal(hydrated.status, 'error');
+      assert.deepEqual(hydrated.error, failed.error);
+      assert.equal(hydrated.sequence, events.at(-1)?.seq);
+    }
+    assert.equal(requests, 0);
+  } finally { await runtime.close(); await skills.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test('large tool results reach the second request intact; persisted messages omit source body', async () => {
@@ -282,13 +317,18 @@ test('startup appends an interrupted event once and does not replay a pending re
     data.close(); data = openDataDirectory(root);
     let runtime = new TeachingRuntime(new Learning(data.db), syntheticSource);
     assert.equal(runtime.get(a.id, id).state, 'interrupted');
+    assert.deepEqual(runtime.get(a.id, id).error, { code: 'RUN_RESTARTED' });
     assert.equal(runtime.events(a.id, id).events.at(-1)?.data.type, 'state');
     assert.equal(runtime.get(a.id, task).state, 'interrupted');
+    assert.deepEqual(runtime.get(a.id, task).error, { code: 'RUN_RESTARTED' });
     assert.equal(runtime.events(a.id, task).events.at(-1)?.data.type, 'state');
     data.close(); data = openDataDirectory(root); runtime = new TeachingRuntime(new Learning(data.db), syntheticSource);
     for (const runId of [id, task]) {
       const events = runtime.events(a.id, runId).events;
       assert.equal(events.length, runId === id ? 5 : 4);
+      const recovered = runtime.get(a.id, runId);
+      assert.deepEqual(recovered.error, { code: 'RUN_RESTARTED' });
+      assert.deepEqual(events.at(-1)?.data, { type: 'state', state: 'interrupted', error: recovered.error });
       const parts = events.reduce<AgentDisplayPart[]>(applyAgentEvent, []);
       assert.deepEqual(parts, [
         { type: 'reasoning', id: `${runId}:1:reasoning:0`, text: 'Unfinished at shutdown', status: 'interrupted' },
@@ -297,6 +337,7 @@ test('startup appends an interrupted event once and does not replay a pending re
       if (runId === id) {
         const saved = new Learning(data.db).session(a.id, a.sessions[0]!.id);
         assert.deepEqual(saved.messages.at(-1)?.parts, parts);
+        assert.deepEqual(saved.messages.at(-1)?.error, recovered.error);
         assert.deepEqual(saved.messages.at(-1)?.queuedPrompts, [prompt]);
         runtime.dequeue(a.id, saved.id, prompt.id, randomUUID());
         assert.deepEqual(new Learning(data.db).session(a.id, saved.id).messages.at(-1)?.queuedPrompts, []);
@@ -500,7 +541,7 @@ test('legacy display events reduce immutably in order and terminal states do not
     { type: 'text', delta: 'Old ' }, { type: 'text', delta: 'reply' },
     { type: 'tool', name: 'read', phase: 'start' }, { type: 'tool', name: 'read', phase: 'end' },
     { type: 'text', delta: ' then ' }, { type: 'tool', name: 'read', phase: 'start' },
-    { type: 'state', state: 'failed', error: 'Failed before tool end' },
+    { type: 'state', state: 'failed', error: { code: 'MODEL_RUN_INVALID' } },
   ];
   const parts = data.reduce<AgentDisplayPart[]>((p, d, index) => applyAgentEvent(p, { runId: 'legacy', seq: index + 1, data: d }), []);
   assert.deepEqual(parts, [
@@ -600,11 +641,11 @@ test('OAuth renewal errors give durable, actionable feedback without retaining p
   const source: ModelSource = { ...syntheticSource, current: () => ({ selection, model }), resolve: () => model };
   for (const [reason, expected, category] of [
     ['OAuth refresh failed for openai: OpenAI OAuth token request failed (400): {"error":"invalid_grant","detail":"PRIVATE-REFRESH-TOKEN"}',
-      'ChatGPT 登录已失效，请在应用设置中重新登录。', 'oauth_reauth_required'],
+      { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } }, 'oauth_reauth_required'],
     ['OAuth refresh failed for openai: OpenAI OAuth token request failed (503): {"error":"server_error","detail":"invalid_grant PRIVATE-REFRESH-TOKEN"}',
-      'ChatGPT 登录暂时无法续期，请稍后重试。', 'oauth_refresh_failed'],
+      { code: 'MODEL_OAUTH_REFRESH_FAILED', params: { provider: 'ChatGPT' } }, 'oauth_refresh_failed'],
     ['400 {"error":"invalid_grant","detail":"PRIVATE-REFRESH-TOKEN"}',
-      '模型响应未正常完成，未保存生成产物。', null],
+      { code: 'MODEL_RESPONSE_INCOMPLETE' }, null],
   ] as const) {
     const { db, learning, a, sa } = setup();
     const runtime = new TeachingRuntime(learning, source, { retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
@@ -614,11 +655,11 @@ test('OAuth renewal errors give durable, actionable feedback without retaining p
       const { run } = runtime.submit(a.id, sa, randomUUID(), message('解释一个概念'));
       await runtime.idle(run.id);
       assert.equal(runtime.get(a.id, run.id).state, 'failed');
-      assert.equal(runtime.get(a.id, run.id).error, expected);
+      assert.deepEqual(runtime.get(a.id, run.id).error, expected);
       const events = runtime.events(a.id, run.id).events;
-      assert.ok(events.some((event) => event.data.type === 'state' && event.data.error === expected));
+      assert.ok(events.some((event) => event.data.type === 'state' && event.data.error?.code === expected.code));
       const session = learning.session(a.id, sa);
-      assert.equal(session.messages.at(-1)?.error, expected);
+      assert.deepEqual(session.messages.at(-1)?.error, expected);
       const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests WHERE request=1').get() as { value: string }).value);
       assert.equal(manifest.transport.failure?.category ?? null, category);
       if (category === 'oauth_reauth_required') {
@@ -650,6 +691,13 @@ test('stop and shutdown interrupt retry backoff without another request or commi
       else await runtime.close();
       await runtime.idle(run.id);
       assert.equal(runtime.get(a.id, run.id).state, 'interrupted');
+      const interrupted = runtime.get(a.id, run.id);
+      assert.deepEqual(interrupted.error, { code: cause === 'stop' ? 'RUN_STOPPED' : 'RUN_SHUTDOWN' });
+      assert.deepEqual(runtime.events(a.id, run.id).events.at(-1)?.data,
+        { type: 'state', state: 'interrupted', error: interrupted.error });
+      const hydrated = learning.session(a.id, sa).messages.at(-1)!;
+      assert.equal(hydrated.status, 'stopped');
+      assert.deepEqual(hydrated.error, interrupted.error);
       assert.equal(requests, 1); assert.equal(commits, 0);
     } finally { await runtime.close(); db.close(); }
   }
@@ -828,8 +876,8 @@ test('tool name conflicts fail before requesting a model, executing tools or com
       await runtime.idle(run.id);
       const failed = runtime.get(a.id, run.id);
       assert.equal(failed.state, 'failed');
-      assert.ok(failed.error?.includes(first.name) && failed.error.includes(`scenario / ${source}`));
-      assert.doesNotMatch(failed.error!, /PRIVATE-FIRST-DESCRIPTION/);
+      assert.deepEqual(failed.error, { code: 'TOOL_NAME_CONFLICT' });
+      assert.doesNotMatch(JSON.stringify(failed.error), /PRIVATE-FIRST-DESCRIPTION/);
       assert.deepEqual({ requests, executions, commits }, { requests: 0, executions: 0, commits: 0 });
       assert.equal(db.prepare<[], { n: number }>('SELECT COUNT(*) AS n FROM context_manifests').get()!.n, 0);
       assert.deepEqual(learning.space(a.id).requirement, requirement);
@@ -1033,7 +1081,7 @@ PY` : `pdftotext -enc UTF-8 -nopgbrk ${source} ${quote(outputPath)}`;
     assert.equal(uploaded.status, 201);
     const { run } = runtime.submit(a.id, sa, randomUUID(), message(`读取资料库中的 ${filename}，只引用实际提取的正文；不能读取时说明限制。`));
     await runtime.idle(run.id);
-    assert.equal(runtime.get(a.id, run.id).state, 'succeeded', runtime.get(a.id, run.id).error ?? '');
+    assert.equal(runtime.get(a.id, run.id).state, 'succeeded', JSON.stringify(runtime.get(a.id, run.id).error));
     const answer = learning.session(a.id, sa).messages.at(-1)!.text;
     if (sample.missingParser) {
       assert.match(answer, /^未提取正文，解析工具不可用：/);
@@ -1072,7 +1120,7 @@ test('native default compaction uses the strict reserve boundary, counts summary
       const { run } = runtime.submit(a.id, sa, randomUUID(), message('Check the native threshold.'));
       await runtime.idle(run.id);
       const final = runtime.get(a.id, run.id);
-      assert.equal(final.state, 'succeeded', final.error ?? '');
+      assert.equal(final.state, 'succeeded', JSON.stringify(final.error));
       assert.equal(requests, 1); assert.equal(commits, 1);
       assert.equal(summaries > 0, total === 49_153);
       assert.equal(final.context?.tokens, summaries ? null : 49_152);
@@ -1124,7 +1172,7 @@ test('successive native compactions survive restart without resurrecting raw his
     for (const text of ['FIRST-RAW-PROMPT', 'SECOND-RAW-PROMPT']) {
       const { run } = runtime.submit(space.id, session, randomUUID(), message(text, learning.session(space.id, session).draft.revision));
       await runtime.idle(run.id);
-      assert.equal(runtime.get(space.id, run.id).state, 'succeeded', runtime.get(space.id, run.id).error ?? '');
+      assert.equal(runtime.get(space.id, run.id).state, 'succeeded', JSON.stringify(runtime.get(space.id, run.id).error));
       assert.equal(runtime.get(space.id, run.id).context?.phase, 'compacted');
       await runtime.close(); data.close();
       data = openDataDirectory(root); learning = new Learning(data.db); runtime = new TeachingRuntime(learning, source, runtimeOptions);
@@ -1132,7 +1180,7 @@ test('successive native compactions survive restart without resurrecting raw his
     learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, value: { rows: [{ question: 'Goal', answer: 'LATEST-BASELINE' }] } });
     const { run } = runtime.submit(space.id, session, randomUUID(), message('Continue after restart.', learning.session(space.id, session).draft.revision));
     await runtime.idle(run.id);
-    assert.equal(runtime.get(space.id, run.id).state, 'succeeded', runtime.get(space.id, run.id).error ?? '');
+    assert.equal(runtime.get(space.id, run.id).state, 'succeeded', JSON.stringify(runtime.get(space.id, run.id).error));
     assert.equal(requests, 3); assert.ok(summaries >= 2);
     assert.equal(learning.session(space.id, session).messages.at(-1)?.text, 'Continue from the saved summary.');
     assert.ok(runtime.get(space.id, run.id).context?.tokens !== null);

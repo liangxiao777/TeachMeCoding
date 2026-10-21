@@ -19,7 +19,10 @@ import {
 } from 'lucide-react'
 import { motion, useIsPresent, useReducedMotion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
-import { actionReceipt } from '@teach-me-coding/contracts'
+import { useTranslation } from 'react-i18next'
+import { formatRelativeTime } from '@/i18n/format'
+import { formatNotice, notice, type NoticeValue } from '@/i18n/notice'
+import { localizedActionReceipt, quoteLabel, receiptProposal, sessionTitle } from '@/i18n/presentation'
 import { BrandMark, isComposing } from '@/components/shared'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
 import { Message as ChatMessage, MessageContent } from '@/components/ai-elements/message'
@@ -33,7 +36,7 @@ import { RouteProposalDecision } from './route-proposal-decision'
 import { LessonProposalDecision } from './lesson-proposal-decision'
 import { LocalAction } from './local-action'
 import { pendingDecision } from '@/app/lesson-proposals'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -47,7 +50,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { findUnit, relativeTime, scopedSessions, sessionScope, sessionUnitId } from '@/app/selectors'
+import { findUnit, scopedSessions, sessionScope, sessionUnitId } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 import { uiMotion } from '@/lib/motion'
@@ -61,6 +64,7 @@ const SOURCE_ICON: Record<QuoteSource, typeof FileText> = {
 }
 
 function QuoteCard({ quote, onRemove, compact }: { quote: Quote; onRemove?: () => void; compact?: boolean }) {
+  const { t } = useTranslation('workbench')
   const Icon = SOURCE_ICON[quote.source]
   const mono = quote.source === 'code' || quote.source === 'terminal'
   return (
@@ -73,10 +77,10 @@ function QuoteCard({ quote, onRemove, compact }: { quote: Quote; onRemove?: () =
       <div className="flex items-center justify-between gap-2">
         <span className={cn('flex items-center gap-1.5 text-xs font-medium', compact ? 'opacity-80' : 'text-muted-foreground')}>
           <Icon className="size-3.5" aria-hidden />
-          {quote.label}
+          {quoteLabel(quote)}
         </span>
         {onRemove && (
-          <Button type="button" variant="ghost" size="icon-xs" onClick={onRemove} aria-label="移除引用">
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onRemove} aria-label={t('agent.removeQuote')}>
             <X />
           </Button>
         )}
@@ -86,69 +90,66 @@ function QuoteCard({ quote, onRemove, compact }: { quote: Quote; onRemove?: () =
   )
 }
 
-const ACTION_COPY = {
-  'skip-basics': { title: '将「基础语法」标记为已跳过', text: '当前单元会切换到「所有权」，其他单元保持不变。' },
-  'project-first': { title: '在「所有权」之后插入一个练习项目', text: '新增单元「练习项目：单词计数器」，后续单元顺延。' },
-}
-
 export function AgentMessage({ msg }: { msg: Message }) {
+  const { t } = useTranslation('workbench')
   const { retryReply, applyRouteAction, bringToIde, capabilities, persistence } = useApp()
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
   const awaitingDecision = persistence && pendingDecision(persistence)
 
-  // Reformat only known legacy host receipts, never arbitrary chat or program output.
-  const legacyReceipt = !msg.parts?.length && persistence?.actions.find((p) => msg.text.startsWith(`本机操作 ${p.id}：${p.state}。`))
+  const receipt = receiptProposal(msg, persistence?.actions ?? [])
+  const text = receipt ? localizedActionReceipt(receipt) : msg.notice
+    ? formatNotice(notice('common', 'notices.autoApproval', { error: msg.notice })) : msg.text
 
   return (
     <ChatMessage from="assistant" className="max-w-full">
       <MessageContent className="w-full gap-3 leading-relaxed">
-      <RunContent parts={msg.parts} text={legacyReceipt ? actionReceipt(legacyReceipt) : msg.text} streaming={capabilities.agent && (msg.status === 'thinking' || msg.status === 'streaming')}
+      <RunContent parts={msg.parts} text={text} streaming={capabilities.agent && (msg.status === 'thinking' || msg.status === 'streaming')}
         onCode={(code, language) => bringToIde(code, `agent_example.${({ python: 'py', rust: 'rs', javascript: 'js', typescript: 'ts', json: 'json', bash: 'sh' } as Record<string, string>)[language || lang] ?? 'txt'}`)} />
       {msg.status === 'stopped' && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Square className="size-3" aria-hidden />
-          已停止生成
+          {t('agent.stopped')}
           <Button variant="link" size="xs" className="h-auto p-0" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.runId ?? msg.id)}>
-            {msg.runId ? '重新生成首条问题' : '重新生成'}
+            {msg.runId ? t('queue.regenerateFirst') : t('controls.regenerate')}
           </Button>
         </div>
       )}
       {msg.status === 'error' && (
         <Alert variant="destructive">
           <AlertCircle />
-          <AlertTitle>{msg.error ?? '回复失败，你的问题已保留'}</AlertTitle>
-          <AlertAction>
+          <AlertTitle>{msg.error ? formatNotice(msg.error) : t('agent.replyFailed')}</AlertTitle>
+          <div className="col-start-2 mt-2">
             <Button size="xs" variant="outline" disabled={!capabilities.agent || awaitingDecision} onClick={() => retryReply(msg.runId ?? msg.id)}>
               <RotateCcw data-icon="inline-start" />
-              {msg.runId ? '重试首条问题' : '重试'}
+              {msg.runId ? t('queue.retryFirst') : t('controls.retry')}
             </Button>
-          </AlertAction>
+          </div>
         </Alert>
       )}
       {persistence?.conclusions.filter((c) => c.runId === msg.id).map((c) => (
         <Card key={c.id} size="sm" className="ring-primary/30">
-          <CardHeader><CardTitle className="text-sm">学习结论 · {c.valid ? c.adopted ? '已采纳' : '待采纳' : '来源已变化'}</CardTitle>
+          <CardHeader><CardTitle className="text-sm">{t('agent.conclusion', { status: c.valid ? c.adopted ? t('agent.adopted') : t('agent.pendingAdoption') : t('agent.sourceChanged') })}</CardTitle>
             <CardDescription>{c.text}</CardDescription></CardHeader>
           <CardFooter><Button size="xs" variant="outline" disabled={persistence.busy || !c.valid && !c.adopted} onClick={() => persistence.decideConclusion(c.id, !c.adopted)}>
-            {c.adopted ? '撤销采纳' : '采纳结论'}
+            {c.adopted ? t('agent.undoAdoption') : t('agent.adopt')}
           </Button></CardFooter>
         </Card>
       ))}
       {persistence?.proposals.filter((proposal) => proposal.runId === msg.id).map((proposal) => (
         <Card key={proposal.id} size="sm" data-testid="route-decision-history">
           <CardHeader>
-            <CardTitle className="text-sm">路线提案 · {{ pending: '待确认', applied: '已接受', rejected: '已拒绝', superseded: '已失效' }[proposal.state]}</CardTitle>
+            <CardTitle className="text-sm">{t('agent.routeProposal', { status: t(`agent.proposalStatus.${proposal.state}`) })}</CardTitle>
             <CardDescription className="whitespace-pre-wrap break-words">{proposal.content.note}</CardDescription>
           </CardHeader>
-          {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">修改意见</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
+          {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">{t('agent.feedback')}</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
         </Card>
       ))}
       {persistence?.lessonProposals.filter((proposal) => proposal.source.kind === 'run' && proposal.source.id === msg.id).map((proposal) => (
         <Card key={proposal.id} size="sm" data-testid="lesson-decision-history">
-          <CardHeader><CardTitle className="text-sm">课件提案 · {{ pending: '待确认', applied: '已接受', rejected: '已拒绝', superseded: '已失效' }[proposal.state]}</CardTitle>
+          <CardHeader><CardTitle className="text-sm">{t('agent.lessonProposal', { status: t(`agent.proposalStatus.${proposal.state}`) })}</CardTitle>
             <CardDescription className="whitespace-pre-wrap break-words">{proposal.content.title} · {proposal.note}</CardDescription></CardHeader>
-          {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">修改意见</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
+          {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">{t('agent.feedback')}</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
         </Card>
       ))}
       {persistence?.actions.filter((p) => p.runId === msg.id).map((p) => (
@@ -159,19 +160,19 @@ export function AgentMessage({ msg }: { msg: Message }) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <Route className="size-4 text-primary" aria-hidden />
-              {ACTION_COPY[msg.action.kind].title}
+              {msg.action.kind === 'skip-basics' ? t('agent.skipBasicsTitle') : t('agent.projectFirstTitle')}
             </CardTitle>
-            <CardDescription className="text-xs leading-relaxed">{ACTION_COPY[msg.action.kind].text}</CardDescription>
+            <CardDescription className="text-xs leading-relaxed">{msg.action.kind === 'skip-basics' ? t('agent.skipBasicsText') : t('agent.projectFirstText')}</CardDescription>
           </CardHeader>
           <CardFooter>
             {msg.action.applied ? (
               <Badge variant="secondary" className="text-primary">
                 <Check data-icon="inline-start" />
-                路线已更新
+                {t('agent.routeUpdated')}
               </Badge>
             ) : (
               <Button size="sm" onClick={() => applyRouteAction(msg.id)}>
-                确认调整路线
+                {t('agent.confirmRoute')}
               </Button>
             )}
           </CardFooter>
@@ -183,28 +184,29 @@ export function AgentMessage({ msg }: { msg: Message }) {
 }
 
 export function SessionMenu() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const { session: active, switchSession, newSession, persistence } = useApp()
   const sessions = scopedSessions(space)
   const busy = !!persistence && !persistence.ready
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label="切换会话" render={<Button variant="ghost" size="sm" className="max-w-full min-w-0" />}>
+      <DropdownMenuTrigger aria-label={t('agent.switchSession')} render={<Button variant="ghost" size="sm" className="max-w-full min-w-0" />}>
         <History data-icon="inline-start" className="text-muted-foreground" />
-        <span className="truncate">{active?.title ?? '新会话'}</span>
+        <span className="truncate">{active ? sessionTitle(active, active.id === sessions[0]?.id) : t('agent.newSessionFallback')}</span>
         <ChevronDown data-icon="inline-end" className="text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className={cn('w-80', space.ideFullscreen && 'dark')}>
         <DropdownMenuGroup>
-          <DropdownMenuLabel>历史会话</DropdownMenuLabel>
-          {sessions.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">还没有会话</p>}
+          <DropdownMenuLabel>{t('agent.history')}</DropdownMenuLabel>
+          {sessions.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{t('agent.noSessions')}</p>}
           {sessions.map((s) => (
             <DropdownMenuItem key={s.id} disabled={busy} onClick={() => switchSession(s.id)} className="items-start gap-2 py-2">
               <Check className={cn('mt-0.5 size-4', s.id === active?.id ? 'opacity-100' : 'opacity-0')} aria-hidden />
               <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="truncate font-medium">{s.title}</span>
+                <span className="truncate font-medium">{sessionTitle(s, s.id === sessions[0]?.id)}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {s.updatedAt ? relativeTime(s.updatedAt) : '暂无消息'}
+                  {s.updatedAt ? formatRelativeTime(s.updatedAt) : t('agent.noMessages')}
                 </span>
               </span>
             </DropdownMenuItem>
@@ -213,7 +215,7 @@ export function SessionMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={busy} onClick={newSession}>
           <Plus />
-          新建会话
+          {t('agent.newSession')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -221,12 +223,13 @@ export function SessionMenu() {
 }
 
 function Composer() {
+  const { t } = useTranslation('workbench')
   const { session, setComposerText, setQuote, sendMessage, stopReply, capabilities, persistence } = useApp()
   const space = useSpace()
   const ref = useRef<HTMLTextAreaElement>(null)
   const sendingRef = useRef(false)
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState('')
+  const [sendError, setSendError] = useState<NoticeValue>(null)
   const text = session?.composerText ?? ''
   const quote = session?.composerQuote
   const replying = capabilities.agent && (!!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
@@ -239,18 +242,18 @@ function Composer() {
     if (quote || text) ref.current?.focus({ preventScroll: true })
   }, [quote, text])
 
-  useEffect(() => setSendError(''), [session?.id, session?.messages.length])
+  useEffect(() => setSendError(null), [session?.id, session?.messages.length])
 
   const send = async () => {
     if (!canSend || sendingRef.current) return
     sendingRef.current = true
     setSending(true)
-    setSendError('')
+    setSendError(null)
     try {
       // The provider owns clearing only the submitted draft after a successful save.
       await sendMessage()
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : '问题未保存，请重试。')
+      setSendError(error instanceof Error ? error : notice('workbench', 'agent.saveFailed'))
     } finally {
       sendingRef.current = false
       setSending(false)
@@ -268,7 +271,7 @@ function Composer() {
             </PromptInputHeader>
           )}
           <label htmlFor="agent-input" className="sr-only">
-            向 Agent 提问
+            {t('controls.askAgent')}
           </label>
           <PromptInputTextarea
             id="agent-input"
@@ -283,47 +286,48 @@ function Composer() {
                 void send()
               }
             }}
-            placeholder={quote ? '针对引用的内容，你想问什么？' : '说说你的想法…'}
+            placeholder={quote ? t('agent.quotePlaceholder') : t('agent.placeholder')}
             className="min-h-16 leading-relaxed"
           />
           <PromptInputFooter>
             <YoloSwitch />
-            {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">正在生成路线调整…</span>}
+            {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">{t('agent.adjusting')}</span>}
             <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.runId ?? session?.messages.findLast((m) => m.role === 'agent')?.id} />
-            {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label="停止"><Square /></Button>}
+            {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
             <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status={!persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
-              disabled={!(!persistence && replying) && !canSend} aria-label={persistence && replying ? '加入队列' : replying ? '停止' : capabilities.agent ? '发送' : '保存问题'} />
+              disabled={!(!persistence && replying) && !canSend} aria-label={persistence && replying ? t('queue.enqueue') : replying ? t('controls.stop') : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
           </PromptInputFooter>
       </PromptInput>
-      {sendError && <p role="alert" className="mt-2 text-xs text-destructive">{sendError}</p>}
+      {!!sendError && <p role="alert" className="mt-2 text-xs text-destructive">{formatNotice(sendError)}</p>}
     </div>
   )
 }
 
 function EmptyChat() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const { setComposerText, capabilities, persistence } = useApp()
   const awaitingDecision = persistence && pendingDecision(persistence)
   const unit = findUnit(space, sessionUnitId(space))
   const prompts =
     space.view === 'route'
-      ? ['基础语法我已经会了', '我想先做项目', '这条路线大概要多久？']
+      ? [t('agent.prompts.basics'), t('agent.prompts.project'), t('agent.prompts.duration')]
       : unit
-        ? [`用一个例子解释「${unit.title}」`, '这一单元最容易踩的坑是什么？', '给我出一道练习题']
-        : ['我该从哪里开始？']
+        ? [t('agent.prompts.example', { title: unit.title }), t('agent.prompts.pitfalls'), t('agent.prompts.exercise')]
+        : [t('agent.prompts.start')]
   return (
     <Empty className="flex-1 justify-end gap-4 p-4">
       <EmptyHeader className="items-start text-left">
         <EmptyMedia>
           <BrandMark className="size-9" />
         </EmptyMedia>
-        <EmptyTitle>{awaitingDecision ? '等待提案选择' : '有什么想问的？'}</EmptyTitle>
+        <EmptyTitle>{awaitingDecision ? t('agent.awaitingDecision') : t('agent.emptyTitle')}</EmptyTitle>
         <EmptyDescription className="text-left">
-          {awaitingDecision ? '这份提案属于整个学习空间，切换或新建会话不会取消它。请先在下方接受或拒绝。' : !capabilities.agent
-            ? 'Agent 暂不可用。你仍可提交问题，但不会生成回复或调整路线。'
+          {awaitingDecision ? t('agent.decisionHint') : !capabilities.agent
+            ? t('agent.unavailableHint')
             : space.view === 'route'
-            ? '告诉我你想怎样调整学习安排，我会结合你的目标和基础给出建议，确认后再更新路线。'
-            : '围绕这节课继续讨论。在课件、代码或终端里选中内容，也可以直接引用过来提问。'}
+            ? t('agent.routeHint')
+            : t('agent.lessonHint')}
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent className="max-w-none items-stretch gap-1.5">
@@ -339,6 +343,7 @@ function EmptyChat() {
 }
 
 export function AgentPanel() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
   const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
@@ -361,13 +366,13 @@ export function AgentPanel() {
         <div className="min-w-0 flex-1">
           <SessionMenu />
         </div>
-        <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label="新建会话">
+        <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label={t('agent.newSession')}>
           <Plus />
         </Button>
         <Button variant="ghost" size="icon-sm" disabled={!!proposal || !!lessonProposal} onClick={() => {
           document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]')?.focus({ preventScroll: true })
           toggleAgent(false)
-        }} aria-label="收起 Agent">
+        }} aria-label={t('agent.collapse')}>
           <X />
         </Button>
       </div>
@@ -376,7 +381,7 @@ export function AgentPanel() {
         <div className="border-b p-3">
           <Alert>
             <Info />
-            <AlertDescription className="text-xs">Agent 暂不可用 · 仅保存问题，不会生成回复。</AlertDescription>
+            <AlertDescription className="text-xs">{t('agent.unavailable')}</AlertDescription>
           </Alert>
         </div>
       )}
@@ -386,7 +391,7 @@ export function AgentPanel() {
           <Alert className="border-accent-foreground/20 bg-accent/60">
             <Info className="text-accent-foreground" />
             <AlertDescription className="text-xs text-accent-foreground">
-              {capabilities.agent ? '测评进行中：可以问题意不清的地方，Agent 会引导你思考，但不会直接给出答案。' : '测评进行中：可以记录问题，Agent 暂不可用，不会生成引导或答案。'}
+              {capabilities.agent ? t('agent.assessmentHint') : t('agent.unavailableAssessmentHint')}
             </AlertDescription>
           </Alert>
         </div>
@@ -395,7 +400,7 @@ export function AgentPanel() {
       {!session || session.messages.length === 0 ? (
         <EmptyChat />
       ) : (
-        <Conversation key={session.id} className="min-h-0" initial="instant" resize="instant" aria-label="Agent 会话">
+        <Conversation key={session.id} className="min-h-0" initial="instant" resize="instant" aria-label={t('agent.conversation')}>
           <ConversationContent>
             <ol className="flex flex-col gap-5">
             {session.messages.map((m) => (
@@ -416,7 +421,7 @@ export function AgentPanel() {
             ))}
             </ol>
           </ConversationContent>
-          <ConversationScrollButton aria-label="滚动到最新消息" />
+          <ConversationScrollButton aria-label={t('agent.latest')} />
         </Conversation>
       )}
       <PromptQueue />

@@ -1,0 +1,22 @@
+name: UI translations
+
+on: [pull_request, push]
+
+permissions:
+  contents: read
+
+jobs:
+  catalogs-and-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+      # These checks do not execute the backend or build its native dependencies.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm --filter @teach-me-coding/contracts build
+      - run: pnpm check:i18n
+      - run: pnpm --filter @teach-me-coding/web check
+      - run: pnpm --filter @teach-me-coding/web test

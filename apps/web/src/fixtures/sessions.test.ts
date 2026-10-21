@@ -8,7 +8,8 @@ import { cjk } from '@streamdown/cjk'
 import { math } from '@streamdown/math'
 import type { Nodes } from 'mdast'
 import { composeReply } from './agent-script'
-import { findUnit, newSession, pytorchSpace, rustInProgressSpace } from './demo-data'
+import { getAssessment } from './assessment'
+import { emptySpace, findUnit, newSession, pytorchSpace, rustInProgressSpace, topicFrom } from './demo-data'
 import { activeSession, ensureSession, selectSession, sessionUnitId } from './sessions'
 import { availableUnitIds, canAccessView, nextUnit, recommendedUnit } from '../app/selectors'
 import { diffRoute, routeDiffSummary } from '../app/route-diff'
@@ -16,6 +17,64 @@ import { assessmentNeedsRefresh, lessonProposalStale, lessonView, mergeProposals
 import { diffLesson, lessonDiffAllowedTags, lessonDiffRemark, lessonDiffTree, lessonTokens } from '../lib/lesson-diff'
 import { lessonAllowedTags, lessonHeadings, lessonRemarkPlugins } from '../lib/lesson-markdown'
 import type { Space } from './types'
+import i18n from '../i18n'
+
+await i18n.changeLanguage('zh-CN')
+
+test('preview defaults follow the current language without translating authored learning content', async () => {
+  try {
+    await i18n.changeLanguage('en')
+    const rust = rustInProgressSpace(), pytorch = pytorchSpace()
+    assert.equal(emptySpace().name, 'New learning space')
+    assert.equal(rust.name, 'Rust basics')
+    assert.equal(pytorch.name, 'PyTorch basics')
+    assert.equal(topicFrom('a new goal'), 'New topic')
+    assert.equal(topicFrom('学习 中文主题'), '中文主题')
+    assert.equal(newSession('ownership').title, '', 'The host renders the default conversation title')
+    assert.equal(newSession(null).title, '')
+    assert.equal(rust.sessions[0]!.title, '理解所有权转移')
+    assert.deepEqual(rust.sessions[0]!.messages[0]!.quote?.caption, { kind: 'lesson', name: '所有权与借用' })
+
+    await i18n.changeLanguage('zh-CN')
+    const chinese = rustInProgressSpace()
+    assert.equal(emptySpace().name, '新的学习空间')
+    assert.equal(chinese.name, 'Rust 入门')
+    assert.equal(pytorchSpace().name, 'PyTorch 基础')
+    assert.equal(topicFrom('a new goal'), '新主题')
+    assert.equal(newSession('ownership').title, '')
+    assert.deepEqual(rust.stages, chinese.stages)
+    assert.deepEqual(rust.files, chinese.files)
+    assert.deepEqual(rust.requirement, chinese.requirement)
+    assert.deepEqual(rust.sessions[0]!.messages.map(({ text, quote }) => ({ text, quote })),
+      chinese.sessions[0]!.messages.map(({ text, quote }) => ({ text, quote })))
+  } finally {
+    await i18n.changeLanguage('zh-CN')
+  }
+})
+
+test('preview assessment question types retranslate while prompts, goals and code remain unchanged', async () => {
+  const rust = rustInProgressSpace(), pytorch = pytorchSpace()
+  const cases = [
+    { unit: findUnit(rust, 'ownership')!, language: 'rust', enTitle: 'Debugging question', zhTitle: '调试题' },
+    { unit: findUnit(rust, 'basics')!, language: 'rust', enTitle: 'Coding question', zhTitle: '编程题' },
+    { unit: findUnit(pytorch, 'tensors')!, language: 'python', enTitle: 'Coding question', zhTitle: '编程题' },
+  ] as const
+  try {
+    for (const { unit, language, enTitle, zhTitle } of cases) {
+      await i18n.changeLanguage('en')
+      const english = getAssessment(unit, language)
+      assert.equal(english.q1.title, 'Explanation question')
+      assert.equal(english.q2.title, enTitle)
+      await i18n.changeLanguage('zh-CN')
+      const chinese = getAssessment(unit, language)
+      assert.equal(chinese.q1.title, '解释题')
+      assert.equal(chinese.q2.title, zhTitle)
+      assert.deepEqual({ ...chinese, q1: { ...chinese.q1, title: english.q1.title }, q2: { ...chinese.q2, title: english.q2.title } }, english)
+    }
+  } finally {
+    await i18n.changeLanguage('zh-CN')
+  }
+})
 
 test('unit access uses published lessons, not skipped status or regeneration state', () => {
   const space = rustInProgressSpace(), first = space.stages[0]!.units[0]!

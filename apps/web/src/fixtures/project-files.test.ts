@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { rustInProgressSpace } from './demo-data'
+import i18n from '../i18n'
+import { formatNotice } from '../i18n/notice'
 import {
   addProjectEntry,
   closeProjectFile,
@@ -28,7 +30,7 @@ test('nested paths distinguish identical names and follow directory renames with
   assert.deepEqual(space.openFileIds, ['f_move', 'f_parser', 'f_test_parser'])
 })
 
-test('name collisions are local to a directory and include folders; config files keep their names', () => {
+test('name collisions are local to a directory and include folders; config files keep their names', async () => {
   const space = rustInProgressSpace()
   for (const name of ['', '.', '..', 'a/b.rs', 'a\\b.rs', '\u0000']) {
     assert.ok(addProjectEntry(space, name, 'file', null).error)
@@ -41,7 +43,12 @@ test('name collisions are local to a directory and include folders; config files
   const config = addProjectEntry(space, 'settings.json', 'file', 'dir_utils').space
   assert.equal(config.files.at(-1)?.name, 'settings.json')
   assert.equal(config.files.at(-1)?.language, 'text')
-  assert.equal(renameProjectEntry(space, 'f_parser', 'mod.rs').error, '此目录中已存在同名文件或文件夹')
+  const collision = renameProjectEntry(space, 'f_parser', 'mod.rs').error
+  await i18n.changeLanguage('en')
+  assert.equal(formatNotice(collision), 'A file or folder with this name already exists in this directory.')
+  await i18n.changeLanguage('zh-CN')
+  assert.equal(formatNotice(collision), '此目录中已存在同名文件或文件夹')
+  await i18n.changeLanguage('en')
   assert.equal(renameProjectEntry(config, config.activeFileId!, 'script.py').space.files.at(-1)?.language, 'python')
   assert.deepEqual(
     projectChildren(space, 'dir_src').map((e) => e.name),

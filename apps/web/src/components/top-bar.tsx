@@ -13,6 +13,7 @@ import {
   Plus,
 } from 'lucide-react'
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { LessonReader } from '@/components/workbench/lesson-reader'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Brand } from '@/components/shared'
@@ -48,6 +49,7 @@ import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
 
 function SpaceSwitcher() {
+  const { t } = useTranslation('learning')
   const { state, openSpace, goHome, goSpaces, persistence } = useApp()
   const space = useSpace()
   return (
@@ -58,7 +60,7 @@ function SpaceSwitcher() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>切换学习空间</DropdownMenuLabel>
+          <DropdownMenuLabel>{t('topBar.switchSpace')}</DropdownMenuLabel>
           {state.spaces.map((s) => {
             const u = findUnit(s, s.currentUnitId)
             return (
@@ -67,7 +69,7 @@ function SpaceSwitcher() {
                 <span className="flex flex-col">
                   <span className="font-medium">{s.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {u ? `正在学习「${u.title}」` : !persistence || s.view === 'onboarding' || s.view === 'planning' ? '确认学习需求中' : '尚无学习单元'}
+                    {u ? t('topBar.studying', { title: u.title }) : !persistence || s.view === 'onboarding' || s.view === 'planning' ? t('topBar.confirming') : t('topBar.noUnit')}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -78,11 +80,11 @@ function SpaceSwitcher() {
         <DropdownMenuGroup>
           <DropdownMenuItem onClick={goSpaces}>
             <LayoutGrid />
-            查看全部学习空间
+            {t('topBar.viewSpaces')}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={goHome}>
             <Plus />
-            创建学习空间
+            {t('topBar.createSpace')}
           </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>
@@ -91,6 +93,7 @@ function SpaceSwitcher() {
 }
 
 export function TopBar() {
+  const { t } = useTranslation('learning')
   const space = useSpace()
   const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
   const { open: lessonOpen, setOpen: setLessonOpen } = useLessonDrawer()
@@ -135,7 +138,7 @@ export function TopBar() {
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="切换文件目录"
+          aria-label={t('topBar.toggleExplorer')}
           aria-pressed={space.explorerOpen}
           onClick={toggleExplorer}
         >
@@ -150,7 +153,7 @@ export function TopBar() {
           <ThemeToggle />
           <Button variant="ghost" size="sm" onClick={() => setLessonOpen(true)}>
             <BookOpen data-icon="inline-start" />
-            {proposal ? '查看课件变化' : '查看课件'}
+            {proposal ? t('topBar.viewChanges') : t('topBar.viewLesson')}
           </Button>
           <Toggle pressed={space.agentOpen} disabled={awaitingDecision} onPressedChange={() => toggleAgent()} aria-label="Agent">
             <MessageSquare />
@@ -159,7 +162,7 @@ export function TopBar() {
           <Separator orientation="vertical" className="mx-1 h-5" />
           <Button variant="outline" size="sm" onClick={() => toggleIde(false)}>
             <ArrowLeft data-icon="inline-start" />
-            返回学习
+            {t('topBar.backToStudy')}
           </Button>
         </div>
         <Sheet modal={!proposal} open={lessonOpen} onOpenChange={setLessonOpen}>
@@ -170,8 +173,8 @@ export function TopBar() {
             aria-describedby={proposal ? undefined : 'ide-lesson-description'}
           >
             <SheetHeader className="border-b">
-              <SheetTitle>{proposal ? '课件修改预览' : '当前课件'}</SheetTitle>
-              {!proposal && <SheetDescription id="ide-lesson-description">查阅后关闭，继续编写代码。</SheetDescription>}
+              <SheetTitle>{proposal ? t('topBar.lessonPreview') : t('topBar.currentLesson')}</SheetTitle>
+              {!proposal && <SheetDescription id="ide-lesson-description">{t('topBar.drawerHint')}</SheetDescription>}
             </SheetHeader>
             <LessonReader inDrawer onAsk={() => setLessonOpen(false)} />
           </SheetContent>
@@ -185,15 +188,15 @@ export function TopBar() {
       <Separator orientation="vertical" className="h-5" />
       <SpaceSwitcher />
 
-      <Breadcrumb aria-label="空间导航">
+      <Breadcrumb aria-label={t('topBar.navigation')}>
         <BreadcrumbList>
           <BreadcrumbSeparator />
           <BreadcrumbItem>
             {onRoute ? (
-              <BreadcrumbPage>学习路线</BreadcrumbPage>
+              <BreadcrumbPage>{t('controls.learningPath')}</BreadcrumbPage>
             ) : (
               <BreadcrumbLink render={<button type="button" onClick={() => setView('route')} />}>
-                学习路线
+                {t('controls.learningPath')}
               </BreadcrumbLink>
             )}
           </BreadcrumbItem>
@@ -218,10 +221,10 @@ export function TopBar() {
               <BreadcrumbSeparator />
               <BreadcrumbItem>
                 <BreadcrumbPage className="flex items-center gap-2">
-                  {space.view === 'assessment' ? '单元测评' : '测评结果'}
+                  {space.view === 'assessment' ? t('topBar.assessment') : t('topBar.results')}
                   {space.view === 'assessment' && (
                     <Badge variant="secondary" className="bg-accent text-accent-foreground">
-                      进行中
+                      {t('topBar.inProgress')}
                     </Badge>
                   )}
                 </BreadcrumbPage>
@@ -238,8 +241,8 @@ export function TopBar() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="切换文件目录"
-              title="显示或收起文件目录"
+              aria-label={t('topBar.toggleExplorer')}
+              title={t('topBar.explorerHint')}
               aria-pressed={space.explorerOpen}
               onClick={toggleExplorer}
             >
@@ -251,7 +254,7 @@ export function TopBar() {
                   <Toggle
                     pressed={space.ideOpen}
                     onPressedChange={() => toggleIde()}
-                    aria-label="IDE 与终端"
+                    aria-label={t('topBar.ide')}
                     className="px-2.5"
                   />
                 }
@@ -259,11 +262,11 @@ export function TopBar() {
                 <Code2 />
                 IDE
               </TooltipTrigger>
-              <TooltipContent>{capabilities.terminal ? '显示或收起 IDE 与终端' : '显示或收起 IDE · 终端暂不可用'}</TooltipContent>
+              <TooltipContent>{capabilities.terminal ? t('topBar.ideHint') : t('topBar.ideUnavailableHint')}</TooltipContent>
             </Tooltip>
             <Button onClick={startAssessment} disabled={!canAssess || persistence?.busy || awaitingDecision} className="ml-1.5">
               <ClipboardCheck data-icon="inline-start" />
-              {!canAssess ? '测评暂不可用' : hasDraft ? '继续测评' : '开始单元测评'}
+              {!canAssess ? t('topBar.assessmentUnavailable') : hasDraft ? t('topBar.continueAssessment') : t('topBar.startAssessment')}
             </Button>
           </>
         )}
@@ -283,7 +286,7 @@ export function TopBar() {
             <MessageSquare />
             Agent
           </TooltipTrigger>
-          <TooltipContent>{capabilities.agent ? '显示或收起 Agent 面板' : '显示或收起会话面板 · Agent 暂不可用，仅保存问题'}</TooltipContent>
+          <TooltipContent>{capabilities.agent ? t('topBar.agentHint') : t('topBar.agentUnavailableHint')}</TooltipContent>
         </Tooltip>
         <LibraryButton iconOnly />
         <SettingsButton iconOnly />

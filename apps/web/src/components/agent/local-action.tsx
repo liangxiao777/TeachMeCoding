@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import i18n from '@/i18n'
+import { formatNotice } from '@/i18n/notice'
 import { LanguageDescription } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { structuredPatch } from 'diff'
@@ -50,10 +53,11 @@ function fullVersion(code: string, sign: '-' | '+') {
   const lines = code.split('\n')
   if (code.endsWith('\n')) lines.pop()
   return lines.map((line) => `${sign} ${line}`).join('\n')
-    + (code.endsWith('\n') ? '' : '\n\\ 文件末尾无换行')
+    + (code.endsWith('\n') ? '' : `\n\\ ${i18n.t('action.noNewline', { ns: 'workbench' })}`)
 }
 
 function FileChange({ action }: { action: Extract<ActionProposal['action'], { kind: 'file' }> }) {
+  const { t } = useTranslation('workbench')
   const before = action.before ?? ''
   const language = useMemo(() => fileLanguage(action.path), [action.path])
   const oldTokens = useCodeTokens(before, language), newTokens = useCodeTokens(action.content, language)
@@ -66,20 +70,20 @@ function FileChange({ action }: { action: Extract<ActionProposal['action'], { ki
       <FileCode2 className="size-3.5 shrink-0 opacity-60" aria-hidden />
       <span className="truncate" title={action.path}>{action.path}</span>
     </figcaption>
-    <div className="max-h-80 overflow-auto overscroll-contain font-mono text-[13px] leading-6" tabIndex={0} role="region" aria-label={`${action.path} 修改差异`}>
+    <div className="max-h-80 overflow-auto overscroll-contain font-mono text-[13px] leading-6" tabIndex={0} role="region" aria-label={t('action.diff', { path: action.path })}>
       {!patch ? <>
-        <p className="px-3 py-2 font-sans text-xs text-ide-foreground/60">修改较大，按整文件展示差异</p>
+        <p className="px-3 py-2 font-sans text-xs text-ide-foreground/60">{t('action.largeDiff')}</p>
         {before && <pre data-change="removed" className="m-0 min-w-full w-max border-l-2 border-red-400 bg-red-500/15 px-3 py-1">{fullVersion(before, '-')}</pre>}
         {action.content && <pre data-change="added" className="m-0 min-w-full w-max border-l-2 border-emerald-400 bg-emerald-500/15 px-3 py-1">{fullVersion(action.content, '+')}</pre>}
       </> : patch.hunks.length === 0
-        ? <p className="px-3 py-3 font-sans text-xs text-ide-foreground/60">{action.before === null ? '新建空文件' : '内容没有变化'}</p>
+        ? <p className="px-3 py-3 font-sans text-xs text-ide-foreground/60">{action.before === null ? t('action.newEmpty') : t('action.unchanged')}</p>
         : <pre className="m-0 min-w-full w-max py-2">{patch.hunks.map((hunk, index) => {
           let oldLine = hunk.oldStart, newLine = hunk.newStart
           return <span key={index} className="block">
             {index > 0 && <span className="block px-3 py-1 text-xs text-ide-foreground/60">@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>}
             {hunk.lines.map((line, row) => {
               const sign = line[0], text = line.slice(1).replace(/\r$/, '')
-              if (sign === '\\') return <span key={row} className="block pl-14 text-[11px] text-ide-foreground/60">\ 文件末尾无换行</span>
+              if (sign === '\\') return <span key={row} className="block pl-14 text-[11px] text-ide-foreground/60">{'\\ '}{t('action.noNewline')}</span>
               const removed = sign === '-', added = sign === '+'
               const number = removed ? oldLine : newLine
               const tokens = (removed ? oldTokens : newTokens)?.[number - 1]
@@ -100,40 +104,42 @@ function FileChange({ action }: { action: Extract<ActionProposal['action'], { ki
 }
 
 function Command({ command }: { command: string }) {
+  const { t } = useTranslation('workbench')
   const tokens = useCodeTokens(command, 'shellscript')
   return <pre className="max-h-80 overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-lg bg-ide px-3 py-3 font-mono text-[13px] leading-6 text-ide-foreground ring-1 ring-foreground/10"
-    tabIndex={0} aria-label="待执行命令">{tokens ? command.split('\n').map((line, index) => <span key={index}>{index > 0 && '\n'}<CodeLine text={line} tokens={tokens[index]} /></span>) : <code>{command}</code>}</pre>
+    tabIndex={0} aria-label={t('action.command')}>{tokens ? command.split('\n').map((line, index) => <span key={index}>{index > 0 && '\n'}<CodeLine text={line} tokens={tokens[index]} /></span>) : <code>{command}</code>}</pre>
 }
 
 export function LocalAction({ proposal: p }: { proposal: ActionProposal }) {
+  const { t } = useTranslation('workbench')
   const { persistence } = useApp()
   if (!persistence) return null
-  const file = p.action.kind === 'file', title = file ? '文件修改' : '命令执行'
+  const file = p.action.kind === 'file', title = file ? t('action.fileTitle') : t('action.commandTitle')
   const Icon = file ? FileCode2 : SquareTerminal
   const status = p.state === 'failed' && p.result ? {
-    succeeded: '已完成', failed: file ? '修改失败' : '执行失败', 'timed-out': '执行超时',
-    cancelled: '已取消', 'output-limit': '输出已达上限', unavailable: '运行环境不可用',
+    succeeded: t('action.completed'), failed: file ? t('action.fileFailed') : t('action.commandFailed'), 'timed-out': t('action.timedOut'),
+    cancelled: t('action.cancelled'), 'output-limit': t('action.outputLimit'), unavailable: t('action.unavailable'),
   }[p.result.status] : {
-    pending: '', running: file ? '正在修改…' : '执行中…', succeeded: file ? '已修改' : '已执行',
-    failed: file ? '修改失败' : '执行失败', rejected: '已拒绝', expired: '已失效', cancelled: '已取消', interrupted: '已中断',
+    pending: '', running: file ? t('action.fileRunning') : t('action.running'), succeeded: file ? t('action.fileSucceeded') : t('action.commandSucceeded'),
+    failed: file ? t('action.fileFailed') : t('action.commandFailed'), rejected: t('action.rejected'), expired: t('action.expired'), cancelled: t('action.cancelled'), interrupted: t('action.interrupted'),
   }[p.state]
   return <section className="min-w-0 space-y-3 py-1" aria-label={title} data-testid="local-action">
     <h3 className="flex items-center gap-2 text-sm font-medium"><Icon className="size-4 text-muted-foreground" aria-hidden />{title}</h3>
     {p.action.kind === 'file' ? <FileChange action={p.action} /> : <Command command={p.action.command} />}
     <div className="flex flex-wrap items-center gap-2">
       {p.state === 'pending' ? <>
-        <Button disabled={persistence.busy || persistence.filesPending} onClick={() => persistence.decideAction(p.id, 'confirm')}>确认执行</Button>
-        <Button variant="outline" disabled={persistence.busy} onClick={() => persistence.decideAction(p.id, 'reject')}>拒绝</Button>
-        {persistence.filesPending && <span role="status" className="text-xs text-muted-foreground">等待自动保存</span>}
+        <Button disabled={persistence.busy || persistence.filesPending} onClick={() => persistence.decideAction(p.id, 'confirm')}>{t('action.confirm')}</Button>
+        <Button variant="outline" disabled={persistence.busy} onClick={() => persistence.decideAction(p.id, 'reject')}>{t('controls.reject')}</Button>
+        {persistence.filesPending && <span role="status" className="text-xs text-muted-foreground">{t('action.autosave')}</span>}
       </> : <>
         <span role="status" className={cn('flex items-center gap-1.5 text-xs', p.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
           {p.state === 'running' && <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden />}
           {p.state === 'succeeded' && <Check className="size-3.5" aria-hidden />}{status}
         </span>
-        {p.result?.exitCode !== null && p.result?.exitCode !== undefined && !file && <span className="text-xs text-muted-foreground">· 退出码 {p.result.exitCode}</span>}
-        {p.state === 'running' && <Button variant="outline" onClick={() => persistence.decideAction(p.id, 'cancel')}>取消执行</Button>}
+        {p.result?.exitCode !== null && p.result?.exitCode !== undefined && !file && <span className="text-xs text-muted-foreground">{t('action.exitCode', { code: p.result.exitCode })}</span>}
+        {p.state === 'running' && <Button variant="outline" onClick={() => persistence.decideAction(p.id, 'cancel')}>{t('action.cancel')}</Button>}
       </>}
     </div>
-    {p.result?.output && (!file || p.state !== 'succeeded') && <pre className="max-h-64 overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-lg bg-muted/50 px-3 py-2 font-mono text-xs leading-relaxed" tabIndex={0} aria-label="执行输出">{p.result.output}</pre>}
+    {(p.result?.error || p.result?.output && !file) && <pre className="max-h-64 overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-lg bg-muted/50 px-3 py-2 font-mono text-xs leading-relaxed" tabIndex={0} aria-label={t('action.output')}>{p.result?.error ? formatNotice(p.result.error) : p.result?.output}</pre>}
   </section>
 }

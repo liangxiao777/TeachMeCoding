@@ -1,0 +1,37 @@
+{
+  "title": "资料库",
+  "backToLearning": "返回学习",
+  "description": "上传自己的资料，供所有学习空间的 Agent 按需读取。",
+  "upload": "上传文件",
+  "chooseFiles": "选择资料文件",
+  "fileRequirements": "不限格式 · 单个文件最多 100 MB · 原文件保存在本机",
+  "retry": "重试",
+  "retryUpload": "重试上传",
+  "uploadProgress": "正在上传 {{index}}/{{total}}：{{name}}",
+  "loading": "正在读取资料库…",
+  "filter": "筛选资料",
+  "searchPlaceholder": "按文件名查找",
+  "refresh": "刷新资料库",
+  "fileCount_other": "{{formattedCount}} 个文件",
+  "noMatch": "没有匹配的资料",
+  "empty": "还没有资料",
+  "tryFilename": "换个文件名试试。",
+  "emptyDescription": "上传课程、笔记或参考文档，然后在对话中告诉 Agent 要参考哪份资料。",
+  "files": "资料文件",
+  "moreActions": "更多操作 {{name}}",
+  "download": "下载",
+  "delete": "删除",
+  "deleteTitle": "删除 {{name}}？",
+  "deleteDescription": "会删除资料库中的原文件，删除后无法恢复，所有学习空间都将无法再读取它。已发送给模型的内容不会撤回。",
+  "cancel": "取消",
+  "deleteFile": "删除文件",
+  "errors": {
+    "actionFailed": "操作失败，请重试。",
+    "fileTooLarge": "单个文件不能超过 100 MB。"
+  },
+  "size": {
+    "bytes": "{{value}} B",
+    "kilobytes": "{{value}} KB",
+    "megabytes": "{{value}} MB"
+  }
+}

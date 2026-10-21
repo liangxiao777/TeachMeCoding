@@ -49,15 +49,15 @@ function publicAddress(address: string) {
 }
 function publicUrl(raw: string, base?: URL) {
   let url: URL;
-  try { url = new URL(raw, base); } catch { throw new BusinessError(422, '网页地址无效。'); }
+  try { url = new URL(raw, base); } catch { throw new BusinessError(422, { code: 'WEB_FETCH_INVALID_URL' }); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.href.length > 2048) {
-    throw new BusinessError(422, '仅支持不含登录凭据的公开 HTTP(S) 网页地址。');
+    throw new BusinessError(422, { code: 'WEB_FETCH_PUBLIC_URL_REQUIRED' });
   }
   url.hash = '';
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (isIP(hostname) ? !publicAddress(hostname) : !hostname.includes('.') ||
     /(^|\.)(localhost|local|internal|localdomain|lan|home)$/.test(hostname)) {
-    throw new BusinessError(422, '不允许访问本机、内网或保留网络地址。');
+    throw new BusinessError(422, { code: 'WEB_FETCH_ADDRESS_FORBIDDEN' });
   }
   return { url, hostname };
 }
@@ -76,7 +76,7 @@ async function dispatcher(hostname: string, options: WebFetchOptions, signal: Ab
     (options.lookup ?? ((host) => lookup(host, { all: true })))(hostname), signal);
   signal.throwIfAborted();
   if (!addresses.length || addresses.some((entry) => !publicAddress(entry.address) || isIP(entry.address) !== entry.family)) {
-    throw new BusinessError(422, '不允许访问本机、内网或保留网络地址。');
+    throw new BusinessError(422, { code: 'WEB_FETCH_ADDRESS_FORBIDDEN' });
   }
   const pinned: LookupFunction = (host, hints, callback) => {
     if (host.toLowerCase().replace(/\.+$/, '') !== hostname) return callback(new Error('Unexpected fetch hostname'), '', 4);
@@ -89,7 +89,7 @@ async function dispatcher(hostname: string, options: WebFetchOptions, signal: Ab
     headersTimeout: timeoutMs, bodyTimeout: timeoutMs });
 }
 async function readBody(response: HttpResponse, signal: AbortSignal) {
-  if (!response.body) throw new BusinessError(503, '网页未返回可读取的正文。');
+  if (!response.body) throw new BusinessError(503, { code: 'WEB_FETCH_BODY_UNAVAILABLE' });
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
   let bytes = 0, truncated = false;
   try {
@@ -122,7 +122,7 @@ function checkHtmlDepth(html: string) {
   for (const tag of html.matchAll(/<\s*(\/?)\s*([a-z][\w:-]*)\b[^>]*>/gi)) {
     if (tag[1]) depth = Math.max(0, depth - 1);
     else if (!voidTags.has(tag[2]!.toLowerCase()) && !/\/\s*>$/.test(tag[0]) && ++depth > 256) {
-      throw new BusinessError(503, '网页 HTML 结构过于复杂，无法安全提取正文。');
+      throw new BusinessError(503, { code: 'WEB_FETCH_HTML_TOO_COMPLEX' });
     }
   }
 }
@@ -177,7 +177,7 @@ async function fetchPage(input: z.infer<typeof inputSchema>, options: WebFetchOp
   for (let hop = 0; ; hop++) {
     signal.throwIfAborted();
     const { url, hostname } = publicUrl(current.href);
-    if (visited.has(url.href)) throw new BusinessError(503, '网页重定向形成循环。');
+    if (visited.has(url.href)) throw new BusinessError(503, { code: 'WEB_FETCH_REDIRECT_LOOP' });
     visited.add(url.href);
     const connection = await dispatcher(hostname, options, signal);
     let response: HttpResponse | undefined;
@@ -185,19 +185,19 @@ async function fetchPage(input: z.infer<typeof inputSchema>, options: WebFetchOp
       response = await (options.fetch ?? httpFetch)(url, { dispatcher: connection, method: 'GET', headers, redirect: 'manual', signal });
       signal.throwIfAborted();
       if (redirects.has(response.status)) {
-        if (hop >= maxRedirects) throw new BusinessError(503, '网页重定向超过 3 次。');
+        if (hop >= maxRedirects) throw new BusinessError(503, { code: 'WEB_FETCH_TOO_MANY_REDIRECTS' });
         const location = response.headers.get('location');
-        if (!location) throw new BusinessError(503, '网页返回了无效的重定向。');
+        if (!location) throw new BusinessError(503, { code: 'WEB_FETCH_INVALID_REDIRECT' });
         current = publicUrl(location, url).url; continue;
       }
-      if (!response.ok) throw new BusinessError(503, `网页请求失败（HTTP ${response.status}）。`);
+      if (!response.ok) throw new BusinessError(503, { code: 'WEB_FETCH_HTTP_FAILED', params: { status: response.status } });
       const contentType = (response.headers.get('content-type') ?? 'text/plain').split(';')[0]!.trim().toLowerCase();
       if (!contentType.startsWith('text/') && !['application/xhtml+xml', 'application/json', 'application/xml'].includes(contentType) && !contentType.endsWith('+json')) {
-        throw new BusinessError(422, '仅支持 HTML、Markdown、文本及 JSON 网页，不支持 PDF 或其他二进制文件。');
+        throw new BusinessError(422, { code: 'WEB_FETCH_CONTENT_UNSUPPORTED' });
       }
       const body = await readBody(response, signal), extracted = extract(body.text, contentType, url, input.extractMode);
       signal.throwIfAborted();
-      if (!extracted.text) throw new BusinessError(503, '网页未包含可读取的正文；此工具不执行 JavaScript 或登录。');
+      if (!extracted.text) throw new BusinessError(503, { code: 'WEB_FETCH_BODY_UNAVAILABLE' });
       const marker = randomBytes(8).toString('hex'), prefix = `[UNTRUSTED_WEB_CONTENT:${marker}]\n`, suffix = `\n[/UNTRUSTED_WEB_CONTENT:${marker}]`;
       const text = prefix + sliceText(extracted.text, input.maxChars - prefix.length - suffix.length) + suffix;
       return { url: original.href, finalUrl: url.href, status: response.status, contentType, extractMode: input.extractMode,
@@ -221,7 +221,7 @@ export function createWebFetchTool(options: WebFetchOptions = {}): AgentTool {
         description: 'Maximum returned text characters, including the untrusted-content boundary markers.' })) }, { additionalProperties: false }),
     async execute(_id, raw, parent) {
       const input = inputSchema.safeParse(raw);
-      if (!input.success) throw new BusinessError(422, '网页抓取参数无效，请检查 URL、提取格式和长度限制。');
+      if (!input.success) throw new BusinessError(422, { code: 'WEB_FETCH_INVALID_REQUEST' });
       const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(parent ? [parent] : [])]);
       try {
         signal.throwIfAborted();
@@ -232,10 +232,10 @@ export function createWebFetchTool(options: WebFetchOptions = {}): AgentTool {
             hash: createHash('sha256').update(result.text).digest('hex') },
         ] } };
       } catch (error) {
-        if (signal.aborted) throw new BusinessError(503, signal.reason?.name === 'TimeoutError' ? '网页抓取超时，请重试。' : '网页抓取已取消。');
+        if (signal.aborted) throw new BusinessError(503, { code: signal.reason?.name === 'TimeoutError' ? 'WEB_FETCH_TIMEOUT' : 'WEB_FETCH_CANCELLED' });
         if (error instanceof BusinessError) throw error;
         // Do not reflect response bodies, URLs, transport diagnostics, or model/application credentials.
-        throw new BusinessError(503, '无法取得有效网页内容，请检查网络或稍后重试。');
+        throw new BusinessError(503, { code: 'WEB_FETCH_UNAVAILABLE' });
       }
     },
   };

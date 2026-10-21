@@ -22,8 +22,8 @@ test('sessions, messages, references, independent unit drafts and historical rec
     assert.deepEqual(l.session(a.space.id, s1.id).messages.map((m) => [m.text, m.quote]), [['A question', quote]]);
     assert.equal(l.session(a.space.id, s2.id).draft.text, 'B draft');
     assert.equal(l.session(a.space.id, history.id).messages.length, 0);
-    assert.throws(() => l.session(b.space.id, s1.id), /不存在/);
-    assert.throws(() => l.createSession(b.space.id, { scope: 'unit', unitId: u1!.id, title: 'Bad' }), /不存在/);
+    assert.throws(() => l.session(b.space.id, s1.id), { message: 'LEARNING_RECORD_NOT_FOUND' });
+    assert.throws(() => l.createSession(b.space.id, { scope: 'unit', unitId: u1!.id, title: 'Bad' }), { message: 'LEARNING_RECORD_NOT_FOUND' });
     l.saveAssessmentDraft(a.space.id, u1!.id, { revision: 0, q1: 'answer one', q2: 'code one' });
     l.saveAssessmentDraft(a.space.id, u2!.id, { revision: 0, q1: 'answer two', q2: 'code two' });
     const record = l.saveAssessmentResult(a.space.id, u1!.id, 1, { result: 'needs_work', summary: 'Try again', mastered: [], concerns: ['borrowing'], evidence: ['one'], toVerify: ['two'] });
@@ -31,7 +31,7 @@ test('sessions, messages, references, independent unit drafts and historical rec
     assert.deepEqual(record.answers, { q1: 'answer one', q2: 'code one' });
     assert.equal(l.unit(a.space.id, u2!.id).draft.q1, 'answer two');
     assert.equal(l.unit(a.space.id, u1!.id).draft.q1, '');
-    assert.throws(() => l.record(b.space.id, record.id), /不存在/);
+    assert.throws(() => l.record(b.space.id, record.id), { message: 'LEARNING_RECORD_NOT_FOUND' });
     l.saveLesson(a.space.id, u1!.id, { title: 'Ownership', content: 'Persisted material' });
     assert.equal(l.unit(a.space.id, u1!.id).lesson!.content, 'Persisted material');
     assert.equal(l.unit(a.space.id, u2!.id).lesson, null);
@@ -45,38 +45,38 @@ test('idempotency, stale revisions and transaction failures do not duplicate or 
     const create = () => l.once(key, '/spaces', body, () => l.create(body));
     assert.equal(create().id, create().id);
     assert.equal(l.list().length, 1);
-    assert.throws(() => l.once(key, '/spaces', { name: 'Other' }, () => l.create(body)), /幂等键/);
+    assert.throws(() => l.once(key, '/spaces', { name: 'Other' }, () => l.create(body)), { message: 'IDEMPOTENCY_KEY_REUSED' });
     const { space, units, routeSession } = populated(l);
     const content = space.route.content!;
     const added = { id: randomUUID(), title: 'new', summary: '', goals: [] };
     const proposed = { ...content, stages: [{ ...content.stages[0]!, units: [...units, added] }] };
     const p = l.proposeRoute(space.id, routeSession, proposed);
-    assert.throws(() => l.proposeRoute(space.id, routeSession, content), /先接受或拒绝/);
+    assert.throws(() => l.proposeRoute(space.id, routeSession, content), { message: 'ROUTE_PROPOSAL_PENDING' });
     assert.equal(l.space(space.id).proposals.filter((proposal) => proposal.state === 'pending').length, 1);
     db.exec("CREATE TRIGGER fail_route BEFORE UPDATE ON routes BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
     assert.throws(() => l.applyProposal(space.id, p.id), /injected failure/);
-    assert.throws(() => l.unit(space.id, added.id), /不存在/);
+    assert.throws(() => l.unit(space.id, added.id), { message: 'LEARNING_RECORD_NOT_FOUND' });
     assert.equal(l.space(space.id).proposals.find((x) => x.id === p.id)!.state, 'pending');
     db.exec('DROP TRIGGER fail_route');
     l.applyProposal(space.id, p.id); l.applyProposal(space.id, p.id);
     assert.equal(l.space(space.id).route.revision, 2);
-    assert.throws(() => l.rejectProposal(space.id, p.id, {}), /已经结束/);
+    assert.throws(() => l.rejectProposal(space.id, p.id, {}), { message: 'ROUTE_PROPOSAL_CANNOT_DECIDE' });
     const stale = l.proposeRoute(space.id, routeSession, content);
     l.saveRequirement(space.id, { ...l.space(space.id).requirement, confirmed: true });
-    assert.throws(() => l.applyProposal(space.id, stale.id), /内容已改变/);
-    assert.throws(() => l.addMessage(space.id, routeSession, { text: 'blocked', quote: null, draftRevision: 0 }), /先接受或拒绝/);
+    assert.throws(() => l.applyProposal(space.id, stale.id), { message: 'CONTENT_CHANGED' });
+    assert.throws(() => l.addMessage(space.id, routeSession, { text: 'blocked', quote: null, draftRevision: 0 }), { message: 'ROUTE_PROPOSAL_PENDING' });
     l.rejectProposal(space.id, stale.id, {}); l.rejectProposal(space.id, stale.id, {});
     assert.equal(l.space(space.id).proposals.find((proposal) => proposal.id === stale.id)!.state, 'rejected');
-    assert.throws(() => l.applyProposal(space.id, stale.id), /已经结束/);
-    assert.throws(() => l.rejectProposal(space.id, stale.id, { feedback: 'Change the decision' }), /已经结束/);
+    assert.throws(() => l.applyProposal(space.id, stale.id), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
+    assert.throws(() => l.rejectProposal(space.id, stale.id, { feedback: 'Change the decision' }), { message: 'ROUTE_PROPOSAL_CANNOT_DECIDE' });
     const s = l.session(space.id, routeSession);
     const messageKey = randomUUID();
     const input = { text: 'once', quote: null, draftRevision: 0 };
     const send = () => l.once(messageKey, 'message', input, () => l.addMessage(space.id, s.id, input));
     send(); send();
     assert.equal(l.session(space.id, s.id).messages.length, 1);
-    assert.throws(() => l.saveSessionDraft(space.id, s.id, s.draft), /内容已改变/);
-    assert.throws(() => l.addMessage(space.id, s.id, input), /内容已改变/);
+    assert.throws(() => l.saveSessionDraft(space.id, s.id, s.draft), { message: 'CONTENT_CHANGED' });
+    assert.throws(() => l.addMessage(space.id, s.id, input), { message: 'CONTENT_CHANGED' });
     assert.equal(l.session(space.id, s.id).messages.length, 1);
   } finally { db.close(); }
 });
@@ -110,37 +110,37 @@ test('inserting supplemental stages preserves passed evidence and access; only u
       assert.doesNotThrow(() => learning.assertUnitUnlocked(space.id, unit.id));
     }
     assert.doesNotThrow(() => learning.assertUnitUnlocked(space.id, supplement.id));
-    assert.throws(() => learning.assertUnitUnlocked(space.id, middle.id), /尚未解锁/);
-    assert.throws(() => learning.assertUnitUnlocked(space.id, future.id), /尚未解锁/);
+    assert.throws(() => learning.assertUnitUnlocked(space.id, middle.id), { message: 'UNIT_LOCKED', detail: { code: 'UNIT_LOCKED', params: { title: supplement.title } } });
+    assert.throws(() => learning.assertUnitUnlocked(space.id, future.id), { message: 'UNIT_LOCKED', detail: { code: 'UNIT_LOCKED', params: { title: supplement.title } } });
     // The unchanged assessment remains usable after an unrelated route revision.
     assert.doesNotThrow(() => assessments.submit(space.id, second.id, { kind: 'evaluation', revision: 0, specRevision: 1, q1: 'Another explanation', q2: '' }));
     const removeLearned = structuredClone(content);
     removeLearned.stages[1]!.units = [first, future];
-    assert.throws(() => learning.proposeRoute(space.id, routeSession, removeLearned), /不能移除/);
+    assert.throws(() => learning.proposeRoute(space.id, routeSession, removeLearned), { message: 'ACTIVE_UNIT_REMOVAL', detail: { code: 'ACTIVE_UNIT_REMOVAL', params: { title: second.title } } });
     const retarget = structuredClone(content);
     retarget.stages[1]!.units[0]!.goals = ['A different learning objective'];
-    assert.throws(() => learning.proposeRoute(space.id, routeSession, retarget), /学习目标/);
+    assert.throws(() => learning.proposeRoute(space.id, routeSession, retarget), { message: 'ACTIVE_UNIT_GOALS_CHANGED', detail: { code: 'ACTIVE_UNIT_GOALS_CHANGED', params: { title: second.title } } });
     // Empty session/draft records alone are not learning history.
     learning.createSession(space.id, { scope: 'unit', unitId: future.id, title: 'Empty' });
     learning.saveAssessmentDraft(space.id, future.id, { revision: 0, q1: '', q2: '' });
     const removeFuture = structuredClone(content);
     removeFuture.stages[1]!.units.pop();
     learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, removeFuture).id);
-    assert.throws(() => learning.unit(space.id, future.id), /当前学习路线/);
+    assert.throws(() => learning.unit(space.id, future.id), { message: 'UNIT_NOT_IN_ROUTE' });
     assert.equal(db.prepare('SELECT 1 FROM units WHERE space_id=? AND id=?').get(space.id, future.id) !== undefined, true);
     // Publication and acceptance both enforce protection: learning may start while a proposal is pending.
     const removeSupplement = { ...removeFuture, stages: [removeFuture.stages[1]!] };
     const pending = learning.proposeRoute(space.id, routeSession, removeSupplement);
     const session = learning.createSession(space.id, { scope: 'unit', unitId: supplement.id, title: 'Started' });
     learning.saveSessionDraft(space.id, session.id, { revision: 0, text: 'An actual question', quote: null, routeSuggestion: '' });
-    assert.throws(() => learning.applyProposal(space.id, pending.id), /不能移除/);
+    assert.throws(() => learning.applyProposal(space.id, pending.id), { message: 'ACTIVE_UNIT_REMOVAL', detail: { code: 'ACTIVE_UNIT_REMOVAL', params: { title: supplement.title } } });
     assert.deepEqual(learning.space(space.id).route.content, removeFuture);
     learning.rejectProposal(space.id, pending.id, {});
     const retargetMiddle = structuredClone(removeFuture);
     retargetMiddle.stages[1]!.units[1]!.goals = ['Replacement goal'];
     const lateGoal = learning.proposeRoute(space.id, routeSession, retargetMiddle);
     learning.saveAssessmentDraft(space.id, middle.id, { revision: 0, q1: 'A real attempted answer', q2: '' });
-    assert.throws(() => learning.applyProposal(space.id, lateGoal.id), /学习目标/);
+    assert.throws(() => learning.applyProposal(space.id, lateGoal.id), { message: 'ACTIVE_UNIT_GOALS_CHANGED', detail: { code: 'ACTIVE_UNIT_GOALS_CHANGED', params: { title: middle.title } } });
     assert.deepEqual(learning.space(space.id).route.content, removeFuture);
   } finally { db.close(); }
 });
@@ -165,8 +165,8 @@ test('started means actual saved learning content, not empty session or draft re
       const retargeted = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [{ ...unit, goals: ['Different objective'] }, other] }] };
       if (started) {
         assert.doesNotThrow(() => learning.assertUnitUnlocked(space.id, unit.id), activity);
-        assert.throws(() => learning.proposeRoute(space.id, routeSession, removed), /不能移除/, activity);
-        assert.throws(() => learning.proposeRoute(space.id, routeSession, retargeted), /学习目标/, activity);
+        assert.throws(() => learning.proposeRoute(space.id, routeSession, removed), { message: 'ACTIVE_UNIT_REMOVAL', detail: { code: 'ACTIVE_UNIT_REMOVAL', params: { title: unit.title } } }, activity);
+        assert.throws(() => learning.proposeRoute(space.id, routeSession, retargeted), { message: 'ACTIVE_UNIT_GOALS_CHANGED', detail: { code: 'ACTIVE_UNIT_GOALS_CHANGED', params: { title: unit.title } } }, activity);
         const moved = { note: 'Correct wording and group without changing objectives', stages: [
           { ...space.route.content!.stages[0]!, units: [other] },
           { id: randomUUID(), title: 'Moved group', units: [{ ...unit, title: 'Corrected title', summary: 'Corrected summary' }] },
@@ -178,7 +178,7 @@ test('started means actual saved learning content, not empty session or draft re
       } else {
         learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, retargeted).id);
         learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, removed).id);
-        assert.throws(() => learning.unit(space.id, unit.id), /当前学习路线/);
+        assert.throws(() => learning.unit(space.id, unit.id), { message: 'UNIT_NOT_IN_ROUTE' });
       }
     } finally { db.close(); }
   }

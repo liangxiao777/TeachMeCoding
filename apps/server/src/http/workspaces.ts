@@ -10,11 +10,11 @@ import { TeachingRuntime } from '../agents/runtime.js';
 export function workspaceApi(learning: Learning, projects?: Projects, agents?: TeachingRuntime) {
   const api = new Hono();
   const decisions = agents ?? new TeachingRuntime(learning, null);
-  api.use('*', bodyLimit({ maxSize: 1_100_000, onError: (c) => c.json({ error: '请求内容过大。' }, 413) }));
+  api.use('*', bodyLimit({ maxSize: 1_100_000, onError: (c) => c.json({ code: 'REQUEST_TOO_LARGE' }, 413) }));
   api.onError((error, c) => {
-    if (error instanceof BusinessError) return c.json({ error: error.message }, error.status);
-    if (error.name === 'ZodError' || error instanceof SyntaxError) return c.json({ error: '请求格式或字段无效。' }, 400);
-    return c.json({ error: '无法保存或读取本地数据，请检查数据目录权限和可用空间。' }, 503);
+    if (error instanceof BusinessError) return c.json(error.toResponse(), error.status);
+    if (error.name === 'ZodError' || error instanceof SyntaxError) return c.json({ code: 'INVALID_REQUEST' }, 400);
+    return c.json({ code: 'LOCAL_DATA_UNAVAILABLE' }, 503);
   });
   api.get('/spaces', (c) => c.json(learning.list()));
   api.get('/spaces/:space', (c) => c.json(learning.space(c.req.param('space'))));
@@ -40,7 +40,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     return c.json(agents?.actions?.list(c.req.param('space'), c.req.param('session')) ?? []);
   });
   api.post('/spaces/:space/actions/:action', async (c) => {
-    if (!agents?.actions) throw new BusinessError(503, '本机确认执行不可用。');
+    if (!agents?.actions) throw new BusinessError(503, { code: 'LOCAL_APPROVAL_UNAVAILABLE' });
     return c.json(agents.actions.decide(c.req.param('space'), c.req.param('action'), await c.req.json()));
   });
   api.get('/spaces/:space/units/:unit/executions', (c) => {
@@ -48,14 +48,14 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
     return c.json(agents?.executions?.list(c.req.param('space'), c.req.param('unit')) ?? []);
   });
   api.post('/spaces/:space/units/:unit/executions', async (c) => {
-    if (!agents?.executions) throw new BusinessError(503, '本机执行不可用。');
+    if (!agents?.executions) throw new BusinessError(503, { code: 'LOCAL_EXECUTION_UNAVAILABLE' });
     const { space, unit } = c.req.param(), input: unknown = await c.req.json();
     const e = learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => agents.executions!.create(space, unit, input));
     void agents.executions.run(space, e.id).catch(() => { console.error('Cannot persist local execution result. Check data directory permissions and available space.'); });
     return c.json(agents.executions.get(space, e.id));
   });
   api.post('/spaces/:space/executions/:execution/stop', (c) => {
-    if (!agents?.executions) throw new BusinessError(503, '本机执行不可用。');
+    if (!agents?.executions) throw new BusinessError(503, { code: 'LOCAL_EXECUTION_UNAVAILABLE' });
     return c.json(agents.executions.stop(c.req.param('space'), c.req.param('execution')));
   });
   if (agents) {
@@ -109,7 +109,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   api.post('/spaces/:space/:action', async (c) => {
     const space = c.req.param('space');
     const action = c.req.param('action');
-    if (!['name', 'requirement', 'sessions'].includes(action)) return c.json({ error: 'Not found' }, 404);
+    if (!['name', 'requirement', 'sessions'].includes(action)) return c.json({ code: 'NOT_FOUND' }, 404);
     const input: unknown = await c.req.json();
     return c.json(learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () =>
       action === 'name' ? learning.renameSpace(space, input) :
@@ -117,7 +117,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
   });
   api.post('/spaces/:space/sessions/:session/:action', async (c) => {
     const { space, session, action } = c.req.param();
-    if (!['draft', 'messages', 'settings'].includes(action)) return c.json({ error: 'Not found' }, 404);
+    if (!['draft', 'messages', 'settings'].includes(action)) return c.json({ code: 'NOT_FOUND' }, 404);
     const input: unknown = await c.req.json();
     if (action === 'settings') {
       learning.once(c.req.header('Idempotency-Key') ?? '', c.req.path, input, () => learning.saveSessionSettings(space, session, input));
@@ -169,7 +169,7 @@ export function workspaceApi(learning: Learning, projects?: Projects, agents?: T
         case 'create': return c.json(projects.create(space, input));
         case 'save': return c.json(projects.save(space, input));
         case 'rename': return c.json(projects.rename(space, input));
-        default: return c.json({ error: 'Not found' }, 404);
+        default: return c.json({ code: 'NOT_FOUND' }, 404);
       }
     });
   }

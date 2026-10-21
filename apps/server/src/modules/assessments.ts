@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { assessmentResultSchema, assessmentSpecSchema, executionFeedback, generationInputSchema, type AssessmentSpec, type CodeExecution } from '@teach-me-coding/contracts';
+import { assessmentResultSchema, assessmentSpecSchema, generationInputSchema, type AssessmentSpec, type CodeExecution } from '@teach-me-coding/contracts';
 import { BusinessError, type Learning } from './learning.js';
 import { hash } from '../agents/context.js';
 
@@ -21,7 +21,7 @@ export class Assessments {
     const artifact = assessmentArtifactSchema.parse(raw), l = this.learning;
     return l.db.transaction(() => {
       l.checkBaseline(space, unit, sources);
-      if ((l.unit(space, unit).assessment?.revision ?? 0) !== expected) throw new BusinessError(409, '题目版本已变化。');
+      if ((l.unit(space, unit).assessment?.revision ?? 0) !== expected) throw new BusinessError(409, { code: 'ASSESSMENT_VERSION_CHANGED' });
       const revision = expected + 1;
       l.db.prepare(`INSERT INTO assessment_specs(space_id,unit_id,content,revision) VALUES (?,?,?,?)
         ON CONFLICT(space_id,unit_id) DO UPDATE SET content=excluded.content,revision=excluded.revision`).run(space, unit, JSON.stringify(artifact.public), revision);
@@ -31,16 +31,16 @@ export class Assessments {
   }
   submit(space: string, unit: string, raw: unknown, evidence: ExecutionEvidence = { kind: 'none' }): FixedAssessment {
     const input = generationInputSchema.parse(raw), l = this.learning;
-    if (input.kind !== 'evaluation') throw new BusinessError(400, '需要测评提交。');
+    if (input.kind !== 'evaluation') throw new BusinessError(400, { code: 'ASSESSMENT_SUBMISSION_REQUIRED' });
     return l.db.transaction(() => {
       const u = l.unit(space, unit);
-      if (u.draft.revision !== input.revision || u.assessment?.revision !== input.specRevision) throw new BusinessError(409, '作答或题目版本已变化，请重新读取。');
+      if (u.draft.revision !== input.revision || u.assessment?.revision !== input.specRevision) throw new BusinessError(409, { code: 'ASSESSMENT_ANSWERS_CHANGED' });
       const v = l.db.prepare('SELECT content,rubric,sources FROM assessment_versions WHERE space_id=? AND unit_id=? AND revision=?').get(space, unit, input.specRevision) as { content: string; rubric: string | null; sources: string | null } | undefined;
-      if (!v?.rubric || !v.sources) throw new BusinessError(422, '旧题目没有版本化评分标准，请重新生成题目。');
+      if (!v?.rubric || !v.sources) throw new BusinessError(422, { code: 'ASSESSMENT_RUBRIC_MISSING' });
       const sources = JSON.parse(v.sources) as AssessmentSources;
       l.checkLearningSources(space, unit, sources);
       const answers = { q1: input.q1, q2: input.q2 };
-      if (!answers.q1.trim()) throw new BusinessError(422, '请先作答。');
+      if (!answers.q1.trim()) throw new BusinessError(422, { code: 'ASSESSMENT_ANSWER_REQUIRED' });
       const previous = l.db.prepare(`SELECT MAX(attempt) AS n FROM (SELECT attempt FROM assessments WHERE space_id=? AND unit_id=? UNION ALL
         SELECT attempt FROM submissions WHERE space_id=? AND unit_id=?)`).get(space, unit, space, unit) as { n: number | null };
       const submission = { id: randomUUID(), attempt: (previous.n ?? 0) + 1, answers, answerHash: hash(answers), evidence, createdAt: Date.now() };
@@ -73,9 +73,8 @@ export class Assessments {
       const result = { ...proposed, result: unverified ? 'unverified' as const : code && !matched ? 'needs_work' as const : proposed.result, verification, execution,
         specRevision: fixed.revision, lessonRevision: fixed.sources.lesson, answerHash: fixed.submission.answerHash,
         sources: fixed.sources, q2Kind: fixed.public.q2Kind,
+        summary: unverified || overridden || proposed.result === 'pass' ? '' : proposed.summary,
         mastered: code && !matched ? [] : proposed.mastered,
-        summary: unverified || overridden ? execution ? executionFeedback(execution).summary : '本次没有可用的代码运行结果，尚不能判断代码是否符合要求。'
-          : proposed.result === 'pass' ? '本次作答符合题目要求。' : proposed.summary,
         evidence: overridden ? [] : proposed.evidence,
         concerns: overridden ? [] : proposed.concerns,
         toVerify: overridden ? [] : proposed.toVerify };

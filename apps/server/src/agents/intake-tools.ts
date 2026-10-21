@@ -33,7 +33,7 @@ export function createIntakeTools(learning: Learning, input: FrozenContext, runI
         } },
     ],
     commit() {
-      if (learning.space(input.spaceId).requirement.revision !== input.requirement.revision) throw new BusinessError(409, '需求已改变，本轮问题和资料未发布。');
+      if (learning.space(input.spaceId).requirement.revision !== input.requirement.revision) throw new BusinessError(409, { code: 'CONTENT_CHANGED' });
       if (draft || research) {
         let intake = input.requirement.intake;
         if (research) {

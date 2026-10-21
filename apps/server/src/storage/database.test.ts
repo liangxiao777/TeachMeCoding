@@ -137,14 +137,14 @@ test('migration 12 preserves proposal history and applied routes, keeps only the
     const learning = new Learning(db);
     for (const id of [older, staleRoute, staleRequirement, missingRequirement, allStale]) {
       const space = id === allStale ? spaces[2]! : spaces[0]!;
-      assert.throws(() => learning.applyProposal(space, id), /已经结束/);
-      assert.throws(() => learning.rejectProposal(space, id, {}), /已经结束/);
+      assert.throws(() => learning.applyProposal(space, id), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
+      assert.throws(() => learning.rejectProposal(space, id, {}), { message: 'ROUTE_PROPOSAL_CANNOT_DECIDE' });
     }
     assert.equal(learning.space(spaces[0]!).proposals.find((proposal) => proposal.id === latest)!.state, 'pending');
     assert.throws(() => add(0, 3, 7), /UNIQUE constraint/);
     learning.rejectProposal(spaces[0]!, latest, { feedback: 'Saved after upgrade' });
     learning.rejectProposal(spaces[0]!, latest, { feedback: 'Saved after upgrade' });
-    assert.throws(() => learning.applyProposal(spaces[0]!, latest), /已经结束/);
+    assert.throws(() => learning.applyProposal(spaces[0]!, latest), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
     assert.doesNotThrow(() => add(0, 3, 7), 'Terminal decisions release the unique pending slot.');
     assert.deepEqual(db.pragma('foreign_key_check'), []);
     const stable = db.prepare('SELECT * FROM proposals ORDER BY rowid').all();

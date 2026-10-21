@@ -13,11 +13,11 @@ export class Executions {
   private closing = false;
   constructor(private learning: Learning, private limits = executionLimits) {}
   create(space: string, unit: string, raw: unknown, submissionId: string | null = null): CodeExecution {
-    if (this.closing) throw new BusinessError(503, '服务正在关闭。');
+    if (this.closing) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
     const input = codeRunInputSchema.parse(raw), spec = this.learning.unit(space, unit).assessment;
-    if (spec?.revision !== input.specRevision) throw new BusinessError(409, '题目版本已变化。');
-    if (spec.q2Kind !== 'code' || !spec.execution) throw new BusinessError(422, '本题没有本机执行方案，请重新出题；没有运行代码。');
-    if (this.list(space, unit).some((e) => ['pending', 'running'].includes(e.state))) throw new BusinessError(409, '本单元已有代码正在运行，请等待或取消。');
+    if (spec?.revision !== input.specRevision) throw new BusinessError(409, { code: 'ASSESSMENT_VERSION_CHANGED' });
+    if (spec.q2Kind !== 'code' || !spec.execution) throw new BusinessError(422, { code: 'CODE_PLAN_UNAVAILABLE' });
+    if (this.list(space, unit).some((e) => ['pending', 'running'].includes(e.state))) throw new BusinessError(409, { code: 'CODE_EXECUTION_RUNNING' });
     const e: CodeExecution = { id: randomUUID(), unitId: unit, submissionId, specRevision: input.specRevision, createdAt: Date.now(),
       code: input.code, codeHash: hash(input.code), plan: spec.execution, commands: codeCommands(spec.execution), state: 'pending', results: [] };
     this.learning.db.prepare('INSERT INTO code_executions VALUES (?,?,?,?)').run(space, e.id, unit, JSON.stringify(e));
@@ -26,7 +26,7 @@ export class Executions {
   get(space: string, id: string): CodeExecution {
     idSchema.parse(space); idSchema.parse(id);
     const row = this.learning.db.prepare('SELECT value FROM code_executions WHERE space_id=? AND id=?').get(space, id) as { value: string } | undefined;
-    if (!row) throw new BusinessError(404, '执行记录不存在。');
+    if (!row) throw new BusinessError(404, { code: 'CODE_EXECUTION_NOT_FOUND' });
     return JSON.parse(row.value);
   }
   list(space: string, unit: string): CodeExecution[] {
@@ -65,10 +65,12 @@ export class Executions {
         e.state = controller.signal.aborted ? 'interrupted' : e.results.length === e.commands.length && e.results.every((r) => r.result.status === 'succeeded') ? 'succeeded' : 'failed';
       } catch {
         e.state = controller.signal.aborted ? 'interrupted' : 'failed';
-        e.error = '无法完成本机执行或保存证据，请检查临时目录权限和可用空间；没有通过结论。';
+        e.error = { code: 'CODE_EXECUTION_FAILED' };
       } finally {
         try { if (directory) rmSync(directory, { recursive: true, force: true }); }
-        catch { e.state = 'failed'; e.error = '执行临时目录清理失败；没有通过结论，请检查临时目录权限。'; }
+        catch {
+          e.state = 'failed'; e.error = { code: 'CODE_EXECUTION_CLEANUP_FAILED' };
+        }
       }
       this.save(space, e);
       return e;

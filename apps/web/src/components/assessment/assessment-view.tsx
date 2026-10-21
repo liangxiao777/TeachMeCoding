@@ -1,6 +1,7 @@
 'use client'
 
 import { ArrowLeft, ClipboardCheck, Play, Save, Send } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Generating, RichText } from '@/components/shared'
 import { RunContent } from '@/components/agent/run-content'
 import { RunContext } from '@/components/agent/run-context'
@@ -32,6 +33,7 @@ function QuestionHeader({ n, title, prompt }: { n: number; title: string; prompt
 }
 
 export function AssessmentView() {
+  const { t } = useTranslation('assessment')
   const space = useSpace()
   const { updateDraft, runDraft, submitAssessment, leaveAssessment, assessment: getAssessment, capabilities, persistence } = useApp()
   const draft = space.draft
@@ -41,12 +43,12 @@ export function AssessmentView() {
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
         <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={leaveAssessment}>
           <ArrowLeft data-icon="inline-start" />
-          返回单元（答案会保留）
+          {t('controls.backWithAnswers')}
         </Button>
         <Card>
           <CardHeader>
-            <CardTitle>测评暂不可用</CardTitle>
-            <CardDescription>当前没有可用的单元测评草稿。</CardDescription>
+            <CardTitle>{t('form.unavailable')}</CardTitle>
+            <CardDescription>{t('form.noDraft')}</CardDescription>
           </CardHeader>
         </Card>
       </div>
@@ -66,9 +68,9 @@ export function AssessmentView() {
         <Card className="w-full max-w-md shadow-lg">
           <CardContent>
             <Generating
-              title="正在评估你的回答"
-              steps={['阅读解释题的回答', '运行并检查你提交的代码', '对照本单元能力目标', '整理掌握情况与建议']}
-              note="测评结果会写入你的学习记录，后续课件和 Agent 回答都会参考它。"
+              title={t('form.evaluating')}
+              steps={[t('form.readAnswer'), t('form.runCode'), t('form.compareGoals'), t('form.prepareFeedback')]}
+              note={t('form.evaluationNote')}
             />
           </CardContent>
         </Card>
@@ -82,18 +84,18 @@ export function AssessmentView() {
         <div className="flex flex-col gap-5">
           <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={leaveAssessment}>
             <ArrowLeft data-icon="inline-start" />
-            返回单元（答案会保留）
+            {t('controls.backWithAnswers')}
           </Button>
           <div className="flex flex-col gap-2">
             <Badge variant="outline" className="gap-1.5">
               <ClipboardCheck aria-hidden />
-              单元测评 · 第 {draft.attempt} 次
+              {t('form.attempt', { number: draft.attempt })}
             </Badge>
             <h1 className="text-balance text-3xl font-semibold tracking-tight">{unit.title}</h1>
           </div>
           {spec && (
             <div className="flex flex-col gap-2.5">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">这次测评会检查</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('form.abilities')}</p>
               <ul className="flex flex-wrap gap-2">
                 {spec.abilities.map((a) => (
                   <li key={a}>
@@ -110,19 +112,19 @@ export function AssessmentView() {
         {persistence && capabilities.assessment && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm" role="status">
             <span className="flex-1">{activeTask ? task.kind === 'evaluation'
-              ? spec?.execution ? '正在运行并评估固定提交；你可以继续编辑新草稿。' : '正在评估固定提交；你可以继续编辑新草稿。代码不会执行。' : '正在生成版本化题目…'
-              : task && ['failed', 'interrupted'].includes(task.state) ? '任务失败或已中断；原题目和答案仍保留。' : spec?.stale ? '课件已更新，旧题和答案仍保留。请根据最新课件重新出题后测评新版。' : spec?.execution ? '提交测评将执行固定代码，并绑定本次执行证据。' : '代码题仅作静态评估，不代表运行通过。'}</span>
+              ? spec?.execution ? t('form.runningSubmission') : t('form.staticSubmission') : t('form.generatingQuestions')
+              : task && ['failed', 'interrupted'].includes(task.state) ? t('form.taskFailed') : spec?.stale ? t('form.stale') : spec?.execution ? t('form.executionHint') : t('form.staticHint')}</span>
             <RunContext runId={task?.id} />
-            {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>停止任务</Button> : <>
-              {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>重试原任务</Button>}
-              <Button size="sm" variant="outline" disabled={storageBusy} onClick={persistence.generateAssessment}>{spec ? '重新出题' : '生成题目'}</Button>
+            {activeTask ? <Button size="sm" variant="outline" onClick={() => persistence.stopTask(task.id)}>{t('form.stopTask')}</Button> : <>
+              {task && ['failed', 'interrupted'].includes(task.state) && <Button size="sm" variant="outline" disabled={storageBusy} onClick={() => persistence.retryTask(task.id)}>{t('form.retryTask')}</Button>}
+              <Button size="sm" variant="outline" disabled={storageBusy} onClick={persistence.generateAssessment}>{spec ? t('form.regenerateQuestions') : t('form.generateQuestions')}</Button>
             </>}
           </div>
         )}
         {draft.state === 'generating' && capabilities.assessment ? (
           <Card>
             <CardContent>
-              <Generating title="正在根据你的学习情况出题" steps={persistence ? ['分析单元与课件', '生成题目', '校验题目与独立评分标准', '保存题目'] : ['回顾本单元目标', '参考你在会话中的疑问', '生成解释题与调试题']}
+              <Generating title={t('form.generationTitle')} steps={persistence ? [t('form.analyzeLesson'), t('form.generate'), t('form.validate'), t('form.save')] : [t('form.reviewGoals'), t('form.reviewConversation'), t('form.generatePreview')]}
                 parts={persistence ? persistence.taskParts[task?.id ?? ''] ?? [] : undefined} />
             </CardContent>
           </Card>
@@ -132,8 +134,8 @@ export function AssessmentView() {
             <Card>
               {spec ? <QuestionHeader n={1} title={spec.q1.title} prompt={spec.q1.prompt} /> : (
                 <CardHeader>
-                  <CardTitle>测评题目暂不可用</CardTitle>
-                  <CardDescription>当前单元没有可用测评题目。已有答案草稿仍可编辑和保存。</CardDescription>
+                  <CardTitle>{t('form.questionsUnavailable')}</CardTitle>
+                  <CardDescription>{t('form.questionsUnavailableHint')}</CardDescription>
                 </CardHeader>
               )}
               <CardContent className="flex flex-col gap-4">
@@ -148,58 +150,58 @@ export function AssessmentView() {
                   </pre>
                 )}
                 <Field>
-                  <FieldLabel htmlFor="q1">你的回答</FieldLabel>
+                  <FieldLabel htmlFor="q1">{t('form.answer')}</FieldLabel>
                   <Textarea
                     id="q1"
                     rows={5}
                     value={draft.q1}
                     onChange={(e) => updateDraft({ q1: e.target.value })}
-                    placeholder={spec ? '用自己的话解释，写清楚原因和你的改法…' : '编辑已保留的答案草稿…'}
+                    placeholder={spec ? t('form.answerPlaceholder') : t('form.draftPlaceholder')}
                     className="resize-y leading-relaxed"
                   />
-                  <FieldDescription>{spec ? '不需要标准术语，讲清楚你的理解即可。' : '题目暂不可用，不会自动生成或替换你的答案。'}</FieldDescription>
+                  <FieldDescription>{spec ? t('form.answerHint') : t('form.noQuestionsHint')}</FieldDescription>
                 </Field>
               </CardContent>
             </Card>
 
             <Card>
               {spec ? <QuestionHeader n={2} title={spec.q2.title} prompt={spec.q2.prompt} /> : (
-                <CardHeader><CardTitle>代码答案草稿</CardTitle></CardHeader>
+                <CardHeader><CardTitle>{t('form.codeDraft')}</CardTitle></CardHeader>
               )}
               <CardContent>
                 {persistence && spec?.execution && <div className="mb-4 space-y-2 text-xs">
-                  <p>点击「运行」或「提交测评」即在本机运行当前代码快照。每个用例在一次性目录执行，不依赖项目文件；不是沙箱，拥有服务账号权限。总计最多 30 秒、256 KiB 输出，不自动安装环境，取消不回滚。</p>
-                  <details><summary className="cursor-pointer">查看执行命令和公开测试</summary>
-                    {codeCommands(spec.execution).map((command, i) => <pre key={i} className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{`$ ${command}\n期望标准输出：${spec.execution!.cases[i]!.expected}`}</pre>)}
+                  <p>{t('form.permissions')}</p>
+                  <details><summary className="cursor-pointer">{t('form.commands')}</summary>
+                    {codeCommands(spec.execution).map((command, i) => <pre key={i} className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{t('form.expectedStdout', { command, expected: spec.execution!.cases[i]!.expected })}</pre>)}
                   </details>
                 </div>}
-                {spec?.q2Kind === 'reasoning' ? <Textarea aria-label="分析题回答" rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
+                {spec?.q2Kind === 'reasoning' ? <Textarea aria-label={t('form.reasoningAnswer')} rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
                   <div className="flex items-center justify-between border-b py-1.5 pr-1.5 pl-3">
-                    <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? '代码答案草稿'}</span>
-                    {persistence && spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>载入起始代码</Button>}
+                    <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? t('form.codeDraft')}</span>
+                    {persistence && spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>{t('form.loadStarter')}</Button>}
                     <Button size="xs" disabled={!canRun || draft.q2Running || executing || storageBusy || !!activeTask} onClick={runDraft}>
                       {canRun && draft.q2Running ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
-                      运行
+                      {t('controls.run')}
                     </Button>
                   </div>
-                  <CodeEditor className="h-64" label={spec ? `编辑 ${spec.q2.file}` : '代码答案草稿'} filename={spec?.q2.file} language={spec?.execution?.language ?? (space.kind === 'pytorch' ? 'python' : 'rust')} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
+                  <CodeEditor className="h-64" label={spec ? t('form.editCode', { file: spec.q2.file }) : t('form.codeDraft')} filename={spec?.q2.file} language={spec?.execution?.language ?? (space.kind === 'pytorch' ? 'python' : 'rust')} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
                   <div className="min-h-16 border-t px-3 py-2 font-mono text-xs leading-5" aria-live="polite">
-                    {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{execution ? '固定代码的执行结果见下方。' : canRun ? '运行后在这里查看输出' : '代码运行暂不可用，不会执行模拟运行。'}</p>}
+                    {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{execution ? t('form.executionBelow') : canRun ? t('form.outputHint') : t('form.runUnavailable')}</p>}
                   </div>
                 </div>}
                 {persistence && execution && <div className="mt-4 space-y-2">
-                  {execution.code !== draft.q2 && <p role="status" className="text-xs text-muted-foreground">以下输出属于较早的固定代码；当前新草稿尚未运行。</p>}
-                  {execution.specRevision !== spec?.revision && <p role="status" className="text-xs text-muted-foreground">以下运行基于旧测评题第 {execution.specRevision} 版，不是当前题目或新版课件的运行证据。</p>}
+                  {execution.code !== draft.q2 && <p role="status" className="text-xs text-muted-foreground">{t('form.olderCode')}</p>}
+                  {execution.specRevision !== spec?.revision && <p role="status" className="text-xs text-muted-foreground">{t('form.olderSpec', { revision: execution.specRevision })}</p>}
                   <ExecutionResult execution={execution} />
-                  {executing && <Button size="sm" variant="outline" onClick={() => persistence.stopExecution(execution.id)}>停止代码运行</Button>}
+                  {executing && <Button size="sm" variant="outline" onClick={() => persistence.stopExecution(execution.id)}>{t('form.stopExecution')}</Button>}
                 </div>}
               </CardContent>
             </Card>
 
             <div className="sticky bottom-0 -mx-8 flex items-center justify-between gap-4 border-t bg-background/85 px-8 py-4 backdrop-blur">
               <p className="text-sm text-muted-foreground">
-                {capabilities.assessment && spec ? '提交后 Agent 会给出掌握情况、依据和建议。' : '测评评估暂不可用，仍可保存答案草稿。'}
-                {persistence && <span role="status" className="ml-2">{persistence.assessmentDirty ? '未保存' : '已保存'}</span>}
+                {capabilities.assessment && spec ? t('form.submitHint') : t('form.evaluationUnavailable')}
+                {persistence && <span role="status" className="ml-2">{persistence.assessmentDirty ? t('controls.unsaved') : t('controls.saved')}</span>}
               </p>
               {persistence && (
                 <Button
@@ -209,12 +211,12 @@ export function AssessmentView() {
                   onClick={persistence.saveAssessment}
                 >
                   <Save data-icon="inline-start" />
-                  保存答案草稿
+                  {t('controls.saveDraft')}
                 </Button>
               )}
               <Button size="lg" onClick={submitAssessment} disabled={!spec || spec.stale || !capabilities.assessment || storageBusy || executing || !!activeTask || !draft.q1.trim()}>
                 <Send data-icon="inline-start" />
-                提交测评
+                {t('controls.submit')}
               </Button>
             </div>
           </>

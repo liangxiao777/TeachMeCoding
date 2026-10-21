@@ -2,11 +2,13 @@
 
 import { Hash } from 'lucide-react'
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import { formatNumber, formatRelativeTime } from '@/i18n/format'
 import { ProjectTree } from '@/components/workbench/project-tree'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { findUnit, relativeTime } from '@/app/selectors'
+import { findUnit } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { lessonHeadings } from '@/lib/lesson-markdown'
 import { cn } from '@/lib/utils'
@@ -23,6 +25,7 @@ const railItem =
   'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
 
 export function LeftRail() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const { viewRecord, lesson: getLesson, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
@@ -34,11 +37,11 @@ export function LeftRail() {
   const records = [...space.records].reverse()
 
   return (
-    <aside className="h-full min-w-0 bg-sidebar" aria-label="单元材料">
+    <aside className="h-full min-w-0 bg-sidebar" aria-label={t('rail.materials')}>
       <ScrollArea className="h-full">
         <div className="flex flex-col gap-3 p-2">
           <details open className={cn((space.ideFullscreen || reviewing) && 'hidden')}>
-            <summary className="cursor-pointer px-2 py-2 text-xs font-medium text-muted-foreground">本单元目录</summary>
+            <summary className="cursor-pointer px-2 py-2 text-xs font-medium text-muted-foreground">{t('rail.contents')}</summary>
             {headings.length ? (
               <ul className="flex flex-col">
                 {headings.map((h) => (
@@ -58,7 +61,7 @@ export function LeftRail() {
                 ))}
               </ul>
             ) : (
-              <RailEmpty>{persistence ? '暂无可用课件目录' : '课件生成后显示目录'}</RailEmpty>
+              <RailEmpty>{persistence ? t('rail.noContents') : t('rail.generatingContents')}</RailEmpty>
             )}
           </details>
 
@@ -68,7 +71,7 @@ export function LeftRail() {
 
           <details className={cn(space.ideFullscreen && 'hidden')}>
             <summary className="cursor-pointer px-2 py-2 text-xs font-medium text-muted-foreground">
-              测评记录 <span className="ml-1 opacity-60">{records.length}</span>
+              {t('rail.records')} <span className="ml-1 opacity-60">{formatNumber(records.length)}</span>
             </summary>
             {records.length ? (
               <ul className="flex flex-col gap-0.5">
@@ -85,18 +88,18 @@ export function LeftRail() {
                           variant={r.result === 'pass' ? 'default' : 'secondary'}
                           className={cn(r.result !== 'pass' && 'bg-accent text-accent-foreground')}
                         >
-                          {r.result === 'unverified' ? '未验证' : r.result === 'pass' ? r.valid === false ? '历史通过' : '通过' : r.valid === false ? '历史加强' : '加强'}
+                          {r.result === 'unverified' ? t('rail.unverified') : r.result === 'pass' ? r.valid === false ? t('rail.historicalPass') : t('rail.pass') : r.valid === false ? t('rail.historicalNeedsWork') : t('rail.needsWork')}
                         </Badge>
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        第 {r.attempt} 次 · {relativeTime(r.createdAt)}
+                        {t('rail.attempt', { number: r.attempt, time: formatRelativeTime(r.createdAt) })}
                       </span>
                     </button>
                   </li>
                 ))}
               </ul>
             ) : (
-              <RailEmpty>完成单元测评后显示在这里</RailEmpty>
+              <RailEmpty>{t('rail.noRecords')}</RailEmpty>
             )}
           </details>
         </div>

@@ -26,26 +26,36 @@ test('fallback selection is used only until an explicit choice is saved', async 
   const empty = new ModelService(openDatabase(':memory:'), { env: noenv, fallback: null });
   assert.equal(empty.selection(), null);
   assert.equal(empty.current(), null);
+  await empty.refresh();
+  assert.deepEqual(empty.issue, { code: 'MODEL_NOT_SELECTED' });
+  assert.deepEqual((await empty.settings()).issue, { code: 'MODEL_NOT_SELECTED' });
   db.close();
 });
 
 test('readiness reports the exact missing piece instead of a bare unavailable', async () => {
   const { db, models } = service();
+  assert.deepEqual(models.issue, { code: 'MODEL_CONFIGURATION_CHECKING' });
+  assert.deepEqual((await models.settings()).issue, { code: 'MODEL_CONFIGURATION_CHECKING' });
   await models.refresh();
   assert.equal(models.current(), null, 'provider key missing, so not ready');
-  assert.match((await models.settings()).issue!, /凭据/);
+  assert.deepEqual((await models.settings()).issue, { code: 'MODEL_CREDENTIALS_MISSING' });
   const keyed = service(openDatabase(':memory:'), env).models;
   await keyed.refresh();
   assert.notEqual(keyed.current(), null);
   const settings = await keyed.settings();
   assert.equal(settings.ready, true);
   assert.equal(settings.issue, null);
+  assert.equal('issueDetail' in settings, false);
   // A saved model that is gone from the catalog is a distinct, actionable issue.
   const lost = service();
   lost.db.prepare("INSERT INTO app_settings VALUES ('model', ?)").run(JSON.stringify({ provider: 'openrouter', model: 'gone/model', thinkingLevel: 'high' }));
   await lost.models.refresh();
   assert.equal(lost.models.current(), null);
-  assert.match((await lost.models.settings()).issue!, /目录/);
+  assert.deepEqual((await lost.models.settings()).issue, { code: 'MODEL_SELECTION_UNAVAILABLE' });
+  lost.db.prepare("UPDATE app_settings SET value=? WHERE key='model'").run(JSON.stringify({ ...stealth, thinkingLevel: 'off' }));
+  await lost.models.refresh();
+  assert.deepEqual(lost.models.issue, { code: 'MODEL_THINKING_UNAVAILABLE' });
+  assert.deepEqual((await lost.models.settings()).issue, { code: 'MODEL_THINKING_UNAVAILABLE' });
   db.close(); lost.db.close();
 });
 
@@ -76,12 +86,15 @@ test('OAuth refresh rejection changes readiness without deleting credentials, an
       assert.equal(settings.ready, !rejected);
       assert.equal(models.current() === null, rejected);
       assert.equal(!!settings.providers.find((p) => p.id === 'openai')?.issue, rejected);
+      const expectedDetail = rejected ? { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } } : undefined;
+      assert.deepEqual(settings.issue, expectedDetail ?? null);
+      assert.deepEqual(settings.providers.find((p) => p.id === 'openai')?.issue, expectedDetail);
       assert.deepEqual(await credentials.read('openai'), original, 'Rejected credentials are preserved for explicit recovery');
       assert.doesNotMatch(JSON.stringify(settings), /synthetic-.*secret|"private"/);
       await models.refresh();
       assert.equal(models.ready, !rejected, 'A presence-only refresh must not erase a known rejection');
       if (!rejected) continue;
-      assert.equal(settings.issue, 'ChatGPT 登录已失效，请在应用设置中重新登录。');
+      assert.deepEqual(settings.issue, { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } });
       await models.select({ ...stealth, thinkingLevel: 'high' });
       assert.equal(models.ready, true, 'The failure is scoped to its provider');
       await models.select({ provider: 'openai', model: model.id, thinkingLevel: 'high' });
@@ -91,6 +104,7 @@ test('OAuth refresh rejection changes readiness without deleting credentials, an
       await models.refresh();
       assert.equal(models.ready, true);
       assert.equal((await models.settings()).providers.find((p) => p.id === 'openai')?.issue, undefined);
+      assert.equal((await models.settings()).issue, null);
       assert.equal((await credentials.read('openai'))?.type, 'oauth');
     } finally { models.close(); db.close(); }
   }
@@ -122,7 +136,7 @@ test('an older successful request cannot clear a known OAuth refresh rejection',
     held.push({ type: 'done', reason: 'stop', message: { ...metadata, stopReason: 'stop', content: [{ type: 'text', text: 'Earlier response.' }] } });
     assert.equal((await old.result()).stopReason, 'stop');
     assert.equal((await models.settings()).ready, false, 'Success with an earlier access token does not repair its rejected refresh token');
-    assert.equal(models.issue, 'ChatGPT 登录已失效，请在应用设置中重新登录。');
+    assert.deepEqual(models.issue, { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } });
   } finally { models.close(); db.close(); }
 });
 

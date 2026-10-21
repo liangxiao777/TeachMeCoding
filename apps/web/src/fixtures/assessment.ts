@@ -1,3 +1,4 @@
+import i18n from '@/i18n'
 import { runFile } from './code-runner'
 import type { AssessmentRecord, Controls, Space, Unit } from './types'
 
@@ -12,12 +13,12 @@ export function getAssessment(unit: Unit, language: 'rust' | 'python'): Assessme
     return {
       abilities: ['解释所有权转移的时机', '选择合适的方式保留变量可用性', '读懂并修复 E0382'],
       q1: {
-        title: '解释题',
+        title: i18n.t('preview:assessment.explanation'),
         prompt: '阅读下面的代码，用自己的话解释第 4 行为什么无法编译；如果希望 `a` 之后依然可用，你会怎么改？',
         code: `let a = String::from("rust");\nlet b = a;\nprintln!("{}", b);\nprintln!("{}", a);`,
       },
       q2: {
-        title: '调试题',
+        title: i18n.t('preview:assessment.debugging'),
         prompt: '这段代码无法通过编译。请修复它，使程序输出 `ferris -> FERRIS`，运行验证后提交。',
         file: 'assessment_fix.rs',
         expected: 'ferris -> FERRIS',
@@ -35,9 +36,9 @@ fn main() {
   }
   return {
     abilities: unit.goals,
-    q1: { title: '解释题', prompt: `用你自己的话说明「${unit.title}」中最核心的概念，并举一个例子。` },
+    q1: { title: i18n.t('preview:assessment.explanation'), prompt: `用你自己的话说明「${unit.title}」中最核心的概念，并举一个例子。` },
     q2: {
-      title: '编程题',
+      title: i18n.t('preview:assessment.coding'),
       prompt: '修改下面的代码，让它输出与本单元主题相关的一句话，运行验证后提交。',
       file: language === 'rust' ? 'assessment.rs' : 'assessment.py',
       starter:

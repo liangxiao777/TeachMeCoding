@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { codePlanSchema, type CodeExecution } from './execution.js';
 import { intakeMetadataSchema, type IntakeMetadata, type IntakeReadiness, type QuestionRound, type ResearchDossier } from './intake.js';
+import type { BusinessErrorDetail, BusinessErrorResponse } from './errors.js';
 
 export const idSchema = z.string().uuid();
 const text = z.string().max(100_000);
@@ -9,7 +10,12 @@ export const provenanceSchema = z.object({ kind: z.enum(['pasted', 'lesson', 'ed
   objectId: z.string().max(1000).optional(), version: z.string().max(200).optional(), capturedAt: z.number().optional(),
   range: z.string().max(200).optional(),
 }).strict();
-export const quoteSchema = z.object({ source: z.enum(['lesson', 'code', 'terminal', 'advice']), label: title, text, provenance: provenanceSchema.optional() }).strict();
+const quoteCaptionSchema = z.union([
+  z.object({ kind: z.enum(['terminal', 'advice']) }).strict(),
+  z.object({ kind: z.enum(['lesson', 'practice', 'assessment', 'file', 'selection']), name: z.string().max(1000) }).strict(),
+]);
+export const quoteSchema = z.object({ source: z.enum(['lesson', 'code', 'terminal', 'advice']), label: title, text,
+  caption: quoteCaptionSchema.optional(), provenance: provenanceSchema.optional() }).strict();
 export const requirementSchema = z.object({ rows: z.array(z.object({
   question: z.string().trim().min(1).max(10_000), answer: text,
 }).strict()).max(100) }).strict();
@@ -18,7 +24,8 @@ export const createSpaceSchema = z.object({ name: title, goal: text.trim().min(1
 export const renameSpaceSchema = z.object({ name: title, previousName: z.string().min(1).max(200) }).strict();
 export const saveRequirementSchema = z.object({ revision: z.number().int().nonnegative(), value: requirementSchema, confirmed: z.boolean(),
   intake: intakeMetadataSchema.nullable().optional() }).strict();
-export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title }).strict()
+// An omitted title is host-owned. Never persist a translated default as an authored name.
+export const createSessionSchema = z.object({ scope: z.enum(['intake', 'route', 'unit']), unitId: idSchema.nullable(), title: title.optional() }).strict()
   .refine((v) => (v.scope === 'unit') === (v.unitId !== null), 'Unit sessions require a unit; other scopes forbid it');
 export const sessionSettingsSchema = z.object({ revision: z.number().int().nonnegative(), yolo: z.boolean() }).strict();
 export const sessionDraftSchema = z.object({ revision: z.number().int().nonnegative(), text, quote: quoteSchema.nullable(), routeSuggestion: text }).strict();
@@ -77,7 +84,7 @@ export interface AgentContext {
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } | null;
 }
 export interface QueuedPrompt { id: string; text: string; quote: Quote | null; createdAt: number }
-export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: string;
+export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: BusinessErrorDetail; notice?: BusinessErrorResponse;
   /** Follow-up replies share their original run; only its first message owns the pending queue. */
   runId?: string; queuedPrompts?: QueuedPrompt[] }
 export interface SessionDetail extends SessionSummary { settings: z.infer<typeof sessionSettingsSchema>; draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }
@@ -97,11 +104,12 @@ export interface LessonProposal {
   references: { unitId: string; revision: number }[];
 }
 export interface WorkStatus { id: string; unitId: string | null; sessionId: string | null; kind: string; state: 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted' }
-export interface AgentRun extends WorkStatus { error: string | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
-export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: string | null }
+export interface AgentRun extends WorkStatus { error: BusinessErrorDetail | null; cancelled: boolean; createdAt: number; resultId?: string | null; context?: AgentContext }
+export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error: BusinessErrorDetail | null }
   | { type: 'prompt_queued'; prompt: QueuedPrompt }
   | { type: 'prompt_removed'; promptId: string }
   | { type: 'prompt_started'; prompt: QueuedPrompt; messageId: string }
+  | { type: 'notice'; messageId: string; notice: BusinessErrorResponse }
   | { type: 'context'; context: AgentContext }
   | { type: 'text'; delta: string; partId?: string }
   | { type: 'reasoning'; partId: string; phase: 'start' | 'delta' | 'end'; delta?: string }
@@ -109,7 +117,7 @@ export type AgentEventData = { type: 'state'; state: WorkStatus['state']; error:
 export interface RunEvent { runId: string; seq: number; data: AgentEventData }
 export interface RunEvents { run: AgentRun; events: RunEvent[] }
 export interface RunSubmission { run: AgentRun; session: SessionDetail }
-export interface ProposalRejection { workspace: Workspace; session: SessionDetail; run: AgentRun | null; followupError: string | null }
+export interface ProposalRejection { workspace: Workspace; session: SessionDetail; run: AgentRun | null; followupError: BusinessErrorDetail | null }
 export interface LessonProposalApplication { workspace: Workspace; unit: UnitDetail }
 
 export function applyPromptQueue(prompts: QueuedPrompt[], data: AgentEventData): QueuedPrompt[] {
@@ -122,7 +130,7 @@ export function applyPromptQueue(prompts: QueuedPrompt[], data: AgentEventData):
 // before applying events; hydration starts empty, never from Message.text.
 export function applyAgentEvent(parts: readonly AgentDisplayPart[], event: RunEvent): AgentDisplayPart[] {
   const { data, runId, seq } = event;
-  if (data.type === 'context' || data.type === 'prompt_queued' || data.type === 'prompt_removed' || data.type === 'prompt_started') return [...parts];
+  if (data.type === 'context' || data.type === 'notice' || data.type === 'prompt_queued' || data.type === 'prompt_removed' || data.type === 'prompt_started') return [...parts];
   if (data.type === 'state') {
     return parts.map((part) => ['succeeded', 'failed', 'interrupted'].includes(data.state)
       && ((part.type === 'reasoning' && part.status === 'streaming') || (part.type === 'tool' && ['generating', 'ready', 'running'].includes(part.status)))

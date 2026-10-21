@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { defaultComponents, type Components } from 'streamdown'
 import { SquareTerminal } from 'lucide-react'
 import type { AgentDisplayPart } from '@teach-me-coding/contracts'
@@ -15,6 +16,7 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
   streaming?: boolean
   onCode?: (code: string, language: string) => void
 }) {
+  const { t } = useTranslation('workbench')
   const components = useMemo<Components | undefined>(() => onCode ? {
     pre: (props) => {
       const code = props.node?.children.find((child) => child.type === 'element' && child.tagName === 'code')
@@ -25,12 +27,12 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
         <defaultComponents.pre {...props} />
         {!streaming && value && <div className="flex justify-end py-1.5">
           <Button size="xs" onClick={() => onCode(value, language)}>
-            <SquareTerminal data-icon="inline-start" />带入 IDE
+            <SquareTerminal data-icon="inline-start" />{t('controls.bringToIde')}
           </Button>
         </div>}
       </div>
     },
-  } : undefined, [onCode, streaming])
+  } : undefined, [onCode, streaming, t])
   const content = parts?.length ? parts : text ? [{ type: 'text' as const, id: 'legacy', text }] : []
   const calls = content.filter((part) => part.type === 'tool')
 
@@ -47,17 +49,17 @@ export function RunContent({ parts, text = '', streaming = false, onCode }: {
         return (
           <Reasoning key={part.id} defaultOpen={false} isStreaming={thinking} className="mb-0" data-testid="reasoning">
             <ReasoningTrigger getThinkingMessage={() => thinking
-              ? <Shimmer>正在思考…</Shimmer>
-              : <span>{part.status === 'interrupted' ? '思考已中断' : '思考过程'}</span>} />
+              ? <Shimmer>{t('run.thinking')}</Shimmer>
+              : <span>{part.status === 'interrupted' ? t('run.thinkingInterrupted') : t('run.reasoning')}</span>} />
             <ReasoningContent className="mt-3 max-h-72 overflow-y-auto overscroll-contain border-l pl-3">
-              {part.text || (part.status === 'streaming' ? '等待模型返回推理内容…' : '此阶段没有公开推理正文。')}
+              {part.text || (part.status === 'streaming' ? t('run.waitingReasoning') : t('run.noReasoning'))}
             </ReasoningContent>
           </Reasoning>
         )
       })}
       {streaming && !content.some((part, index) => part.type === 'reasoning' && part.status === 'streaming' && index === content.length - 1
         || part.type === 'tool' && ['generating', 'ready', 'running'].includes(part.status)) && (
-        <div role="status" className="text-sm text-muted-foreground"><Shimmer>{text ? '正在回复…' : '等待模型响应…'}</Shimmer></div>
+        <div role="status" className="text-sm text-muted-foreground"><Shimmer>{text ? t('run.replying') : t('run.waiting')}</Shimmer></div>
       )}
     </div>
   )

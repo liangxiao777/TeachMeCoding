@@ -2,6 +2,8 @@
 
 import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { formatNotice } from '@/i18n/notice'
 import { usePanelRef } from 'react-resizable-panels'
 import { CodeEditor, type EditorPosition } from '@/components/code-editor'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
@@ -21,6 +23,7 @@ import { LocalTerminalView } from './local-terminal'
 export { CodeEditor } from '@/components/code-editor'
 
 export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text: string) => void }) {
+  const { t } = useTranslation('workbench')
   const groups: [TermLine, ...TermLine[]][] = []
   for (const l of lines) {
     const last = groups[groups.length - 1]
@@ -50,7 +53,7 @@ export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text:
                     {l.text}
                   </>
                 ) : (
-                  l.text
+                  l.notice ? formatNotice(l.notice) : l.text
                 )}
               </div>
             ))}
@@ -59,10 +62,10 @@ export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text:
                 variant="secondary"
                 size="xs"
                 className="my-1.5 w-fit font-sans"
-                onClick={() => onAsk(errs.map((l) => l.text).join('\n'))}
+                onClick={() => onAsk(errs.map((l) => l.notice ? formatNotice(l.notice) : l.text).join('\n'))}
               >
                 <MessageSquareQuote data-icon="inline-start" />
-                把这段报错发给 Agent
+                {t('ide.askError')}
               </Button>
             )}
           </div>
@@ -73,12 +76,13 @@ export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text:
 }
 
 function EnvChip() {
+  const { t } = useTranslation('workbench')
   const space = useSpace()
   const { connectEnv, capabilities } = useApp()
   if (!capabilities.terminal)
     return (
       <Badge variant="outline" role="status" className="gap-1.5 font-normal text-muted-foreground">
-        终端尚未接入
+        {t('ide.terminalUnavailable')}
       </Badge>
     )
   if (space.env === 'connected')
@@ -92,18 +96,19 @@ function EnvChip() {
     return (
       <Badge variant="outline" role="status" className="gap-1.5 font-normal text-muted-foreground">
         <Spinner />
-        正在连接环境…
+        {t('ide.connecting')}
       </Badge>
     )
   return (
     <Button variant="destructive" size="xs" onClick={connectEnv}>
       <PlugZap data-icon="inline-start" />
-      连接已断开 · 重新连接
+      {t('ide.reconnect')}
     </Button>
   )
 }
 
 export function IdePanel() {
+  const { t } = useTranslation(['workbench', 'common'])
   const space = useSpace()
   const {
     openFile,
@@ -154,19 +159,21 @@ export function IdePanel() {
   const askCode = () => {
     if (!file) return
     const text = selected.trim() || file.content
-    setQuote({ source: 'code', label: `${entryPath(space, file.id)}${selected.trim() ? ' · 选中代码' : ''}`, text })
+    const name = entryPath(space, file.id)
+    setQuote({ source: 'code', label: `${name}${selected.trim() ? t('common:quotes.selectionSuffix') : ''}`,
+      caption: { kind: selected.trim() ? 'selection' : 'file', name }, text })
   }
 
   return (
     <section
-      aria-label="IDE 与终端"
+      aria-label={t('ide.title')}
       className={cn(
         'dark @container flex h-full min-h-0 flex-col overflow-hidden bg-ide text-ide-foreground',
         !space.ideFullscreen && 'border-t pt-2',
       )}
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="打开的文件">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label={t('ide.openFiles')}>
           {space.openFileIds
             .flatMap((id) => {
               const open = space.files.find((f) => f.id === id)
@@ -200,7 +207,7 @@ export function IdePanel() {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={`关闭 ${entryPath(space, f.id)}`}
+                    aria-label={t('ide.closeFile', { path: entryPath(space, f.id) })}
                     onClick={() => closeFile(f.id)}
                     className={cn(!active && 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')}
                   >
@@ -212,8 +219,8 @@ export function IdePanel() {
         </div>
         {!space.ideFullscreen && <EnvChip />}
         {persistence && file && (
-          <span role="status" title={persistence.fileSaveError ?? undefined} className="shrink-0 text-[10px] text-muted-foreground">
-            {persistence.fileSaveError ? '保存失败' : persistence.fileDirty ? '正在保存…' : '已保存'}
+          <span role="status" title={formatNotice(persistence.fileSaveError) || undefined} className="shrink-0 text-[10px] text-muted-foreground">
+            {persistence.fileSaveError ? t('ide.saveFailed') : persistence.fileDirty ? t('ide.saving') : t('ide.saved')}
           </span>
         )}
         <Separator orientation="vertical" className="h-5" />
@@ -222,19 +229,19 @@ export function IdePanel() {
             variant="ghost"
             size="sm"
             onClick={askCode}
-            aria-label={selected.trim() ? '询问选中代码' : '询问这个文件'}
-            title={selected.trim() ? '询问选中代码' : '询问这个文件'}
+            aria-label={selected.trim() ? t('ide.askSelection') : t('ide.askFile')}
+            title={selected.trim() ? t('ide.askSelection') : t('ide.askFile')}
           >
             <MessageSquareQuote data-icon="inline-start" />
-            <span className="hidden @min-[900px]:inline">{selected.trim() ? '询问选中代码' : '询问这个文件'}</span>
+            <span className="hidden @min-[900px]:inline">{selected.trim() ? t('ide.askSelection') : t('ide.askFile')}</span>
           </Button>
         )}
         {!space.ideFullscreen && (
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="全屏 IDE"
-            title="全屏 IDE"
+            aria-label={t('ide.fullscreen')}
+            title={t('ide.fullscreen')}
             onClick={() => setIdeFullscreen(true)}
           >
             <Maximize2 />
@@ -243,11 +250,11 @@ export function IdePanel() {
         {!space.ideFullscreen && (
           <Tooltip>
             <TooltipTrigger
-              render={<Button variant="ghost" size="icon-sm" onClick={() => toggleIde(false)} aria-label="收起 IDE" />}
+              render={<Button variant="ghost" size="icon-sm" onClick={() => toggleIde(false)} aria-label={t('ide.collapse')} />}
             >
               <X />
             </TooltipTrigger>
-            <TooltipContent>收起 IDE</TooltipContent>
+            <TooltipContent>{t('ide.collapse')}</TooltipContent>
           </Tooltip>
         )}
       </div>
@@ -269,7 +276,7 @@ export function IdePanel() {
             <CodeEditor
               key={file.id}
               className="flex-1"
-              label={`编辑 ${file.name}`}
+              label={t('ide.editFile', { name: file.name })}
               filename={file.name}
               value={file.content}
               disabled={persistence?.fileRenaming}
@@ -283,8 +290,8 @@ export function IdePanel() {
                 <EmptyMedia variant="icon">
                   <FileCode2 />
                 </EmptyMedia>
-                <EmptyTitle>还没有打开的练习文件</EmptyTitle>
-                <EmptyDescription>新建一个文件，边学边写</EmptyDescription>
+                <EmptyTitle>{t('ide.empty')}</EmptyTitle>
+                <EmptyDescription>{t('ide.emptyHint')}</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 <Button
@@ -294,13 +301,13 @@ export function IdePanel() {
                   onClick={() => createFile(space.kind === 'pytorch' ? 'scratch.py' : 'scratch.rs')}
                 >
                   <Plus data-icon="inline-start" />
-                  新建练习文件
+                  {t('ide.newFile')}
                 </Button>
               </EmptyContent>
             </Empty>
           )}
         </ResizablePanel>
-        <ResizableHandle aria-label="调整终端大小" />
+        <ResizableHandle aria-label={t('ide.resizeTerminal')} />
         <ResizablePanel
           id="terminal"
           panelRef={terminal}
@@ -313,25 +320,26 @@ export function IdePanel() {
           <div className="flex h-9 shrink-0 items-center justify-between border-b pr-1.5 pl-3">
             <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <TerminalSquare className="size-3.5" aria-hidden />
-              终端
-              <span className="font-normal opacity-60">{!capabilities.terminal ? '· 尚未接入' : persistence ? '' : '· 原型模拟'}</span>
+              {t('ide.terminal')}
+              <span className="font-normal opacity-60">{!capabilities.terminal ? t('ide.notConnected') : persistence ? '' : t('ide.prototype')}</span>
             </span>
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="引用终端输出"
-                title="引用选中内容或最近一次输出"
+                aria-label={t('ide.quoteTerminal')}
+                title={t('ide.quoteHint')}
                 disabled={!space.terminal.length}
                 onClick={() =>
                   setQuote({
                     source: 'terminal',
-                    label: '终端输出',
+                    label: t('ide.terminalOutput'),
+                    caption: { kind: 'terminal' },
                     text:
                       terminalSelection ||
                       space.terminal
                         .filter((l) => l.runId === space.terminal.at(-1)?.runId)
-                        .map((l) => l.text)
+                        .map((l) => l.notice ? formatNotice(l.notice) : l.text)
                         .join('\n'),
                   })
                 }
@@ -346,25 +354,25 @@ export function IdePanel() {
                   terminalCommand('clear')
                   setTerminalSelection('')
                 }}
-                aria-label="清空终端"
+                aria-label={t('ide.clearTerminal')}
               >
                 <Trash2 />
               </Button>
             </div>
           </div>
           <div
-            aria-label="终端内容"
+            aria-label={t('ide.terminalContent')}
             className="min-h-0 flex-1 cursor-text overflow-y-auto px-3 py-2 font-mono text-[13px] leading-5"
             onMouseUp={() => setTerminalSelection(window.getSelection()?.toString() ?? '')}
             onClick={() => {
               if (!window.getSelection()?.toString()) termInput.current?.focus()
             }}
           >
-            <div role="log" aria-label="终端输出">
+            <div role="log" aria-label={t('ide.terminalOutput')}>
               <TermOutput lines={space.terminal} />
             </div>
             {!capabilities.terminal && (
-              <p role="status" className="mb-3 text-muted-foreground">终端与代码运行尚未接入，不会连接模拟环境或执行命令。</p>
+              <p role="status" className="mb-3 text-muted-foreground">{t('ide.unavailableHint')}</p>
             )}
             {!space.running && (
               <form
@@ -388,7 +396,7 @@ export function IdePanel() {
                 </span>
                 <input
                   ref={termInput}
-                  aria-label="终端命令"
+                  aria-label={t('ide.terminalCommand')}
                   disabled={!capabilities.terminal}
                   autoComplete="off"
                   autoCapitalize="off"
@@ -435,8 +443,8 @@ export function IdePanel() {
         <footer className="flex h-8 shrink-0 items-center justify-between border-t bg-sidebar px-3 text-xs text-muted-foreground">
           <EnvChip />
           <span>
-            {file?.language === 'text' ? 'Plain Text' : file?.language === 'python' ? 'Python' : 'Rust'} · UTF-8{' '}
-            <span className="ml-4 opacity-60">Esc 返回学习</span>
+            {file?.language === 'text' ? t('ide.plainText') : file?.language === 'python' ? 'Python' : 'Rust'} · UTF-8{' '}
+            <span className="ml-4 opacity-60">{t('ide.escape')}</span>
           </span>
         </footer>
       )}

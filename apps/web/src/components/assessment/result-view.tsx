@@ -1,6 +1,7 @@
 'use client'
 
-import { executionFeedback } from '@teach-me-coding/contracts'
+import { useTranslation } from 'react-i18next'
+import { localizedAssessmentSummary, localizedExecutionFeedback } from '@/i18n/execution'
 import {
   ArrowRight,
   BookOpen,
@@ -38,6 +39,7 @@ function Section({
   tone: 'primary' | 'accent' | 'muted'
   onAsk?: (item: string) => void
 }) {
+  const { t } = useTranslation('assessment')
   if (!items.length) return null
   return (
     <Card size="sm">
@@ -65,7 +67,7 @@ function Section({
                 {onAsk && (
                   <Button variant="ghost" size="xs" className="shrink-0 text-primary" onClick={() => onAsk(i)}>
                     <MessageSquareQuote data-icon="inline-start" />
-                    就此提问
+                    {t('controls.ask')}
                   </Button>
                 )}
               </div>
@@ -78,6 +80,7 @@ function Section({
 }
 
 export function ResultView() {
+  const { t } = useTranslation(['assessment', 'common'])
   const space = useSpace()
   const { goNextUnit, backToStudy, startAssessment, setQuote, setView } = useApp()
   const record = space.records.find((r) => r.id === space.viewingRecordId)
@@ -86,11 +89,11 @@ export function ResultView() {
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
         <Card>
           <CardHeader>
-            <CardTitle>测评记录暂不可用</CardTitle>
-            <CardDescription>当前没有可读取的测评结果。</CardDescription>
+            <CardTitle>{t('result.unavailable')}</CardTitle>
+            <CardDescription>{t('result.unavailableHint')}</CardDescription>
           </CardHeader>
         </Card>
-        <Button size="lg" variant="ghost" onClick={() => setView('route')}>查看学习路线</Button>
+        <Button size="lg" variant="ghost" onClick={() => setView('route')}>{t('controls.viewPath')}</Button>
       </div>
     </div>
   )
@@ -102,13 +105,13 @@ export function ResultView() {
   const deferredPass = historicalPass && unit?.status === 'learning'
   const next = nextUnit(space, record.unitId)
   const isLatest = [...space.records].reverse().find((r) => r.unitId === record.unitId)?.id === record.id
-  const ask = (text: string) => setQuote({ source: 'advice', label: `${record.unitTitle} · 测评`, text })
-  const execution = record.execution && executionFeedback(record.execution)
-  const nextStep = historicalPass ? deferredPass ? '旧版通过记录仍保留，但不是新版的有效测评证据。可以继续学习路线，也可自愿测评新版。' : '旧版通过记录仍保留，但不是当前版本的有效证据；请结合新版测评反馈决定下一步。'
-    : expired ? '回到当前单元，核对最新题目后重新作答。'
-    : unverified ? execution?.nextStep ?? '当前题目没有可用的代码运行结果。重新出题后运行代码，再提交测评。'
-    : passed ? next ? '可以继续下一单元，也可以回看本次作答。' : '可以回看本次作答，或返回学习路线。'
-    : execution?.nextStep ?? '根据下面的建议修改回答，再重新测评。'
+  const ask = (text: string) => setQuote({ source: 'advice', label: t('common:chat.assessmentQuote', { title: record.unitTitle }), caption: { kind: 'assessment', name: record.unitTitle }, text })
+  const execution = record.execution && localizedExecutionFeedback(record.execution)
+  const nextStep = historicalPass ? deferredPass ? t('result.historicalDeferredNext') : t('result.historicalNext')
+    : expired ? t('result.expiredNext')
+    : unverified ? execution?.nextStep ?? t('result.unverifiedNext')
+    : passed ? next ? t('result.passedNext') : t('result.completedNext')
+    : execution?.nextStep ?? t('result.needsWorkNext')
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -118,9 +121,9 @@ export function ResultView() {
           <CardHeader className="gap-4">
             <div className="flex items-center justify-between gap-4">
               <p className="font-mono text-xs text-muted-foreground">
-                {record.unitTitle} · 第 {record.attempt} 次测评 · {relativeTime(record.createdAt)}
+                {t('result.attempt', { title: record.unitTitle, number: record.attempt, time: relativeTime(record.createdAt) })}
               </p>
-              {!isLatest && <Badge variant="outline">历史记录</Badge>}
+              {!isLatest && <Badge variant="outline">{t('result.history')}</Badge>}
             </div>
             <div className="flex items-center gap-4">
               <div
@@ -133,81 +136,81 @@ export function ResultView() {
               </div>
               <div className="flex flex-col gap-1">
                 <Badge variant={passed ? 'default' : 'secondary'} className="w-fit">
-                  {historicalPass ? '旧版已通过' : expired ? '历史结论 · 来源已变化' : unverified ? '暂无法判断' : passed ? '通过' : '需要修改'}
+                  {historicalPass ? t('result.historicalPass') : expired ? t('result.expired') : unverified ? t('result.unverified') : passed ? t('result.passed') : t('result.needsWork')}
                 </Badge>
                 <CardTitle className="text-2xl tracking-tight">
-                  {historicalPass ? `旧版已通过 / ${deferredPass ? '新版尚未测评' : '请查看新版测评状态'}` : expired ? '此结果基于旧版本，请重新测评' : unverified ? '本次代码检查未完成' : passed ? '本次测评通过' : '这次还有需要修改的地方'}
+                  {historicalPass ? t(deferredPass ? 'result.historicalUnassessedTitle' : 'result.historicalTitle') : expired ? t('result.expiredTitle') : unverified ? t('result.unverifiedTitle') : passed ? t('result.passedTitle') : t('result.needsWorkTitle')}
                 </CardTitle>
               </div>
             </div>
-            <CardDescription className="text-base leading-relaxed text-foreground"><InlineText text={record.summary} /></CardDescription>
-            {unverified && <p className="text-sm text-muted-foreground">运行没有完成，不代表你没有学会；本次不会记为通过或不合格。</p>}
-            <p className="text-sm leading-relaxed"><span className="font-medium">接下来：</span>{nextStep}</p>
+            <CardDescription className="text-base leading-relaxed text-foreground"><InlineText text={localizedAssessmentSummary(record)} /></CardDescription>
+            {unverified && <p className="text-sm text-muted-foreground">{t('result.unverifiedHint')}</p>}
+            <p className="text-sm leading-relaxed"><span className="font-medium">{t('result.next')}</span>{nextStep}</p>
           </CardHeader>
         </Card>
 
         <div className="flex flex-wrap items-center gap-3">
           {passed && (!expired && isLatest || deferredPass) && next ? (
             <Button size="lg" onClick={goNextUnit}>
-              进入下一单元：{next.title}
+              {t('result.nextUnit', { title: next.title })}
               <ArrowRight data-icon="inline-end" />
             </Button>
           ) : (!passed || expired && !historicalPass) && isLatest ? (
             <>
               <Button size="lg" onClick={startAssessment}>
                 <RotateCcw data-icon="inline-start" />
-                重新测评
+                {t('result.retry')}
               </Button>
               <Button size="lg" variant="outline" onClick={backToStudy}>
                 <BookOpen data-icon="inline-start" />
-                回到「{unit?.title}」继续学习
+                {t('result.backToStudy', { title: unit?.title ?? '' })}
               </Button>
             </>
           ) : null}
-          {historicalPass && <Button size="lg" variant="outline" onClick={startAssessment}>自愿测评新版</Button>}
+          {historicalPass && <Button size="lg" variant="outline" onClick={startAssessment}>{t('result.assessNewVersion')}</Button>}
           <Button size="lg" variant="ghost" onClick={() => (isLatest && passed && !next ? setView('route') : backToStudy())}>
-            {isLatest && passed && !next ? '查看学习路线' : '返回单元'}
+            {isLatest && passed && !next ? t('controls.viewPath') : t('result.backToUnit')}
           </Button>
         </div>
 
         {passed && !expired && space.completed && !next && isLatest && (
           <Alert>
             <Trophy aria-hidden />
-            <AlertTitle>学习路线已完成</AlertTitle>
-            <AlertDescription>这是路线上的最后一个单元，你已完成整条学习路线。</AlertDescription>
+            <AlertTitle>{t('result.pathCompleted')}</AlertTitle>
+            <AlertDescription>{t('result.pathCompletedHint')}</AlertDescription>
           </Alert>
         )}
 
-        <Section icon={Quote} title={unverified ? '作答反馈（仅供修改参考）' : '为什么是这个结果'} items={record.evidence} tone="muted" />
-        <Section icon={CircleAlert} title="下一步怎么改" items={record.concerns} tone="accent" onAsk={ask} />
+        <Section icon={Quote} title={unverified ? t('result.unverifiedEvidence') : t('result.evidence')} items={record.evidence} tone="muted" />
+        <Section icon={CircleAlert} title={t('result.concerns')} items={record.concerns} tone="accent" onAsk={ask} />
         {(record.lessonRevision !== undefined || record.specRevision !== undefined) && <p className="text-xs leading-relaxed text-muted-foreground" data-testid="assessment-record-source">
-          本次记录来源：{record.lessonRevision !== undefined ? `课件第 ${record.lessonRevision} 版` : '课件版本未记录'}{record.specRevision !== undefined ? ` · 测评题第 ${record.specRevision} 版` : ''}。以下作答及代码运行结果仅对应本次记录，不是之后的课件或编辑器草稿。
+          {t('result.source', { lesson: record.lessonRevision !== undefined ? t('result.lessonRevision', { revision: record.lessonRevision }) : t('result.unknownLessonRevision'), spec: record.specRevision !== undefined ? t('result.specRevision', { revision: record.specRevision }) : '' })}
         </p>}
-        {record.execution && <ExecutionResult execution={record.execution} showSummary={record.summary !== execution?.summary} />}
+        {record.execution && <ExecutionResult execution={record.execution} showSummary={record.result === 'pass' || record.result === 'needs_work' && !!record.summary} />}
         {(record.mastered.length > 0 || record.toVerify.length > 0) && <Collapsible className="result-disclosure rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">
-            补充反馈
+            {t('result.additional')}
             <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden />
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="flex flex-col gap-4 border-t p-4">
-              <Section icon={CheckCircle2} title="本次做对的地方" items={record.mastered} tone="primary" />
-              <Section icon={HelpCircle} title="本次未覆盖" items={record.toVerify} tone="muted" onAsk={ask} />
+              <Section icon={CheckCircle2} title={t('result.mastered')} items={record.mastered} tone="primary" />
+              <Section icon={HelpCircle} title={t('result.notCovered')} items={record.toVerify} tone="muted" onAsk={ask} />
             </div>
           </CollapsibleContent>
         </Collapsible>}
 
         <Collapsible className="result-disclosure rounded-xl border bg-card">
           <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-sm font-medium">
-            查看我的回答
+            {t('result.viewAnswers')}
             <ChevronDown className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" aria-hidden />
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="flex flex-col gap-3 border-t px-4 py-4">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">解释题</p>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q1 || '（未作答）'}</p>
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{record.q2Kind === 'reasoning' ? '分析题' : '代码题'}</p>
-              {record.q2Kind === 'reasoning' ? <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q2 || '（未作答）'}</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('result.explanation')}</p>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q1 || t('result.unanswered')}</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t(record.q2Kind === 'reasoning' ? 'result.analysis' : 'result.code')}</p>
+              {record.q2Kind === 'reasoning' ? <p className="whitespace-pre-wrap text-sm leading-relaxed">{record.answers.q2 || t('result.unanswered')}</p>
                 : <pre className="overflow-x-auto rounded-lg bg-ide p-3 font-mono text-xs leading-relaxed text-ide-foreground">{record.answers.q2}</pre>}
             </div>
           </CollapsibleContent>

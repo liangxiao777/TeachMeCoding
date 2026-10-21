@@ -29,7 +29,7 @@ export class Terminals {
   }
   private broadcast(space: string, event: TerminalEvent) { for (const client of this.clients.get(space) ?? []) this.send(client, event); }
   private start(space: string): Session {
-    if (this.closing) throw new Error('服务正在关闭。');
+    if (this.closing) throw new Error('SERVICE_CLOSING');
     // Do not source user shell startup files, which can reintroduce credentials.
     const pty = spawn('/bin/bash', ['--noprofile', '--norc', '-i'], {
       name: 'xterm-256color', cwd: this.directory(space), cols: 80, rows: 24,
@@ -63,7 +63,7 @@ export class Terminals {
     socket.on('error', () => socket.terminate());
     socket.on('close', () => { clients.delete(socket); }); // Disconnect is not process termination.
     try { this.snapshot(socket, this.sessions.get(space) ?? this.start(space)); }
-    catch { this.send(socket, { type: 'error', message: '无法启动本机终端，请检查项目目录和 /bin/bash。' }); socket.close(1011); return; }
+    catch { this.send(socket, { type: 'error', error: { code: 'TERMINAL_START_FAILED' } }); socket.close(1011); return; }
     socket.on('message', (raw, binary) => {
       try {
         if (binary) throw new Error();
@@ -79,7 +79,7 @@ export class Terminals {
           if (message.type === 'input') session.pty.write(message.data);
           else session.pty.resize(message.cols, message.rows);
         }
-      } catch { this.send(socket, { type: 'error', message: '终端请求无效或已过期，请重新连接。' }); }
+      } catch { this.send(socket, { type: 'error', error: { code: 'TERMINAL_REQUEST_OUTDATED' } }); }
     });
   }
   private stop(session: Session) {

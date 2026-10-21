@@ -33,15 +33,15 @@ export function openDataDirectory(directory: string) {
           WHERE json_extract(value,'$.state') IN ('pending','running')`).run();
         db.prepare(`INSERT INTO task_events(space_id,run_id,seq,value)
           SELECT a.space_id,a.id,COALESCE((SELECT MAX(seq) FROM task_events e WHERE e.space_id=a.space_id AND e.run_id=a.id),0)+1,
-            '{"type":"state","state":"interrupted","error":"服务重启，任务已中断；未自动重放。"}'
+            '{"type":"state","state":"interrupted","error":{"code":"RUN_RESTARTED"}}'
           FROM task_runs a JOIN tasks t ON t.space_id=a.space_id AND t.id=a.id WHERE t.state IN ('pending','running')`).run();
-        db.prepare(`UPDATE task_runs SET error='服务重启，任务已中断；未自动重放。'
+        db.prepare(`UPDATE task_runs SET error='{"code":"RUN_RESTARTED"}'
           WHERE (space_id,id) IN (SELECT space_id,id FROM tasks WHERE state IN ('pending','running'))`).run();
         db.prepare(`INSERT INTO agent_events(space_id,run_id,seq,value)
           SELECT a.space_id,a.id,COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=a.space_id AND e.run_id=a.id),0)+1,
-            '{"type":"state","state":"interrupted","error":"服务重启，运行已中断；未自动重放。"}'
+            '{"type":"state","state":"interrupted","error":{"code":"RUN_RESTARTED"}}'
           FROM agent_runs a JOIN runs r ON r.space_id=a.space_id AND r.id=a.id WHERE r.state IN ('pending','running')`).run();
-        db.prepare(`UPDATE agent_runs SET error='服务重启，运行已中断；未自动重放。'
+        db.prepare(`UPDATE agent_runs SET error='{"code":"RUN_RESTARTED"}'
           WHERE (space_id,id) IN (SELECT space_id,id FROM runs WHERE state IN ('pending','running'))`).run();
         db.prepare("UPDATE runs SET state='interrupted' WHERE state IN ('pending','running')").run();
         db.prepare("UPDATE tasks SET state='interrupted' WHERE state IN ('pending','running')").run();
