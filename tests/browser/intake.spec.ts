@@ -4,7 +4,7 @@ import type { SessionDetail, Workspace } from '../../packages/contracts/src/work
 import type { ResearchDossier } from '../../packages/contracts/src/intake';
 
 test.use({ viewport: { width: 1440, height: 1000 }, colorScheme: 'light', contextOptions: { reducedMotion: 'reduce' } });
-const confirm = (page: Page) => page.getByRole('button', { name: '确认，开始规划路线', exact: true });
+const confirm = (page: Page) => page.getByRole('button', { name: '确认并规划路线', exact: true });
 const composer = (page: Page) => page.getByLabel('回复 Agent', { exact: true });
 const customAnswer = (page: Page) => page.getByLabel('填写自定义回答', { exact: true });
 const shot = async (page: Page, info: TestInfo, state: string) => {

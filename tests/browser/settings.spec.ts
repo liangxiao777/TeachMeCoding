@@ -676,8 +676,8 @@ test('global theme controls work throughout learning without opening settings', 
   await composer.fill('每周大概 5 小时，希望两个月内完成');
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
   await composer.press('Enter');
-  await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await expect(page.getByRole('button', { name: '确认并规划路线', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await toggle('planning');
   await expect(page.getByRole('heading', { name: 'Rust 入门', exact: true })).toBeVisible();
   await toggle('route');

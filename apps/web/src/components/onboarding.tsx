@@ -71,9 +71,7 @@ function RequirementCard() {
       <Card className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
         <CardHeader>
           <CardTitle>{t('requirement.title')}</CardTitle>
-          <CardDescription className="leading-relaxed">
-            {capabilities.agent ? t('requirement.introduction') : t('requirement.unavailableIntroduction')}
-          </CardDescription>
+          {!capabilities.agent && <CardDescription>{t('requirement.manualHint')}</CardDescription>}
         </CardHeader>
         <CardContent>
           <div className="space-y-4" aria-label={t('requirement.preparing')}>
@@ -87,6 +85,10 @@ function RequirementCard() {
 
   const current: RequirementDraft = editing && draft ? draft : { ...req, intake: persistence?.intake }
   const awaitingSummary = !req.rows.some((row) => row.answer.trim())
+  const readinessIssues = persistence && !persistence.readiness?.ready
+    ? persistence.readiness?.issues.filter((issue) => issue.code !== 'REQUIREMENT_EMPTY' || !editing && current.rows.length > 0)
+      ?? [notice('learning', 'requirement.loadingReadiness')]
+    : []
   const editRow = (index: number, field: 'question' | 'answer', value: string) => setDraft({ ...current,
     rows: current.rows.map((row, at) => at === index ? { ...row, [field]: value } : row) })
   return (
@@ -96,7 +98,7 @@ function RequirementCard() {
           <ClipboardList className="size-4 text-primary" aria-hidden />
           {t('requirement.title')}
         </CardTitle>
-        <CardDescription>{capabilities.agent ? awaitingSummary ? t('requirement.awaitingSummary') : t('requirement.confirmHint') : t('requirement.manualHint')}</CardDescription>
+        {!capabilities.agent && <CardDescription>{t('requirement.manualHint')}</CardDescription>}
         <CardAction>
         {editing ? (
           <div className="flex gap-2">
@@ -157,13 +159,10 @@ function RequirementCard() {
         {!editing && current.intake?.researchRef && <ResearchCard key={`${space.id}:${current.intake.researchRef.id}`} researchRef={current.intake.researchRef} />}
       </CardContent>
       <CardFooter className="flex-col items-stretch gap-2 border-t">
-        {persistence && !persistence.readiness?.ready && <div id="req-readiness" role="status" className="space-y-2 text-sm">
-          <p className="font-medium">{t('requirement.notReady')}</p>
-          <ul className="list-disc space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
-            {(persistence.readiness?.issues ?? [notice('learning', 'requirement.loadingReadiness')]).map((reason, index) => <li key={index} className="whitespace-pre-wrap break-words">{formatNotice(reason)}</li>)}
-          </ul>
+        {readinessIssues.length > 0 && <div id="req-readiness" role="status" className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+          {readinessIssues.map((reason, index) => <p key={index} className="whitespace-pre-wrap break-words">{formatNotice(reason)}</p>)}
         </div>}
-        <Button size="lg" aria-describedby={persistence && !persistence.readiness?.ready ? 'req-readiness' : undefined}
+        <Button size="lg" aria-describedby={readinessIssues.length > 0 ? 'req-readiness' : undefined}
           disabled={editing || busy || awaitingSummary || persistence?.requirementConfirmed || !!persistence && !persistence.readiness?.ready} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
           {persistence?.requirementConfirmed ? t('requirement.confirmed') : capabilities.agent ? t('requirement.confirmAndPlan') : t('requirement.confirm')}
@@ -173,7 +172,6 @@ function RequirementCard() {
             {!space.stages.length && persistence.planning.run ? t('requirement.viewPlanning') : t('requirement.viewPath')}
           </Button>
         )}
-        <p className="text-center text-xs text-muted-foreground">{capabilities.agent ? t('requirement.correctionHint') : t('requirement.manualCorrectionHint')}</p>
       </CardFooter>
     </Card>
   )

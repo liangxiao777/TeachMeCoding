@@ -3,19 +3,13 @@
   "status": { "not_started": "Not started", "learning": "Learning", "needs_work": "Needs practice", "passed": "Passed", "skipped": "Skipped" },
   "progress": "Execution progress",
   "requirement": {
-    "title": "Learning requirements summary", "saveFailed": "Requirements were not saved. Please try again.",
-    "introduction": "Once the Agent understands your goals, background, and expectations, it will summarize your requirements here. A Learning path will only be generated after you confirm them.",
-    "unavailableIntroduction": "The Agent is unavailable. Fill in and confirm your learning requirements manually; a Learning path will not be generated automatically.",
+    "title": "Learning requirements", "saveFailed": "Requirements were not saved. Please try again.",
     "preparing": "Preparing the requirements table", "question": "Question", "answer": "Answer",
-    "awaitingSummary": "The Agent will summarize your requirements from the conversation. You can also enter them directly. Planning begins only after confirmation.",
-    "confirmHint": "After confirmation, the Agent will use these requirements to plan your Learning path",
-    "manualHint": "Save and confirm your learning requirements manually. The Agent is unavailable and will not plan a Learning path automatically",
+    "manualHint": "Agent unavailable. Enter requirements manually.",
     "modify": "Modify", "table": "Learning requirements", "questionNumber": "Question {{number}}", "answerNumber": "Answer {{number}}", "removeRow": "Remove row {{number}}",
-    "empty": "No requirements have been summarized yet. Continue the conversation or add questions and answers directly.", "addQuestion": "Add question",
-    "questionRequired": "Fill in the question in each row. You can leave answers blank if you are unsure.", "notReady": "Cannot confirm and plan yet", "loadingReadiness": "Loading requirements readiness. Please try again shortly.",
-    "confirmed": "Learning requirements confirmed", "confirmAndPlan": "Confirm and plan Learning path", "confirm": "Confirm learning requirements", "viewPlanning": "View planning progress", "viewPath": "View Learning path",
-    "correctionHint": "Not accurate? Edit directly or tell the Agent more on the left",
-    "manualCorrectionHint": "Not accurate? Edit directly. The conversation on the left only saves questions; it will not summarize requirements or generate a Learning path."
+    "empty": "No requirements yet.", "addQuestion": "Add question",
+    "questionRequired": "Questions are required; answers can wait.", "loadingReadiness": "Checking requirements…",
+    "confirmed": "Learning requirements confirmed", "confirmAndPlan": "Confirm & plan", "confirm": "Confirm learning requirements", "viewPlanning": "View planning progress", "viewPath": "View Learning path"
   },
   "onboarding": {
     "saveQuestionFailed": "Your question was not saved. Please try again.", "conversation": "Learning requirements conversation",

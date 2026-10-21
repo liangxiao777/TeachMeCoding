@@ -49,7 +49,7 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await expect(visible(page, '你想学什么')).toHaveValue(goal);
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(visible(page, '学习空间名称')).toHaveValue(goal);
-  await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^学习需求摘要$/ })).toBeVisible();
+  await expect(page.locator('[data-slot="card-title"]').filter({ hasText: /^学习需求$/ })).toBeVisible();
   await expect(page).toHaveURL(/[?&]space=/);
   const url = page.url();
   const name = `${goal} · 已命名`;
@@ -59,7 +59,7 @@ test('spaces and sent messages persist while unsent input is temporary and retri
     visible(page, '学习空间名称').press('Tab'),
   ]);
   await expect(page.getByText(goal, { exact: true })).toHaveCount(1);
-  await expect(page.getByText('还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。', { exact: true })).toBeVisible();
+  await expect(page.getByText('暂无需求。', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await visible(page, '问题 1').fill('想理解什么？');

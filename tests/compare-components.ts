@@ -74,7 +74,7 @@ try {
         const now = new Date('2026-10-02T10:00:00Z');
         await page.clock.install({ time: now });
         await page.clock.pauseAt(now);
-        await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+        await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
         await capture('route-planning');
         await page.clock.resume();
       }

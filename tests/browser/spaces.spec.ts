@@ -200,14 +200,14 @@ test('explicit preview creates a space only after a goal and confirms edited req
   await composer.fill('每周大概 5 小时，希望两个月内完成');
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
   await composer.press('Enter');
-  await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '确认并规划路线' })).toBeEnabled();
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('回答 4', { exact: true }).fill('每周 7 小时，先学所有权');
-  await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '确认并规划路线' })).toBeDisabled();
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('td, dd').filter({ hasText: '每周 7 小时，先学所有权' })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/requirements-${info.project.name}.png` });
-  await page.getByRole('button', { name: '确认，开始规划路线' }).click();
+  await page.getByRole('button', { name: '确认并规划路线' }).click();
   await expect(page.getByRole('heading', { name: 'Rust 入门', exact: true })).toBeVisible();
   await expect(page.locator('dd').filter({ hasText: '每周 7 小时，先学所有权' })).toBeVisible();
   expect(businessRequests).toEqual([]);

@@ -49,7 +49,7 @@ export async function visualScenes(page: Page, source: 'preview' | 'prototype', 
     await page.getByRole('button', { name: '熟悉 Python，写过一些自动化脚本，没接触过 C/C++', exact: true }).click();
     await page.getByRole('button', { name: '每周大概 5 小时，希望两个月内完成', exact: true }).click();
   }
-  await expect(page.getByRole('button', { name: '确认，开始规划路线' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '确认并规划路线' })).toBeEnabled();
   await shot('requirements');
 
   await open('spaces');

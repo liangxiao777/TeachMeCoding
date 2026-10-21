@@ -205,9 +205,9 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('td, dd').filter({ hasText: /^每周 4 小时$/ })).toBeVisible();
   await page.screenshot({ path: `.amp/in/artifacts/teaching-intake-${info.project.name}.png`, animations: 'disabled' });
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await expect(page.getByText(`正在为「${opening.slice(0, 80)}」规划学习路线`, { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '学习需求摘要', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '学习需求', exact: true })).toHaveCount(0);
   await expect(page.getByText('尚无学习路线', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   await expect(page.getByTestId('route-proposal')).toHaveCount(0);
@@ -277,7 +277,7 @@ test('formal intake uses streamed API output, editable drafts and explicit confi
 test('long Markdown questions and omitted grading arrays remain usable after save and reload', async ({ page }, info) => {
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   await create(page, `轻量测评验收 ${info.project.name}`);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
@@ -338,7 +338,7 @@ test('reasoning assessment failure retries the same attempt; expired evidence st
   test.setTimeout(60000);
   await create(page, `纯推理 ${info.project.name}`);
   await expect(page.locator('td, dd').filter({ hasText: /^Python 自动化经验$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
@@ -405,7 +405,7 @@ test('unit access follows published courseware and lesson generation reads earli
   await page.emulateMedia({ colorScheme: 'light' });
   await create(page, goal);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   const initial = await workspace(page, goal), [first, second] = initial.route.content.stages[0].units;
   const row = (title: string) => page.locator('li').filter({ has: page.locator('[data-slot="card-title"]').filter({ hasText: title }) });
@@ -475,8 +475,8 @@ test('empty requirements are editable and late intake cannot replace saved or un
   for (const saveEarly of [false, true]) {
     await create(page, `延迟摘要 ${saveEarly} ${info.project.name}`);
     await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
-    await expect(page.getByText('还没有整理好的需求。可以继续对话，也可以直接添加问题和回答。', { exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeDisabled();
+    await expect(page.getByText('暂无需求。', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '确认并规划路线', exact: true })).toBeDisabled();
     if (!saveEarly) await page.screenshot({ path: `.amp/in/artifacts/intake-empty-${info.project.name}.png`, animations: 'disabled' });
     await page.getByRole('button', { name: '修改', exact: true }).click();
     await page.getByLabel('问题 1', { exact: true }).fill('想分析什么？');
@@ -493,7 +493,7 @@ test('empty requirements are editable and late intake cannot replace saved or un
       await expect(page.getByLabel('回答 2', { exact: true })).toHaveValue('只会 SQL');
       await page.screenshot({ path: `.amp/in/artifacts/intake-manual-${info.project.name}.png`, animations: 'disabled' });
       await page.getByRole('button', { name: '保存', exact: true }).click();
-    } else await expect(page.getByRole('alert').filter({ hasText: '需求已改变，本轮问题和资料未发布。' })).toBeVisible();
+    } else await expect(page.getByRole('alert').filter({ hasText: '内容已改变，请重新读取后再保存；本次修改未写入。' })).toBeVisible();
     await expect(page.locator('td, dd').filter({ hasText: /^手动指定：分析日志文件$/ })).toBeVisible();
     await page.reload();
     await expect(page.locator('td, dd').filter({ hasText: /^只会 SQL$/ })).toBeVisible();
@@ -508,7 +508,7 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('回答 4', { exact: true }).fill('PLAN-SLOW 每周 4 小时');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   const title = page.getByText(`正在为「${goal}」规划学习路线`, { exact: true });
   await expect(title).toBeVisible();
   await expect(page.getByRole('button', { name: '执行进度', exact: true })).toHaveAttribute('aria-expanded', 'true');
@@ -561,7 +561,7 @@ test('blank rejection ends a round; feedback rejection survives response loss an
   await page.emulateMedia({ colorScheme: 'light' });
   await create(page, goal);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await expect(page.getByRole('button', { name: '开始学习', exact: true })).toBeVisible();
   const original = await workspace(page, goal);
   const decision = page.getByTestId('route-decision'), preview = page.getByTestId('route-proposal');
@@ -651,7 +651,7 @@ test('planning response loss, provider failure and cancellation remain recoverab
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('回答 4', { exact: true }).fill('PLAN-FAIL-ONCE PLAN-SLOW');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(page.getByRole('button', { name: '确认，开始规划路线', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '确认并规划路线', exact: true })).toBeEnabled();
   let dropped = false, failedRefresh = false, confirmations = 0;
   await page.route('**/plan', async (route) => {
     confirmations++;
@@ -661,11 +661,11 @@ test('planning response loss, provider failure and cancellation remain recoverab
   await page.route(`**/api/spaces/${spaceId}`, async (route) => {
     if (!failedRefresh) { failedRefresh = true; await route.abort(); } else await route.continue();
   });
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   // A lost receipt leaves intake visible until the confirmation is known.
   await expect(page.getByRole('button', { name: '重试', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toHaveCount(0);
-  await expect(page.getByText('学习需求摘要', { exact: true })).toBeVisible();
+  await expect(page.locator('#req-title')).toHaveText('学习需求');
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect.poll(() => failedRefresh).toBe(true);
   await page.getByRole('button', { name: '重试', exact: true }).click();
@@ -823,7 +823,7 @@ test('tutor queues survive stop and withdrawal restores the reference without ov
   const goal = `队列撤回 ${info.project.name}`;
   await create(page, goal);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -901,7 +901,7 @@ test('a failed queued reply keeps later prompts paused and retries the first que
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.setViewportSize({ width: 1100, height: 760 });
   await create(page, `Queued failure ${info.project.name}`, 'en');
-  await page.getByRole('button', { name: 'Confirm and plan Learning path', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm & plan', exact: true }).click();
   await page.getByRole('button', { name: 'Start learning', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -960,7 +960,7 @@ test('reasoning cancellation retains partial thought and new input; IME does not
 
 test('fullscreen tutor keeps reasoning, Markdown and the composer inside the dark Agent panel', async ({ page }, info) => {
   await create(page, `深色辅导 ${info.project.name}`);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -1003,7 +1003,7 @@ test('planning shows real phases without counters, idle warnings or skeletons; f
   await page.getByRole('button', { name: '修改', exact: true }).click();
   await page.getByLabel('回答 4', { exact: true }).fill('PLAN-STREAM-ERROR');
   await page.getByRole('button', { name: '保存', exact: true }).click();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   const group = page.getByTestId('tool-call-group');
   await expect(group).toContainText('1 次调用');
   await expect(group).toContainText('0 次成功');
@@ -1080,7 +1080,7 @@ test('a silent event connection recovers the terminal state by polling every dur
       } }), { headers: { 'Content-Type': 'text/event-stream' } })
       : original(input, init);
   });
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await expect.poll(async () => (await workspace(page, goal)).runs.find((r: { kind: string }) => r.kind === 'roadmap')?.state, { timeout: 20000 }).toBe('failed');
   await expect(page.getByRole('heading', { name: '路线规划未完成', exact: true })).toHaveCount(0);
   const cursors: number[] = [];
@@ -1109,7 +1109,7 @@ test('lesson review gates all sessions, rejects from the applied baseline and ac
   const goal = `课件审阅 ${info.project.name}`;
   await page.emulateMedia({ colorScheme: 'light' });
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   const original = await workspace(page, goal), unitId = original.route.content.stages[0].units[0].id;
@@ -1256,7 +1256,7 @@ test('lesson review preserves historical passes and answers, permits continuatio
   test.setTimeout(60000);
   const goal = `纯推理 课件历史 ${info.project.name}`;
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   const original = await workspace(page, goal), unit = original.route.content.stages[0].units[0].id;
@@ -1297,7 +1297,7 @@ test('lesson review preserves historical passes and answers, permits continuatio
 test('lesson review of independent regeneration keeps the applied document readable until explicit acceptance', async ({ page }, info) => {
   const goal = `课件重新生成 ${info.project.name}`;
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   const work = await workspace(page, goal), unit = work.route.content.stages[0].units[0].id;
@@ -1330,7 +1330,7 @@ test('lesson review of independent regeneration keeps the applied document reada
 test('lesson review exposes link and whitespace changes inline without a source view and applies exact candidate bytes', async ({ page }, info) => {
   const goal = `课件隐性变化 ${info.project.name}`;
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -1388,7 +1388,7 @@ test('lesson review of title-only edits remains actionable in a readonly fullscr
   const goal = `课件标题审阅 ${info.project.name}`;
   await page.emulateMedia({ colorScheme: 'dark' });
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   const original = await workspace(page, goal), unit = original.route.content.stages[0].units[0].id;
@@ -1448,7 +1448,7 @@ test('YOLO accepts files, lessons and conclusions without clicks, persists per c
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   await page.emulateMedia({ colorScheme: 'light' });
   await create(page, goal);
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -1548,7 +1548,7 @@ test('file proposals require confirmation, recover pending cards and preserve au
   test.setTimeout(60000);
   await create(page, `确认本机操作 ${info.project.name}`);
   await expect(page.locator('td, dd').filter({ hasText: /^制作命令行工具$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Agent', exact: true }).click();
@@ -1626,7 +1626,7 @@ test('real code assessment shows errors and cancellation, fixes output and keeps
   const name = `真实代码测评 ${info.project.name}`;
   await create(page, name);
   await expect(page.locator('td, dd').filter({ hasText: /^真实代码测评$/ })).toBeVisible();
-  await page.getByRole('button', { name: '确认，开始规划路线', exact: true }).click();
+  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
   await page.getByRole('button', { name: '开始学习', exact: true }).click();
   await expect(page.getByRole('heading', { name: '参数从哪里来', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
