@@ -86,10 +86,17 @@ test('compiled teaching prompt assets load without a source-tree cwd', async () 
   const cwd = await mkdtemp(join(tmpdir(), 'tmc-prompt-assets-'));
   try {
     const url = new URL('../apps/server/dist/agents/context.js', import.meta.url).href;
-    const xml = execFileSync(process.execPath, ['--input-type=module', '-e', `const {systemPrompt}=await import(${JSON.stringify(url)}); console.log(systemPrompt('tutor'));`], { cwd, encoding: 'utf8' });
-    assert.match(xml, /<teaching schemaVersion="1">/);
-    assert.match(xml, /<scenario>tutor<\/scenario>/);
-    assert.ok(!xml.includes('undefined'));
+    const scenarios = ['intake', 'roadmap', 'tutor', 'lesson', 'assessment', 'evaluation'];
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', `const {systemPrompt}=await import(${JSON.stringify(url)}); console.log(JSON.stringify(${JSON.stringify(scenarios)}.map(systemPrompt)));`], { cwd, encoding: 'utf8' });
+    const prompts = JSON.parse(output);
+    assert.equal(prompts.length, scenarios.length);
+    for (const [index, xml] of prompts.entries()) {
+      assert.match(xml, /<teaching schemaVersion="1">/);
+      assert.ok(xml.includes(`<scenario>${scenarios[index]}</scenario>`));
+      assert.match(xml, /所有面向用户的内容都必须使用用户当前沟通所用的语言/);
+      assert.doesNotMatch(xml, /中文课件|用简短自然的中文/);
+      assert.ok(!xml.includes('undefined'));
+    }
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 

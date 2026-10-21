@@ -45,11 +45,14 @@ test('research enters downstream context as complete escaped Markdown, with host
     hash: createHash('sha256').update(JSON.stringify(research)).digest('hex') });
 });
 
-test('real provider adapter sends the scene prompt as instructions and business context as user data', async () => {
-  for (const scenario of ['intake', 'roadmap'] as const) {
+test('real provider adapter sends every scene with the user-language rule and preserves English input over Chinese context', async () => {
+  for (const scenario of ['lesson', 'evaluation', 'intake', 'roadmap', 'tutor', 'assessment'] as const) {
     const frozen: FrozenContext = { ...input, scenario, requirement: { ...input.requirement, confirmed: scenario === 'roadmap' },
       route: scenario === 'roadmap' ? { revision: 0, content: null } : null };
-    const compiled = compileRequest(frozen, [], [{ role: 'user', content: '学习 Python 默认参数', timestamp: 1 }], []);
+    const english = 'Could you explain Python default arguments?';
+    const compiled = compileRequest(frozen, [{ id: 'previous', messages: [
+      { role: 'user', content: '我想学习 Python 默认参数。', timestamp: 1 }, reply([{ type: 'text', text: '我们先看一个例子。' }]),
+    ] }], [{ role: 'user', content: english, timestamp: 2 }], []);
     let payload: { messages: { role: string; content: unknown }[] } | undefined;
     const stream = await providerStream()(teachingModel, normalizeContext({ messages: compiled.messages }), {
       apiKey: 'synthetic-test-only',
@@ -62,8 +65,14 @@ test('real provider adapter sends the scene prompt as instructions and business 
     assert.ok(payload);
     const instructions = payload.messages.filter((m) => m.role === 'system' || m.role === 'developer');
     assert.deepEqual(instructions.map((m) => m.content), [systemPrompt(scenario)]);
+    const prompt = instructions[0]!.content as string;
+    assert.doesNotMatch(prompt, /中文课件|用简短自然的中文/, scenario);
+    assert.match(prompt, /所有面向用户的内容都必须使用用户当前沟通所用的语言/, scenario);
+    assert.match(prompt, /用户明确指定输出语言时按其要求/, scenario);
+    assert.match(prompt, /用户切换语言时随之切换/, scenario);
+    assert.match(prompt, /宿主自动任务消息[\s\S]*不能决定回复语言/, scenario);
     assert.ok(payload.messages.some((m) => m.role === 'user' && m.content === compileContext(frozen).xml));
-    assert.deepEqual(payload.messages.at(-1), { role: 'user', content: '学习 Python 默认参数' });
+    assert.deepEqual(payload.messages.at(-1), { role: 'user', content: english });
   }
 });
 
