@@ -11,12 +11,12 @@ import { composeReply } from './agent-script'
 import { getAssessment } from './assessment'
 import { emptySpace, findUnit, newSession, pytorchSpace, rustInProgressSpace, topicFrom } from './demo-data'
 import { activeSession, ensureSession, selectSession, sessionUnitId } from './sessions'
-import { availableUnitIds, canAccessView, nextUnit, recommendedUnit } from '../app/selectors'
+import { availableUnitIds, canAccessView, conversationMessages, nextUnit, recommendedUnit } from '../app/selectors'
 import { diffRoute, routeDiffSummary } from '../app/route-diff'
 import { assessmentNeedsRefresh, lessonProposalStale, lessonView, mergeProposals, mergeUnitDetail, pendingDecision } from '../app/lesson-proposals'
 import { diffLesson, lessonDiffAllowedTags, lessonDiffRemark, lessonDiffTree, lessonTokens } from '../lib/lesson-diff'
 import { lessonAllowedTags, lessonHeadings, lessonRemarkPlugins } from '../lib/lesson-markdown'
-import type { Space } from './types'
+import type { Message, Space } from './types'
 import i18n from '../i18n'
 
 await i18n.changeLanguage('zh-CN')
@@ -164,6 +164,46 @@ test('each scope remembers the selected history item, not simply its newest sess
   assert.equal(activeSession(space), original)
   assert.equal(selectSession(space, route), space)
   assert.equal(activeSession({ ...space, view: 'route' }), route)
+})
+
+test('successful retries hide repeated alerts only in their user turn and retain partial content and saved failures', () => {
+  const message = (id: string, role: Message['role'], status?: Message['status']): Message => ({ id, role, status, text: '', createdAt: 0 })
+  const unrelated = message('unrelated-failure', 'agent', 'error')
+  const failures = Array.from({ length: 6 }, (_, index) => message(`failure-${index}`, 'agent', 'error'))
+  const partial: Message = { ...message('partial', 'agent', 'error'), text: '保留部分回复', parts: [
+    { id: 'reasoning', type: 'reasoning', text: '保留推理', status: 'interrupted' },
+    { id: 'tool', type: 'tool', name: 'read', status: 'error' },
+  ] }
+  const history = [message('older-question', 'user'), message('older-reply', 'agent', 'done'), unrelated,
+    message('question', 'user'), ...failures, partial]
+  const snapshot = structuredClone(history)
+  for (const status of ['thinking', 'streaming', 'stopped', 'error'] as const) {
+    const pending = [...history, message('retry', 'agent', status)]
+    assert.deepEqual(conversationMessages(pending), pending)
+  }
+  for (const receipt of [{ sequence: 0 }, { notice: { code: 'LOCAL_ACTION_FAILED' as const } }]) {
+    const pending = [...history, { ...message('host-receipt', 'agent', 'done'), ...receipt }]
+    assert.deepEqual(conversationMessages(pending), pending, 'A host receipt is not a successful model reply')
+  }
+  const success = message('retry', 'agent', 'done'), later = message('later-failure', 'agent', 'error')
+  assert.deepEqual(conversationMessages([...history, success, later]), [
+    ...history.slice(0, 4), { ...partial, status: undefined }, success, later,
+  ])
+  const revisit = { ...message('revisit', 'agent', 'done'), retryOf: unrelated.id }
+  assert.deepEqual(conversationMessages([...history, revisit]), [
+    history[0], history[1], ...history.slice(3), revisit,
+  ], 'Retrying an older question must not clear errors on the newer question')
+  const failedRetry = { ...message('failed-retry', 'agent', 'error'), retryOf: partial.id }
+  const newer = [message('newer-question', 'user'), message('newer-error', 'agent', 'error')]
+  const recovered = { ...message('recovered', 'agent', 'done'), retryOf: failedRetry.id }
+  assert.deepEqual(conversationMessages([...history, failedRetry, ...newer, recovered]), [
+    ...history.slice(0, 4), { ...partial, status: undefined }, ...newer, recovered,
+  ], 'Success resolves the entire retry chain, not an intervening question')
+  const queued = [message('queued-question', 'user'), message('original-error', 'agent', 'error'),
+    { ...message('queued-retry', 'agent', 'done'), retryOf: 'original-error' }, message('follow-up', 'user'),
+    { ...message('follow-up-error', 'agent', 'error'), runId: 'queued-retry' }]
+  assert.deepEqual(conversationMessages(queued), queued, 'A completed segment cannot resolve a retry whose follow-up failed')
+  assert.deepEqual(history, snapshot, 'Display cleanup must not rewrite the stored failure or tool history')
 })
 
 test('assessment and historical results use their owning unit, not the current lesson', () => {

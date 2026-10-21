@@ -1,6 +1,6 @@
 import { unlockedUnitIds } from '@teach-me-coding/contracts'
 import { currentLocale, formatRelativeTime } from '@/i18n/format'
-import type { CodeFile, Session, Space, SpaceView, Unit } from './types'
+import type { CodeFile, Message, Session, Space, SpaceView, Unit } from './types'
 
 export const allUnits = (space: Space): Unit[] => space.stages.flatMap((stage) => stage.units)
 export const findUnit = (space: Space, id: string | null): Unit | undefined => allUnits(space).find((unit) => unit.id === id)
@@ -52,6 +52,31 @@ export function activeSession(space: Space): Session | undefined {
   const key = sessionScope(space) === 'unit' ? `unit:${sessionUnitId(space)}` : sessionScope(space)
   const sessions = scopedSessions(space)
   return sessions.find((session) => session.id === space.activeSessionIds[key]) ?? sessions[0]
+}
+// Keep retry families attached to their original turn, even when retried after
+// another question. Older attempts without lineage share their preceding turn.
+export function conversationMessages<T extends Pick<Message, 'id' | 'runId' | 'retryOf' | 'role' | 'text' | 'parts' | 'status' | 'notice' | 'sequence'>>(messages: readonly T[]): T[] {
+  const turns = new Map<string, string>()
+  const replies = new Map<string, { message: T; index: number }>()
+  let turn = ''
+  for (const [index, message] of messages.entries()) {
+    if (message.role === 'user') { turn = message.id; continue }
+    if (message.sequence === 0 || message.notice) continue
+    const parent = message.runId ?? message.retryOf
+    turns.set(message.id, parent ? turns.get(parent) ?? parent : turn || message.id)
+    replies.set(message.runId ?? message.id, { message, index })
+  }
+  const completed = new Map<string, number>()
+  for (const { message, index } of replies.values()) if (message.status === 'done') {
+    const key = turns.get(message.id)!
+    completed.set(key, Math.max(completed.get(key) ?? -1, index))
+  }
+  return messages.flatMap((message, index) => {
+    if (message.status === 'error' && (completed.get(turns.get(message.id)!) ?? -1) > index) {
+      return message.text || message.parts?.length ? [{ ...message, status: undefined }] : []
+    }
+    return [message]
+  })
 }
 export const fileLanguage = (name: string): CodeFile['language'] => name.endsWith('.rs') ? 'rust' : name.endsWith('.py') ? 'python' : 'text'
 export function entryPath(space: Space, id: string | null): string {

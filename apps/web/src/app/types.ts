@@ -47,6 +47,7 @@ export type MessageStatus = 'thinking' | 'streaming' | 'done' | 'stopped' | 'err
 export interface Message {
   id: string
   runId?: string
+  retryOf?: string
   queuedPrompts?: import('@teach-me-coding/contracts').QueuedPrompt[]
   role: 'user' | 'agent'
   text: string

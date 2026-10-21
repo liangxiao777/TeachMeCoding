@@ -419,7 +419,7 @@ export class TeachingRuntime {
     const frozen = this.freeze(space, session, input.quote ? [input.quote] : []);
     const id = randomUUID();
     this.learning.db.prepare("INSERT INTO runs VALUES (?,?,?,?,?,'pending')").run(space, id, frozen.unitId, session, frozen.scenario);
-    this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input }), Date.now());
+    this.learning.db.prepare('INSERT INTO agent_runs(space_id,id,input,created_at) VALUES (?,?,?,?)').run(space, id, JSON.stringify({ ...frozen, submitted: input, ...(retryOf ? { retryOf } : {}) }), Date.now());
     this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, session, id, Date.now());
     this.emit(space, id, { type: 'state', state: 'pending', error: null });
     return id;

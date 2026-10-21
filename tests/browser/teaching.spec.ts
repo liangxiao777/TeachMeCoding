@@ -895,7 +895,7 @@ test('tutor queues survive stop and withdrawal restores the reference without ov
   await expect(queue).toHaveCount(0);
 });
 
-test('a failed queued reply keeps later prompts paused and retries the first question without covering the error', async ({ page }, info) => {
+test('a failed queued reply keeps later prompts paused and clears its error only after a successful retry', async ({ page }, info) => {
   test.setTimeout(45000);
   await page.addInitScript(() => localStorage.setItem('tmc-language', 'en'));
   await page.emulateMedia({ colorScheme: 'dark' });
@@ -929,7 +929,16 @@ test('a failed queued reply keeps later prompts paused and retries the first que
   expect((await response).ok()).toBe(true);
   await expect(queue).toContainText('Keep this prompt paused');
   await expect(queue).toContainText('Paused');
-  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  await expect(message).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0, { timeout: 15000 });
+  await expect(failure).toHaveCount(0);
+  await page.reload();
+  await expect(queue).toContainText('Keep this prompt paused');
+  await expect(queue).toContainText('Paused');
+  await expect(input).toBeEnabled();
+  await expect(failure).toHaveCount(0);
+  await agent.screenshot({ path: `.amp/in/artifacts/prompt-queue-retry-recovered-en-${info.project.name}.png`, animations: 'disabled' });
 });
 
 test('reasoning cancellation retains partial thought and new input; IME does not submit', async ({ page }, info) => {

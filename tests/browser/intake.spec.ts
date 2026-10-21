@@ -263,7 +263,8 @@ test('a failed continuation retains actual custom text and retry does not accept
   await page.getByRole('button', { name: '下一个', exact: true }).click();
   await page.getByRole('checkbox', { name: /测量内存/ }).check();
   await page.getByRole('button', { name: '提交全部回答', exact: true }).click();
-  await expect(page.getByRole('alert').filter({ hasText: '模型响应未正常完成，未保存生成产物。' })).toBeVisible();
+  const failure = page.getByRole('alert').filter({ hasText: '模型响应未正常完成，未保存生成产物。' });
+  await expect(failure).toBeVisible();
   await expect(page.getByRole('button', { name: '提交全部回答', exact: true })).toHaveCount(0);
   const before = (await business<SessionDetail>(page, `/spaces/${id}/sessions/${session}`)).value;
   expect(before.questions![0]!.state).toBe('answered');
@@ -272,11 +273,21 @@ test('a failed continuation retains actual custom text and retry does not accept
   await shot(page, info, 'failure');
   await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(confirm(page)).toBeEnabled();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
   await expect(composer(page)).toHaveValue('重试模型回复期间的新草稿');
   const after = (await business<SessionDetail>(page, `/spaces/${id}/sessions/${session}`)).value;
   expect(after.questions).toEqual(before.questions);
   expect(after.messages.filter((m) => m.role === 'user')).toHaveLength(2);
+  expect(after.messages.at(-1)!.retryOf).toBe(before.messages.at(-1)!.id);
+  expect(after.messages.find((m) => m.status === 'error')).toEqual(before.messages.find((m) => m.status === 'error'));
   expect((await business<Workspace>(page, `/spaces/${id}`)).value.runs).toHaveLength(3);
+  await page.reload();
+  await expect(confirm(page)).toBeEnabled();
+  await expect(composer(page)).toBeEnabled();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '重试', exact: true })).toHaveCount(0);
+  await shot(page, info, 'retry-recovered');
 });
 
 for (const count of [1, 4] as const) test(`one visible question preserves distinct custom answers and handles ${count} questions`, async ({ page }, info) => {

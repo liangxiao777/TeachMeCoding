@@ -141,12 +141,13 @@ export class Learning {
       const row = this.one<SessionSummary & { revision: number; draft: string }>(
         'SELECT id,scope,unit_id AS unitId,title,revision,draft FROM sessions WHERE space_id=? AND id=?', space, id);
       if (row.unitId) this.assertUnitInRoute(space, row.unitId);
-      const messages = this.all<Omit<Message, 'quote'> & { quote: string | null }>(
-        `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,
+      const messages = this.all<Omit<Message, 'quote' | 'retryOf'> & { quote: string | null; retryOf: string | null }>(
+        `SELECT m.id,m.role,m.text,m.quote,m.created_at AS createdAt,json_extract(a.input,'$.retryOf') AS retryOf,
          COALESCE((SELECT MAX(seq) FROM agent_events e WHERE e.space_id=m.space_id AND e.run_id=m.id),0) AS sequence,
          CASE r.state WHEN 'pending' THEN 'thinking' WHEN 'running' THEN CASE WHEN m.text='' THEN 'thinking' ELSE 'streaming' END
            WHEN 'interrupted' THEN 'stopped' WHEN 'failed' THEN 'error' ELSE 'done' END AS status
          FROM messages m LEFT JOIN runs r ON r.space_id=m.space_id AND r.id=m.id
+         LEFT JOIN agent_runs a ON a.space_id=m.space_id AND a.id=m.id
          WHERE m.space_id=? AND m.session_id=? ORDER BY m.rowid`, space, id);
       const events = this.all<{ runId: string; seq: number; value: string }>(
         `SELECT e.run_id AS runId,e.seq,e.value FROM agent_events e JOIN messages m ON m.space_id=e.space_id AND m.id=e.run_id
@@ -180,12 +181,13 @@ export class Learning {
       }
       return { id: row.id, scope: row.scope, unitId: row.unitId, title: row.title, settings: this.sessionSettings(space, id),
         draft: { ...JSON.parse(row.draft), revision: row.revision },
-        messages: messages.map((m) => {
+        messages: messages.map(({ retryOf, ...m }) => {
           const runId = replyRuns.get(m.id) ?? m.id, root = roots.get(runId)!;
           const latest = currentReply.get(runId) ?? runId;
           const status = cursors.has(runId) ? latest !== m.id ? 'done'
             : root.status === 'thinking' || root.status === 'streaming' ? m.text ? 'streaming' : 'thinking' : root.status : m.status;
           return { ...m, quote: m.quote === null ? null : JSON.parse(m.quote), status,
+            ...(retryOf ? { retryOf } : {}),
             ...(replyRuns.has(m.id) ? { runId, sequence: cursors.get(runId) } : {}),
             ...(queues.has(m.id) ? { queuedPrompts: queues.get(m.id) } : {}),
             ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),

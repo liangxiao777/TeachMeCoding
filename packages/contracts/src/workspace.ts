@@ -85,6 +85,8 @@ export interface AgentContext {
 }
 export interface QueuedPrompt { id: string; text: string; quote: Quote | null; createdAt: number }
 export interface Message { id: string; role: 'user' | 'agent'; text: string; quote: Quote | null; createdAt: number; parts?: AgentDisplayPart[]; context?: AgentContext; sequence?: number; status?: 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'; error?: BusinessErrorDetail; notice?: BusinessErrorResponse;
+  /** The failed/interrupted run this attempt retries, when recorded. */
+  retryOf?: string;
   /** Follow-up replies share their original run; only its first message owns the pending queue. */
   runId?: string; queuedPrompts?: QueuedPrompt[] }
 export interface SessionDetail extends SessionSummary { settings: z.infer<typeof sessionSettingsSchema>; draft: z.infer<typeof sessionDraftSchema>; messages: Message[]; questions?: QuestionRound[] }

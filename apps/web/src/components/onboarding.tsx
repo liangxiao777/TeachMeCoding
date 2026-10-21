@@ -27,6 +27,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useApp, useSpace, type RequirementDraft } from '@/app/context'
+import { conversationMessages } from '@/app/selectors'
 import { ThemeToggle } from '@/app/theme'
 import { LibraryButton } from '@/components/library-page'
 
@@ -226,7 +227,7 @@ function Chat() {
               {capabilities.agent ? t('onboarding.greeting') : t('onboarding.unavailableGreeting')}
             </MessageContent>
           </Message>}
-          {messages.map((m) =>
+          {conversationMessages(messages).map((m) =>
             m.role === 'user' ? (
               <Message key={m.id} from="user"><MessageContent><p className="whitespace-pre-wrap">{m.text}</p></MessageContent></Message>
             ) : (

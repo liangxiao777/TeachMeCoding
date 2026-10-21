@@ -50,7 +50,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { findUnit, scopedSessions, sessionScope, sessionUnitId } from '@/app/selectors'
+import { conversationMessages, findUnit, scopedSessions, sessionScope, sessionUnitId } from '@/app/selectors'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
 import { uiMotion } from '@/lib/motion'
@@ -403,7 +403,7 @@ export function AgentPanel() {
         <Conversation key={session.id} className="min-h-0" initial="instant" resize="instant" aria-label={t('agent.conversation')}>
           <ConversationContent>
             <ol className="flex flex-col gap-5">
-            {session.messages.map((m) => (
+            {conversationMessages(session.messages).map((m) => (
               <li key={m.id} className="min-w-0">
                 {m.role === 'user' ? (
                   <ChatMessage from="user">

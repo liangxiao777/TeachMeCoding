@@ -205,12 +205,19 @@ test('retry reuses the fixed original input, does not duplicate users or clear a
     const first = runtime.submit(space.id, session, randomUUID(), { text: 'original question', quote: null, draftRevision: 0 });
     await runtime.idle(first.run.id);
     learning.saveSessionDraft(space.id, session, { revision: 1, text: 'new draft', quote: null, routeSuggestion: '' });
+    const failedRetry = runtime.retry(space.id, first.run.id, randomUUID());
+    await runtime.idle(failedRetry.run.id);
+    assert.equal(runtime.get(space.id, failedRetry.run.id).state, 'failed');
     fail = false;
-    const key = randomUUID(), retried = runtime.retry(space.id, first.run.id, key);
-    assert.equal(runtime.retry(space.id, first.run.id, key).run.id, retried.run.id);
+    const key = randomUUID(), retried = runtime.retry(space.id, failedRetry.run.id, key);
+    assert.equal(runtime.retry(space.id, failedRetry.run.id, key).run.id, retried.run.id);
     await runtime.idle(retried.run.id);
     assert.equal(runtime.get(space.id, retried.run.id).state, 'succeeded');
-    assert.equal(learning.session(space.id, session).messages.filter((m) => m.role === 'user').length, 1);
+    const messages = learning.session(space.id, session).messages;
+    assert.equal(messages.filter((m) => m.role === 'user').length, 1);
+    assert.equal(messages.find((m) => m.id === failedRetry.run.id)!.retryOf, first.run.id);
+    assert.equal(messages.find((m) => m.id === retried.run.id)!.retryOf, failedRetry.run.id);
+    assert.equal(messages.find((m) => m.id === first.run.id)!.status, 'error');
     assert.equal(learning.session(space.id, session).draft.text, 'new draft');
   } finally { await runtime.close(); db.close(); }
 });
