@@ -3,6 +3,7 @@ import type { Blockquote, Definition, Nodes, Root, RootContent } from 'mdast'
 import { toString } from 'mdast-util-to-string'
 import type { Plugin } from 'unified'
 import { lessonHeadingId, parseLessonMarkdown } from './lesson-markdown'
+import i18n from '../i18n'
 
 export type LessonChange = 'unchanged' | 'removed' | 'added'
 export interface LessonToken { source: string; offset: number; node: RootContent | null; key: string }
@@ -75,7 +76,7 @@ function tokenParts(token: LessonToken) {
   return { leading: token.source.slice(0, start), body: token.source.slice(start, end), trailing: token.source.slice(end) }
 }
 
-const visibleWhitespace = (source: string) => source.replaceAll(' ', '·').replaceAll('\t', '⇥').replaceAll('\r', '␍').replaceAll('\n', '↵\n') || '（无）'
+const visibleWhitespace = (source: string) => source.replaceAll(' ', '·').replaceAll('\t', '⇥').replaceAll('\r', '␍').replaceAll('\n', '↵\n') || i18n.t('diff.empty')
 const noteValue = (label: string, value: string): RootContent => ({ type: 'paragraph', children: [
   { type: 'text', value: label }, { type: 'inlineCode', value },
 ] })
@@ -113,11 +114,11 @@ function linkDetails(node: RootContent, definitions: Map<string, Definition>) {
     if (!['link', 'image', 'linkReference', 'imageReference'].includes(child.type)) return
     const target = 'url' in child ? child : 'identifier' in child ? definitions.get(child.identifier) : undefined
     if (!target) return
-    const label = child.type === 'image' || child.type === 'imageReference' ? `图片「${child.alt ?? ''}」地址：` : `链接「${toString(child)}」地址：`
+    const label = child.type === 'image' || child.type === 'imageReference' ? i18n.t('diff.imageAddress', { label: child.alt ?? '' }) : i18n.t('diff.linkAddress', { label: toString(child) })
     details.push(noteValue(label, target.url))
-    if (target.title) details.push(noteValue('悬停说明：', target.title))
+    if (target.title) details.push(noteValue(i18n.t('diff.title'), target.title))
   })
-  return details.length ? [changeNote('链接与图片地址', details)] : []
+  return details.length ? [changeNote(i18n.t('diff.addresses'), details)] : []
 }
 
 function scoped(node: RootContent, scope: string, inDrawer: boolean) {
@@ -160,14 +161,14 @@ export function lessonDiffTree(diff: LessonDiff, proposalId: string, inDrawer: b
       ? scoped(token.node, `${proposalId}-${side}`, inDrawer)
       : { type: 'code' as const, value: token.source }
     const details = row.change !== 'unchanged' && token.node ? linkDetails(token.node, definitions[side]) : []
-    if (formatting.has(token)) details.push(changeNote('Markdown / 空白调整（· 空格，⇥ 制表，␍ CR，↵ 换行）', [
-      noteValue('本版本写法：', visibleWhitespace(token.source)),
+    if (formatting.has(token)) details.push(changeNote(i18n.t('diff.formatting'), [
+      noteValue(i18n.t('diff.syntax'), visibleWhitespace(token.source)),
     ]))
     if (row.change === 'unchanged') {
       const old = tokenParts(row.before!), next = tokenParts(row.after!)
-      for (const [part, label] of [['leading', '段前空白'], ['trailing', '段后空白']] as const) {
-        if (old[part] !== next[part]) details.push(changeNote(`${label}调整（· 空格，⇥ 制表，␍ CR，↵ 换行）`, [
-          noteValue('− 原有：', visibleWhitespace(old[part])), noteValue('+ 改为：', visibleWhitespace(next[part])),
+      for (const part of ['leading', 'trailing'] as const) {
+        if (old[part] !== next[part]) details.push(changeNote(i18n.t(`diff.${part}`), [
+          noteValue(i18n.t('diff.before'), visibleWhitespace(old[part])), noteValue(i18n.t('diff.after'), visibleWhitespace(next[part])),
         ]))
       }
     }

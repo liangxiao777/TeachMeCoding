@@ -8,6 +8,7 @@
     "dev": "pnpm --filter @teach-me-coding/contracts build && concurrently --kill-others --names server,web 'pnpm --filter @teach-me-coding/server dev' 'pnpm --filter @teach-me-coding/web dev'",
     "build": "pnpm -r build",
     "check": "pnpm --filter @teach-me-coding/contracts build && pnpm -r check && tsc -p tests",
+    "check:i18n": "node --test tests/i18n.test.mjs",
     "test": "pnpm --filter @teach-me-coding/contracts build && pnpm -r test && node --test tests/*.test.mjs",
     "test:browser": "playwright test",
     "test:native": "pnpm --filter @teach-me-coding/server exec tsx --test --test-timeout=15000 src/compatibility/native.test.ts",

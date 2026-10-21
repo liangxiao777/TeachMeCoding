@@ -9,6 +9,8 @@ import { createContext, useContext, useMemo, type ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
+import { formatNumber } from "@/i18n/format";
 
 interface ContextSchema {
   usedTokens: number | null;
@@ -17,8 +19,8 @@ interface ContextSchema {
 }
 
 const ContextContext = createContext<ContextSchema | null>(null);
-const tokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
-const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 });
+const tokens = (value: number) => formatNumber(value, { notation: "compact", maximumFractionDigits: 1 });
+const percent = (value: number) => formatNumber(value, { style: "percent", maximumFractionDigits: 1 });
 
 const useContextValue = () => {
   const context = useContext(ContextContext);
@@ -50,12 +52,13 @@ const ContextIcon = () => {
 };
 
 export const ContextTrigger = ({ children, className, ...props }: ComponentProps<typeof Button>) => {
+  const { t } = useTranslation();
   const { ratio } = useContextValue();
   return (
     <Popover.Trigger openOnHover delay={200} render={<Button type="button" variant="ghost" size="xs"
       className={cn("gap-1.5 font-normal text-muted-foreground tabular-nums", className)} {...props} />}>
       <ContextIcon />
-      {children ?? <span>上下文 {ratio === null ? "—" : percent.format(ratio)}</span>}
+      {children ?? <span>{t('context.trigger', { usage: ratio === null ? "—" : percent(ratio) })}</span>}
     </Popover.Trigger>
   );
 };
@@ -72,18 +75,19 @@ export const ContextContent = ({ className, ...props }: Popover.Popup.Props) => 
 );
 
 export const ContextContentHeader = ({ children, className, ...props }: ComponentProps<"div">) => {
+  const { t } = useTranslation();
   const { usedTokens, maxTokens, ratio } = useContextValue();
   return (
     <div className={cn("space-y-3 p-3", className)} {...props}>
-      <Popover.Title className="text-xs font-medium">上下文占用</Popover.Title>
+      <Popover.Title className="text-xs font-medium">{t('context.label')}</Popover.Title>
       {children ?? <>
         <div className="flex items-center justify-between gap-3 text-xs tabular-nums">
-          <span>{ratio === null ? "待估算" : percent.format(ratio)}</span>
+          <span>{ratio === null ? t('context.estimating') : percent(ratio)}</span>
           <span className="font-mono text-muted-foreground">
-            {usedTokens === null ? "—" : tokens.format(usedTokens)} / {maxTokens === null ? "—" : tokens.format(maxTokens)}
+            {usedTokens === null ? "—" : tokens(usedTokens)} / {maxTokens === null ? "—" : tokens(maxTokens)}
           </span>
         </div>
-        {ratio !== null && <Progress aria-label="上下文占用" value={Math.max(0, Math.min(100, ratio * 100))} />}
+        {ratio !== null && <Progress aria-label={t('context.label')} value={Math.max(0, Math.min(100, ratio * 100))} />}
       </>}
     </div>
   );
@@ -96,21 +100,24 @@ export const ContextContentBody = ({ className, ...props }: ComponentProps<"div"
 const UsageRow = ({ label, value }: { label: string; value: number | undefined }) => (
   <div className="flex items-center justify-between gap-3 text-xs">
     <span className="text-muted-foreground">{label}</span>
-    <span className="font-mono tabular-nums">{value === undefined ? "—" : tokens.format(value)}</span>
+    <span className="font-mono tabular-nums">{value === undefined ? "—" : tokens(value)}</span>
   </div>
 );
 
 export const ContextInputUsage = () => {
+  const { t } = useTranslation();
   const { usage } = useContextValue();
-  return <UsageRow label="输入（不含缓存）" value={usage?.input} />;
+  return <UsageRow label={t('context.input')} value={usage?.input} />;
 };
 
 export const ContextOutputUsage = () => {
+  const { t } = useTranslation();
   const { usage } = useContextValue();
-  return <UsageRow label="输出" value={usage?.output} />;
+  return <UsageRow label={t('context.output')} value={usage?.output} />;
 };
 
 export const ContextCacheUsage = () => {
+  const { t } = useTranslation();
   const { usage } = useContextValue();
-  return <><UsageRow label="缓存读取" value={usage?.cacheRead} /><UsageRow label="缓存写入" value={usage?.cacheWrite} /></>;
+  return <><UsageRow label={t('context.cacheRead')} value={usage?.cacheRead} /><UsageRow label={t('context.cacheWrite')} value={usage?.cacheWrite} /></>;
 };

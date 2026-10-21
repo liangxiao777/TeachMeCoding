@@ -186,6 +186,7 @@ test('model search separates queries from selection and fits one card in both th
     expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
     await page.screenshot({ path: `.amp/in/artifacts/model-settings-a-search-${device}-${info.project.name}.png`, animations: 'disabled' });
     await search.press('Escape');
+    await expect(popup).toHaveCount(0);
     await expect(picker).toHaveText('Swift Chat'); await expect(save).toBeEnabled();
   }
   await save.click(); await expect(save).toBeDisabled();
@@ -238,7 +239,7 @@ test('filtering a long model catalog reveals the first match without selecting i
 });
 
 test('rejected ChatGPT credentials show reconnection instead of configured, and login clears the issue', async ({ page }, info) => {
-  const issue = 'ChatGPT 登录已失效，请在应用设置中重新登录。';
+  const issue = { code: 'MODEL_OAUTH_REAUTH_REQUIRED', params: { provider: 'ChatGPT' } } as const;
   const settings: ModelSettings = {
     selection: { provider: 'openai', model: 'gpt-6.1-sol', thinkingLevel: 'high' }, ready: false, issue,
     providers: [{ id: 'openai', name: 'OpenAI', models: 1, stored: 'oauth', configured: { type: 'oauth', source: 'OAuth' }, issue,
@@ -262,13 +263,13 @@ test('rejected ChatGPT credentials show reconnection instead of configured, and 
   await page.goto('/');
   await page.getByRole('button', { name: '应用设置', exact: true }).click();
   const panel = page.getByRole('tabpanel', { name: '模型配置', exact: true });
-  await expect(panel.getByText(issue, { exact: true })).toBeVisible();
+  await expect(panel.getByText('ChatGPT 登录已失效，请在应用设置中重新登录。', { exact: true })).toBeVisible();
   await expect(panel.getByText('需要重新登录', { exact: true })).toBeVisible();
   await expect(panel.getByText('已配置 · OAuth', { exact: true })).toHaveCount(0);
   await panel.screenshot({ path: `.amp/in/artifacts/oauth-settings-rejected-${info.project.name}.png`, animations: 'disabled' });
   await panel.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
   await expect(panel.getByText('需要重新登录', { exact: true })).toHaveCount(0);
-  await expect(panel.getByText(issue, { exact: true })).toHaveCount(0);
+  await expect(panel.getByText('ChatGPT 登录已失效，请在应用设置中重新登录。', { exact: true })).toHaveCount(0);
   await expect(panel.getByText('已配置 · OAuth', { exact: true })).toBeVisible();
   await panel.screenshot({ path: `.amp/in/artifacts/oauth-settings-recovered-${info.project.name}.png`, animations: 'disabled' });
 });
@@ -302,7 +303,7 @@ test('settings cancellation waits for its terminal state and credential removal 
       methods.push(`${method} logout`);
       if (method !== 'POST') return route.fulfill({ status: 405, json: { error: 'POST required' } });
       settings.providers[0]!.stored = null; settings.providers[0]!.configured = null;
-      settings.ready = false; settings.issue = '尚未配置凭据。';
+      settings.ready = false; settings.issue = { code: 'MODEL_CREDENTIALS_MISSING' };
       return json(settings);
     }
     return route.fulfill({ status: 404, json: { error: 'Unexpected settings request' } });
@@ -394,7 +395,7 @@ for (const exit of ['category', 'back', 'late-response'] as const) {
     let started = false, cancelled = false, polls = 0;
     const wait = new Promise<void>((resolve) => { release = resolve; });
     const settings: ModelSettings = {
-      selection: { provider: 'synthetic', model: 'fixture-v1', thinkingLevel: 'high' }, ready: false, issue: '尚未配置凭据。',
+      selection: { provider: 'synthetic', model: 'fixture-v1', thinkingLevel: 'high' }, ready: false, issue: { code: 'MODEL_CREDENTIALS_MISSING' },
       providers: [{ id: 'synthetic', name: 'Synthetic Provider', models: 1, stored: null, configured: null, auth: { apiKey: { name: 'Fixture key', login: true } } }],
     };
     const login: LoginSession = { id: '00000000-0000-4000-8000-000000000011', providerId: 'synthetic', type: 'api_key', state: 'running', events: [], error: null,

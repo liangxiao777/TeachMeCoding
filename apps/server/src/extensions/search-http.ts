@@ -22,10 +22,10 @@ const snippetResponse = z.object({ results: z.array(z.object({ ...row, snippet: 
 const parallelResponse = z.object({ results: z.array(z.object({ ...row, excerpts: z.array(z.string()).nullish() })) });
 const minimaxResponse = z.object({ organic: z.array(z.object({ title: row.title, link: z.string(), snippet: z.string().nullish() })) });
 
-class HttpSearchError extends BusinessError {
-  constructor(message: string) { super(503, message); }
+export class HttpSearchError extends BusinessError {
+  constructor(readonly kind: 'auth' | 'rate-limit' | 'unavailable' | 'invalid' = 'invalid') { super(503, { code: 'SEARCH_RESULTS_UNAVAILABLE' }); }
 }
-function invalid(): never { throw new HttpSearchError('无法取得有效搜索结果，请检查网络或稍后重试。'); }
+function invalid(): never { throw new HttpSearchError(); }
 function object(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
 }
@@ -94,9 +94,7 @@ async function responseText(url: URL, headers: Record<string, string>, body: unk
       body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error', signal }), signal, (late) => cancelBody(late.body));
     signal.throwIfAborted();
     if (response.redirected || !response.ok || html && response.status === 202) {
-      const reason = response.status === 401 || response.status === 403 ? '认证失败，请检查 API Key。'
-        : response.status === 429 ? '请求受限，请检查服务额度或稍后重试。' : '暂时不可用，请稍后重试。';
-      throw new HttpSearchError(reason);
+      throw new HttpSearchError(response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate-limit' : 'unavailable');
     }
     if (!response.body) invalid();
     const reader = response.body.getReader(), chunks: Uint8Array[] = [];
@@ -269,7 +267,7 @@ export async function runHttpSearch(provider: HttpProvider, apiKey: string | und
   try {
     signal.throwIfAborted();
     if (provider !== 'duckduckgo' && provider !== 'firecrawl-free' && !apiKey) {
-      throw new HttpSearchError('认证失败，请检查 API Key。');
+      throw new HttpSearchError('auth');
     }
     if (['gemini', 'grok', 'kimi'].includes(provider) && configuration.model !== undefined
       && !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(configuration.model)) invalid();
@@ -338,7 +336,7 @@ export async function runHttpSearch(provider: HttpProvider, apiKey: string | und
     signal.throwIfAborted(); return result;
   } catch (error) {
     // No upstream bodies, schema values, credentials, model output or transport diagnostics in errors.
-    if (signal.aborted) throw new BusinessError(503, signal.reason?.name === 'TimeoutError' ? '搜索请求超时，请重试。' : '搜索请求已取消。');
+    if (signal.aborted) throw new BusinessError(503, { code: signal.reason?.name === 'TimeoutError' ? 'SEARCH_TIMEOUT' : 'SEARCH_CANCELLED' });
     if (error instanceof HttpSearchError) throw error;
     return invalid();
   }

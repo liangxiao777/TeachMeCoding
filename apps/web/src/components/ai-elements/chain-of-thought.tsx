@@ -15,6 +15,7 @@ import type { LucideIcon } from "lucide-react";
 import { BrainIcon, ChevronDownIcon, DotIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { createContext, memo, useContext, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ChainOfThoughtContextValue {
   isOpen: boolean;
@@ -77,6 +78,7 @@ export type ChainOfThoughtHeaderProps = ComponentProps<
 
 export const ChainOfThoughtHeader = memo(
   ({ className, children, ...props }: ChainOfThoughtHeaderProps) => {
+    const { t } = useTranslation();
     const { isOpen, setIsOpen } = useChainOfThought();
 
     return (
@@ -90,7 +92,7 @@ export const ChainOfThoughtHeader = memo(
         >
           <BrainIcon className="size-4" />
           <span className="flex-1 text-left">
-            {children ?? "Chain of Thought"}
+            {children ?? t('chat.reasoning')}
           </span>
           <ChevronDownIcon
             className={cn(

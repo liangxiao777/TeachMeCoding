@@ -148,7 +148,7 @@ test('independent lesson tasks are idempotent, preserve old versions and reject 
     const key = randomUUID(), task = runtime.generate(space.id, unit, key, { kind: 'lesson', revision: 1 });
     assert.equal(runtime.generate(space.id, unit, key, { kind: 'lesson', revision: 1 }).id, task.id);
     assert.equal(task.sessionId, null);
-    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1 }), /已有/);
+    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1 }), { message: 'UNIT_TASK_RUNNING' });
     await runtime.idle(task.id);
     assert.equal(runtime.get(space.id, task.id).state, 'succeeded');
     assert.deepEqual(l.unit(space.id, unit).lesson, { ...legacy, revision: 1 }, 'Regeneration keeps the applied version readable until explicit acceptance.');
@@ -188,7 +188,7 @@ test('unit order crosses stage boundaries and advances only after successful les
   const runtime = new TeachingRuntime(l, syntheticSource, { stream: (_m, context) => {
     if (context.messages.at(-1)?.role !== 'toolResult') return response(reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments: { title: 'Lesson', content: 'Published only after normal completion.' } }], 'toolUse'));
     if (!l.unit(space, first).lesson) {
-      assert.throws(() => runtime.generate(space, second, randomUUID(), { kind: 'lesson', revision: 0 }), /尚未解锁/);
+      assert.throws(() => runtime.generate(space, second, randomUUID(), { kind: 'lesson', revision: 0 }), { message: 'UNIT_LOCKED' });
     }
     if (mode === 'stop') runtime.stop(space, taskId);
     return response(reply([{ type: 'text', text: 'done' }], mode === 'error' ? 'error' : 'stop'));
@@ -196,14 +196,14 @@ test('unit order crosses stage boundaries and advances only after successful les
   try {
     assert.doesNotThrow(() => l.assertUnitUnlocked(space, units[3]!.id), 'Published later lessons remain accessible across earlier gaps.');
     for (const unit of units.slice(1).filter((unit) => unit.id !== units[3]!.id)) {
-      assert.throws(() => runtime.generate(space, unit.id, randomUUID(), { kind: 'lesson', revision: l.unit(space, unit.id).lesson?.revision ?? 0 }), /尚未解锁/);
+      assert.throws(() => runtime.generate(space, unit.id, randomUUID(), { kind: 'lesson', revision: l.unit(space, unit.id).lesson?.revision ?? 0 }), { message: 'UNIT_LOCKED' });
     }
     for (mode of ['error', 'stop']) {
       const task = runtime.generate(space, first, randomUUID(), { kind: 'lesson', revision: 0 }); taskId = task.id;
       await runtime.idle(task.id);
       assert.equal(runtime.get(space, task.id).state, mode === 'stop' ? 'interrupted' : 'failed');
       assert.equal(l.unit(space, first).lesson, null);
-      assert.throws(() => runtime.generate(space, second, randomUUID(), { kind: 'lesson', revision: 0 }), /尚未解锁/);
+      assert.throws(() => runtime.generate(space, second, randomUUID(), { kind: 'lesson', revision: 0 }), { message: 'UNIT_LOCKED' });
     }
     mode = 'good';
     for (const unit of units.slice(0, 3)) {
@@ -211,7 +211,7 @@ test('unit order crosses stage boundaries and advances only after successful les
       await runtime.idle(task.id);
       assert.equal(runtime.get(space, task.id).state, 'succeeded');
       assert.equal(l.unit(space, unit.id).records.length, 0, 'Assessments are not an unlock requirement.');
-      if (unit.id !== units[2]!.id) assert.throws(() => runtime.generate(space, units[4]!.id, randomUUID(), { kind: 'lesson', revision: 0 }), /尚未解锁/);
+      if (unit.id !== units[2]!.id) assert.throws(() => runtime.generate(space, units[4]!.id, randomUUID(), { kind: 'lesson', revision: 0 }), { message: 'UNIT_LOCKED' });
     }
     const last = runtime.generate(space, units[4]!.id, randomUUID(), { kind: 'lesson', revision: 0 });
     await runtime.idle(last.id); assert.equal(runtime.get(space, last.id).state, 'succeeded');
@@ -225,9 +225,9 @@ test('submitting to an empty locked tutor session cannot make its own input coun
   try {
     const session = learning.createSession(space.id, { scope: 'unit', unitId: unit, title: 'Locked tutor' });
     assert.equal(learning.unit(space.id, unit).started, false);
-    assert.throws(() => learning.assertUnitUnlocked(space.id, unit), /尚未解锁/);
+    assert.throws(() => learning.assertUnitUnlocked(space.id, unit), { message: 'UNIT_LOCKED' });
     const before = learning.space(space.id);
-    assert.throws(() => runtime.submit(space.id, session.id, randomUUID(), { text: 'Skip ahead', quote: null, draftRevision: 0 }), /尚未解锁/);
+    assert.throws(() => runtime.submit(space.id, session.id, randomUUID(), { text: 'Skip ahead', quote: null, draftRevision: 0 }), { message: 'UNIT_LOCKED' });
     assert.deepEqual(learning.session(space.id, session.id), session);
     assert.deepEqual(learning.space(space.id), before);
     assert.equal(learning.unit(space.id, unit).started, false);
@@ -282,7 +282,7 @@ test('lesson tools expose plan order and real progress, and read complete fixed-
       const forbidden = context.messages.filter((m) => m.role === 'toolResult' && m.toolCallId.startsWith('forbidden-'));
       assert.equal(forbidden.length, 4); assert.ok(forbidden.every((m) => m.role === 'toolResult' && m.isError));
       assert.doesNotMatch(JSON.stringify(forbidden), /CURRENT-BODY|FUTURE-BODY|OTHER-SPACE-BODY/);
-      assert.ok(forbidden.every((m) => /不在本次可读取的参考课件/.test(JSON.stringify(m.content))));
+      assert.ok(forbidden.every((m) => m.role === 'toolResult' && textOf(m.content) === 'LESSON_REFERENCE_UNAVAILABLE'));
       return call('read_reference_lesson', { unitId: future.id });
     }
     if (requests === 4) {
@@ -307,7 +307,7 @@ test('lesson tools expose plan order and real progress, and read complete fixed-
     const task = runtime.generate(a.space.id, current.id, randomUUID(), { kind: 'lesson', revision: 1 });
     await runtime.idle(task.id);
     assert.equal(requests, 7); assert.equal(runtime.get(a.space.id, task.id).state, 'failed');
-    assert.match(runtime.get(a.space.id, task.id).error!, /参考课件已改变/);
+    assert.deepEqual(runtime.get(a.space.id, task.id).error, { code: 'LESSON_REFERENCES_CHANGED' });
     assert.equal(l.unit(a.space.id, current.id).lesson!.content, 'CURRENT-BODY');
     const manifest = JSON.parse((db.prepare('SELECT value FROM task_manifests WHERE run_id=? ORDER BY request DESC LIMIT 1').get(task.id) as { value: string }).value);
     const sources = manifest.toolSources.flatMap((tool: { sources: unknown[] }) => tool.sources);
@@ -393,7 +393,7 @@ test('lesson retries reject changed baselines, missing snapshots and unavailable
         await runtime.idle(retry.id); assert.equal(runtime.get(space.id, retry.id).state, 'succeeded');
         assert.equal(l.unit(space.id, units[1]!.id).lesson!.content, 'No mandatory read-count gate.');
       } else {
-        assert.throws(() => runtime.retryTask(space.id, task.id, randomUUID()), change === 'locked' ? /尚未解锁/ : change === 'snapshot' ? /没有固定参考资料/ : change === 'history' ? /不会改用最新版/ : change === 'reference' ? /参考课件已改变/ : /内容已改变/);
+        assert.throws(() => runtime.retryTask(space.id, task.id, randomUUID()), { message: change === 'locked' ? 'UNIT_LOCKED' : change === 'snapshot' ? 'LESSON_RETRY_REFERENCES_MISSING' : change === 'history' ? 'LESSON_VERSION_UNAVAILABLE' : change === 'reference' ? 'LESSON_REFERENCES_CHANGED' : 'CONTENT_CHANGED' });
         assert.equal(l.space(space.id).tasks.length, count, change);
         if (change !== 'locked' && change !== 'history') {
           const fresh = runtime.generate(space.id, units[1]!.id, randomUUID(), { kind: 'lesson', revision: l.unit(space.id, units[1]!.id).lesson?.revision ?? 0 });
@@ -434,7 +434,7 @@ test('only same-space adopted valid conclusions enter new sessions; revoke and s
     assert.doesNotThrow(() => l.assertUnitUnlocked(a.space.id, a.units[1]!.id));
     await ask(a.space.id, a.units[1]!.id, 'after insertion'); assert.match(saw, /ADOPTED-ARGUMENT-FACT/); assert.ok(!saw.includes('private-chat-marker'));
     await ask(b.space.id, b.units[0]!.id, 'next'); assert.ok(!saw.includes('ADOPTED-ARGUMENT-FACT'));
-    assert.throws(() => l.decideConclusion(b.space.id, c.id, { revision: 1, adopted: false }), /不存在/);
+    assert.throws(() => l.decideConclusion(b.space.id, c.id, { revision: 1, adopted: false }), { message: 'CONCLUSION_NOT_FOUND' });
     l.decideConclusion(a.space.id, c.id, { revision: 1, adopted: false });
     await ask(a.space.id, a.units[1]!.id, 'next'); assert.ok(!saw.includes('ADOPTED-ARGUMENT-FACT'));
     l.decideConclusion(a.space.id, c.id, { revision: 2, adopted: true });

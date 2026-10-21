@@ -24,8 +24,8 @@ test('lesson regeneration inherits only its explicit originating conversation ap
   const runtime = new TeachingRuntime(learning, syntheticSource, { stream: (_m, context) => response(context.messages.at(-1)?.role === 'toolResult'
     ? reply([]) : reply([{ type: 'toolCall', id: 'lesson', name: 'submit_lesson', arguments: changed }], 'toolUse')) });
   try {
-    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: wrong }), /发起会话的单元/);
-    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: space.sessions[0]!.id }), /发起会话的单元/);
+    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: wrong }), { message: 'LESSON_TASK_SESSION_MISMATCH' });
+    assert.throws(() => runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1, sessionId: space.sessions[0]!.id }), { message: 'LESSON_TASK_SESSION_MISMATCH' });
     const manual = runtime.generate(space.id, unit, randomUUID(), { kind: 'lesson', revision: 1 });
     await runtime.idle(manual.id); assert.equal(runtime.get(space.id, manual.id).state, 'succeeded');
     const pending = learning.space(space.id).lessonProposals.at(-1)!;
@@ -107,7 +107,7 @@ test('acceptance is atomic, idempotent, isolated and available over HTTP without
     const before = learning.unit(space.id, unit), workspace = learning.space(space.id);
     const histories = ['assessment_specs', 'assessment_versions', 'assessment_drafts', 'assessments', 'messages', 'conclusions', 'action_proposals']
       .map((table) => ({ table, rows: db.prepare(`SELECT * FROM ${table}`).all() }));
-    assert.throws(() => learning.saveLesson(space.id, unit, changed), /明确接受/);
+    assert.throws(() => learning.saveLesson(space.id, unit, changed), { message: 'LESSON_OVERWRITE_REQUIRES_PROPOSAL' });
     assert.equal((await post(other.space.id, p.id, 'apply', {})).status, 404);
     assert.equal((await post(space.id, p.id, 'apply', { unitId: units[1]!.id })).status, 400);
     db.exec("CREATE TRIGGER fail_version BEFORE INSERT ON lesson_versions BEGIN SELECT RAISE(ABORT, 'injected lesson version failure'); END");
@@ -150,10 +150,10 @@ test('publication checks source ownership and frozen revisions; stale proposals 
       const before = learning.unit(space.id, unit), workspace = learning.space(space.id);
       if (change === 'unread') assert.equal(learning.applyLessonProposal(space.id, p.id).unit.lesson!.revision, 2);
       else {
-        assert.throws(() => learning.applyLessonProposal(space.id, p.id), /改变|不一致/);
+        assert.throws(() => learning.applyLessonProposal(space.id, p.id), { message: change === 'source' ? 'LESSON_PROPOSAL_SOURCE_MISMATCH' : change === 'reference' ? 'LESSON_REFERENCES_CHANGED' : 'CONTENT_CHANGED' });
         assert.deepEqual(learning.unit(space.id, unit), before); assert.deepEqual(learning.space(space.id), workspace);
         learning.rejectLessonProposal(space.id, p.id, {}); learning.rejectLessonProposal(space.id, p.id, {});
-        assert.throws(() => learning.applyLessonProposal(space.id, p.id), /已经结束/);
+        assert.throws(() => learning.applyLessonProposal(space.id, p.id), { message: 'LESSON_PROPOSAL_CANNOT_APPLY' });
       }
     } finally { db.close(); }
   }
@@ -163,15 +163,15 @@ test('publication checks source ownership and frozen revisions; stale proposals 
     const p = stageLesson(learning, space.id, units[0]!.id, changed)!;
     learning.rejectLessonProposal(space.id, p.id, {});
     const base = { requirement: p.requirementRevision, route: p.routeRevision, lesson: 1 };
-    assert.throws(() => learning.proposeLesson(space.id, units[1]!.id, changed, base, p.source), /不一致/);
-    assert.throws(() => learning.proposeLesson(space.id, units[0]!.id, changed, base, p.source, [], space.sessions[0]!.id), /所属单元/);
+    assert.throws(() => learning.proposeLesson(space.id, units[1]!.id, changed, base, p.source), { message: 'LESSON_PROPOSAL_SOURCE_MISMATCH' });
+    assert.throws(() => learning.proposeLesson(space.id, units[0]!.id, changed, base, p.source, [], space.sessions[0]!.id), { message: 'LESSON_PROPOSAL_UNIT_MISMATCH' });
     learning.saveLesson(other.space.id, other.units[0]!.id, original);
-    assert.throws(() => learning.proposeLesson(other.space.id, other.units[0]!.id, changed, base, p.source), /不存在/);
+    assert.throws(() => learning.proposeLesson(other.space.id, other.units[0]!.id, changed, base, p.source), { message: 'LEARNING_RECORD_NOT_FOUND' });
     const input = JSON.parse((db.prepare('SELECT input FROM task_runs WHERE id=?').get(p.source.id) as { input: string }).input) as FrozenContext;
     const task = createTask(learning, input, p.source.id);
     await task.tools.find((t) => t.name === 'submit_lesson')!.execute('candidate', changed);
     learning.saveRequirement(space.id, { ...space.requirement, confirmed: true });
-    assert.throws(() => task.commit(), /内容已改变/);
+    assert.throws(() => task.commit(), { message: 'CONTENT_CHANGED' });
     assert.equal(learning.space(space.id).lessonProposals.filter((p) => p.state === 'pending').length, 0);
   } finally { db.close(); }
 });
@@ -191,18 +191,19 @@ test('route and lesson review mutually gate sessions, generation, independent re
       const active = runtime.generate(space.id, next, randomUUID(), { kind: 'lesson', revision: 0 });
       const pending = kind === 'route' ? learning.proposeRoute(space.id, routeSession, space.route.content) : stageLesson(learning, space.id, unit, changed)!;
       const before = learning.space(space.id), draft = learning.session(space.id, session.id).draft;
+      const code = kind === 'route' ? 'ROUTE_PROPOSAL_PENDING' : 'LESSON_PROPOSAL_PENDING';
       for (const task of [{ kind: 'lesson', revision: 1 }, { kind: 'assessment', revision: 0 }, { kind: 'evaluation', revision: 0, specRevision: 1, q1: 'Answer', q2: '' }]) {
-        assert.throws(() => runtime.generate(space.id, unit, randomUUID(), task), /先接受或拒绝/);
+        assert.throws(() => runtime.generate(space.id, unit, randomUUID(), task), { message: code });
       }
-      assert.throws(() => runtime.retryTask(space.id, failed.id, randomUUID()), /先接受或拒绝/);
-      assert.throws(() => runtime.retry(space.id, chat.run.id, randomUUID()), /先接受或拒绝/);
-      assert.throws(() => runtime.submit(space.id, session.id, randomUUID(), { text: 'Blocked', quote: null, draftRevision: draft.revision }), /先接受或拒绝/);
-      assert.throws(() => learning.addMessage(space.id, session.id, { text: 'Blocked', quote: null, draftRevision: draft.revision }), /先接受或拒绝/);
-      assert.throws(() => learning.saveLesson(space.id, next, changed), /先接受或拒绝/);
-      assert.throws(() => kind === 'route' ? stageLesson(learning, space.id, unit, changed) : learning.proposeRoute(space.id, routeSession, space.route.content), /先接受或拒绝/);
+      assert.throws(() => runtime.retryTask(space.id, failed.id, randomUUID()), { message: code });
+      assert.throws(() => runtime.retry(space.id, chat.run.id, randomUUID()), { message: code });
+      assert.throws(() => runtime.submit(space.id, session.id, randomUUID(), { text: 'Blocked', quote: null, draftRevision: draft.revision }), { message: code });
+      assert.throws(() => learning.addMessage(space.id, session.id, { text: 'Blocked', quote: null, draftRevision: draft.revision }), { message: code });
+      assert.throws(() => learning.saveLesson(space.id, next, changed), { message: code });
+      assert.throws(() => kind === 'route' ? stageLesson(learning, space.id, unit, changed) : learning.proposeRoute(space.id, routeSession, space.route.content), { message: code });
       assert.deepEqual(learning.space(space.id), before); assert.deepEqual(learning.session(space.id, session.id).draft, draft);
       await runtime.idle(active.id); assert.equal(runtime.get(space.id, active.id).state, 'failed');
-      assert.match(runtime.get(space.id, active.id).error!, /先接受或拒绝/); assert.equal(learning.unit(space.id, next).lesson, null);
+      assert.deepEqual(runtime.get(space.id, active.id).error, { code }); assert.equal(learning.unit(space.id, next).lesson, null);
       if (kind === 'route') learning.rejectProposal(space.id, pending.id, {});
       else learning.rejectLessonProposal(space.id, pending.id, {});
       const retry = runtime.retryTask(space.id, failed.id, randomUUID()); await runtime.idle(retry.id);
@@ -232,13 +233,13 @@ test('lesson rejection feedback follows the saved owner session from CURRENT app
     assert.equal(decision.session.id, a.sessionId); assert.equal(decision.followupError, null); assert.deepEqual(decision.session.draft, saved.draft);
     assert.equal(runtime.rejectLessonProposal(space.id, a.id, key, { feedback }).run!.id, decision.run.id);
     assert.equal(runtime.rejectLessonProposal(space.id, a.id, randomUUID(), { feedback }).run, null);
-    await runtime.idle(decision.run.id); assert.equal(runtime.get(space.id, decision.run.id).state, 'succeeded', runtime.get(space.id, decision.run.id).error ?? '');
+    await runtime.idle(decision.run.id); assert.equal(runtime.get(space.id, decision.run.id).state, 'succeeded', JSON.stringify(runtime.get(space.id, decision.run.id).error));
     const b = learning.space(space.id).lessonProposals.at(-1)!;
     assert.equal(b.baseRevision, 1); assert.deepEqual(b.content, changed); assert.deepEqual(b.source, { kind: 'run', id: decision.run.id });
     assert.deepEqual(learning.unit(space.id, unit).lesson, { ...original, revision: 1 });
     assert.equal(learning.session(space.id, a.sessionId).messages.filter((m) => m.role === 'user' && m.text === feedback).length, 1);
-    assert.throws(() => learning.applyLessonProposal(space.id, a.id), /已经结束/);
-    assert.throws(() => runtime.rejectLessonProposal(space.id, a.id, randomUUID(), { feedback: 'Reverse decision' }), /已经结束/);
+    assert.throws(() => learning.applyLessonProposal(space.id, a.id), { message: 'LESSON_PROPOSAL_CANNOT_APPLY' });
+    assert.throws(() => runtime.rejectLessonProposal(space.id, a.id, randomUUID(), { feedback: 'Reverse decision' }), { message: 'LESSON_PROPOSAL_CANNOT_DECIDE' });
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -260,7 +261,7 @@ test('offline or failed follow-up start still saves rejection and feedback exact
       assert.equal(decision.run, null); assert.equal(decision.session.id, owner.id); assert.deepEqual(decision.session.draft, saved.draft);
       assert.equal(decision.workspace.lessonProposals[0].state, 'rejected'); assert.equal(decision.workspace.lessonProposals[0].feedback, feedback.trim());
       if (mode === 'blank') { assert.equal(decision.followupError, null); assert.equal(decision.session.messages.length, 0); }
-      else { assert.match(decision.followupError, /已拒绝提案并保存修改意见/); assert.deepEqual(decision.session.messages.map((m: { role: string; text: string }) => [m.role, m.text]), [['user', feedback]]); }
+      else { assert.deepEqual(decision.followupError, { code: mode === 'offline' ? 'MODEL_UNAVAILABLE' : 'FOLLOWUP_START_FAILED' }); assert.deepEqual(decision.session.messages.map((m: { role: string; text: string }) => [m.role, m.text]), [['user', feedback]]); }
       assert.equal((await post({ feedback })).status, 200); assert.equal((await post({ feedback }, randomUUID())).status, 200);
       assert.equal((await post({ feedback: 'Different opinion' }, randomUUID())).status, 409);
       assert.deepEqual(learning.session(space.id, owner.id).draft, saved.draft); assert.equal(learning.space(space.id).runs.length, 0);
@@ -299,7 +300,7 @@ test('historical passes retain access and saved work but never become current ev
     assert.deepEqual(learning.progress(space.id).find((u) => u.id === unit)!.historicalPass, current.historicalPass);
     assert.deepEqual(current.draft, before.draft); assert.deepEqual(current.assessment, before.assessment);
     assert.doesNotThrow(() => learning.assertUnitUnlocked(space.id, units[1]!.id));
-    assert.throws(() => a.submit(space.id, unit, { kind: 'evaluation', revision: 1, specRevision: 1, q1: 'New answer', q2: '' }), /内容已改变/);
+    assert.throws(() => a.submit(space.id, unit, { kind: 'evaluation', revision: 1, specRevision: 1, q1: 'New answer', q2: '' }), { message: 'CONTENT_CHANGED' });
     const { run } = runtime.submit(space.id, owner.id, randomUUID(), { text: 'Continue from current lesson', quote: null, draftRevision: 0 });
     await runtime.idle(run.id); assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
     const input = JSON.parse((db.prepare('SELECT input FROM agent_runs WHERE id=?').get(run.id) as { input: string }).input) as FrozenContext;

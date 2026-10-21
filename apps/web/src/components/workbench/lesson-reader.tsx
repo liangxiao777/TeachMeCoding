@@ -13,6 +13,7 @@ import {
   Target,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import { lessonMarkdown, type LessonProposal } from '@teach-me-coding/contracts'
 import { toString } from 'mdast-util-to-string'
 import type { PluggableList } from 'unified'
@@ -41,6 +42,7 @@ const lessonHighlighter = createHighlighterCore({
 })
 
 function CodeBlock({ block, readOnly = false }: { block: Extract<LessonBlock, { type: 'code' }>; readOnly?: boolean }) {
+  const { t } = useTranslation('workbench')
   const { bringToIde, persistence } = useApp()
   const [copied, setCopied] = useState(false)
   const [highlighted, setHighlighted] = useState<{ code: string; language: string; html: string } | null>(null)
@@ -80,11 +82,11 @@ function CodeBlock({ block, readOnly = false }: { block: Extract<LessonBlock, { 
             }}
           >
             {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
-            {copied ? '已复制' : '复制'}
+            {copied ? t('controls.copied') : t('controls.copy')}
           </Button>
           <Button size="xs" disabled={readOnly || (persistence && (!persistence.ready || persistence.busy))} onClick={() => { if (!readOnly) bringToIde(block.code, block.file) }}>
             <SquareTerminal data-icon="inline-start" />
-            带入 IDE
+            {t('controls.bringToIde')}
           </Button>
         </div>
       </div>
@@ -98,16 +100,17 @@ function CodeBlock({ block, readOnly = false }: { block: Extract<LessonBlock, { 
 }
 
 function Practice({ question, children, onAsk, readOnly = false }: { question: string; children?: ReactNode; onAsk?: () => void; readOnly?: boolean }) {
+  const { t } = useTranslation(['workbench', 'common'])
   const space = useSpace()
   const { setQuote, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
   return (
-    <section aria-label="动手试试" className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
+    <section aria-label={t('lesson.practice')} className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
       <header className="flex items-center justify-between gap-3">
-        <p className="flex items-center gap-2 text-sm font-medium"><Target className="size-4 text-primary" aria-hidden />动手试试</p>
+        <p className="flex items-center gap-2 text-sm font-medium"><Target className="size-4 text-primary" aria-hidden />{t('lesson.practice')}</p>
         <Button variant="outline" size="xs" disabled={readOnly || !question.trim() || (persistence && (!persistence.ready || persistence.busy))}
-          onClick={() => { if (readOnly) return; setQuote({ source: 'lesson', label: `${unit?.title ?? '课件'} · 练习`, text: question }); onAsk?.() }}>
-          <MessageSquareQuote data-icon="inline-start" />就此提问
+          onClick={() => { if (readOnly) return; setQuote({ source: 'lesson', label: t('common:quotes.practice', { title: unit?.title ?? t('common:quotes.lessonFallback') }), caption: { kind: 'practice', name: unit?.title ?? '' }, text: question }); onAsk?.() }}>
+          <MessageSquareQuote data-icon="inline-start" />{t('controls.ask')}
         </Button>
       </header>
       <div className="min-w-0 space-y-3">{children}</div>
@@ -119,6 +122,7 @@ type TeachingProps = ExtraProps & { children?: ReactNode }
 function LessonText({ text, enhanced = false, inDrawer = false, onAsk, readOnly = false, scope, diffPlugins }: {
   text: string; enhanced?: boolean; inDrawer?: boolean; onAsk?: () => void; readOnly?: boolean; scope?: string; diffPlugins?: PluggableList
 }) {
+  const { t } = useTranslation('workbench')
   return <RichText key={`${scope ?? 'normal'}:${inDrawer}:${readOnly}`} text={text} renderMermaid={enhanced}
     remarkPlugins={enhanced ? [...lessonRemarkPlugins, ...(scope ? [[scopedLessonHeadings, { scope, inDrawer }]] as PluggableList : []), ...(diffPlugins ?? [])] : undefined}
     allowedTags={enhanced ? { ...lessonAllowedTags, ...lessonDiffAllowedTags } : undefined}
@@ -130,29 +134,29 @@ function LessonText({ text, enhanced = false, inDrawer = false, onAsk, readOnly 
         const change = String(node?.properties.change)
         return <section data-change={change} data-side={node?.properties.side} className={cn('min-w-0 space-y-3 rounded-lg px-4 py-3',
           change === 'removed' ? 'border-l-4 border-red-500 bg-red-500/10' : change === 'added' ? 'border-l-4 border-green-500 bg-green-500/10' : 'px-0')}>
-          {change !== 'unchanged' && <p className={cn('text-xs font-medium', change === 'removed' ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300')}>{change === 'removed' ? '− 删除 · 原课件' : '+ 新增 · 提议课件'}</p>}
+          {change !== 'unchanged' && <p className={cn('text-xs font-medium', change === 'removed' ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300')}>{change === 'removed' ? t('lesson.removed') : t('lesson.added')}</p>}
           {children}
         </section>
       },
       'lesson-change-note': ({ node, children }: TeachingProps) => <aside data-testid="lesson-change-note" className="space-y-2 rounded-md border bg-background/70 px-3 py-2 text-xs leading-relaxed text-muted-foreground [&_code]:break-all [&_code]:whitespace-pre-wrap">
-        <p className="font-medium text-foreground">{String(node?.properties.label ?? '变化说明')}</p>
+        <p className="font-medium text-foreground">{String(node?.properties.label ?? t('lesson.changeNote'))}</p>
         {children}
       </aside>,
       'lesson-callout': ({ node, children }: TeachingProps) => {
         const warning = node?.properties.kind === 'warning'
         return <Alert className={warning ? 'border-accent-foreground/25 bg-accent/50' : 'border-primary/25 bg-primary/5'}>
           {warning ? <AlertTriangle className="text-accent-foreground" /> : <Lightbulb className="text-primary" />}
-          <AlertTitle>{warning ? '注意' : '提示'}</AlertTitle>
+          <AlertTitle>{warning ? t('lesson.warning') : t('lesson.tip')}</AlertTitle>
           <AlertDescription className="min-w-0 space-y-3 leading-relaxed">{children}</AlertDescription>
         </Alert>
       },
       'lesson-practice': ({ node, children }: TeachingProps) => <Practice question={String(node?.properties.question ?? '')} onAsk={onAsk} readOnly={readOnly}>{children}</Practice>,
       'lesson-hint': ({ children }: TeachingProps) => <details open={readOnly || undefined} className="rounded-lg border bg-muted/30 px-4 py-3">
-        <summary className="cursor-pointer text-sm font-medium">查看提示</summary>
+        <summary className="cursor-pointer text-sm font-medium">{t('lesson.hint')}</summary>
         <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
       </details>,
       'lesson-solution': ({ children }: TeachingProps) => <details open={readOnly || undefined} className="rounded-lg border bg-muted/30 px-4 py-3">
-        <summary className="cursor-pointer text-sm font-medium">参考讲解</summary>
+        <summary className="cursor-pointer text-sm font-medium">{t('lesson.solution')}</summary>
         <div className="mt-3 min-w-0 space-y-3 text-sm leading-relaxed">{children}</div>
       </details>,
     } : undefined}
@@ -164,6 +168,7 @@ function LessonText({ text, enhanced = false, inDrawer = false, onAsk, readOnly 
 }
 
 function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposal; inDrawer: boolean }) {
+  const { t } = useTranslation('workbench')
   const before = useMemo(() => lessonMarkdown(proposal.baseLesson), [proposal.baseLesson])
   const after = proposal.content.content
   const diff = useMemo(() => diffLesson(before, after), [before, after])
@@ -177,7 +182,7 @@ function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposa
     })
   }, [before, after, diff, proposal.id, inDrawer])
   const title = (side: 'before' | 'after', changed = false) => <div className={cn('rounded-lg p-4', changed && (side === 'before' ? 'border-l-4 border-red-500 bg-red-500/10' : 'border-l-4 border-green-500 bg-green-500/10'))}>
-    {(changed || diff.fallback) && <p className="mb-2 text-xs text-muted-foreground">{side === 'before' ? '− 原课件标题' : '+ 修改后标题'}</p>}
+    {(changed || diff.fallback) && <p className="mb-2 text-xs text-muted-foreground">{side === 'before' ? t('lesson.beforeTitle') : t('lesson.afterTitle')}</p>}
     <h1 id={`${lessonHeadingId(0, inDrawer, `${proposal.id}-${side}`)}-title`} className="text-balance text-3xl font-semibold tracking-tight" data-testid={`lesson-title-${side}`}>
       {side === 'before' ? proposal.baseLesson.title : proposal.content.title}
     </h1>
@@ -188,13 +193,13 @@ function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposa
   </section>
   return <div className="min-h-0 flex-1 overflow-y-auto" data-testid="lesson-proposal-preview" data-proposal-id={proposal.id} data-location={inDrawer ? 'drawer' : 'main'}>
     <article className="lesson-prose mx-auto flex max-w-3xl flex-col gap-5 px-8 py-8">
-      {headings.length > 0 && <nav aria-label="提案课件目录" data-testid="lesson-preview-toc"><details><summary className="cursor-pointer text-sm">课件目录</summary><ul className="mt-2 space-y-1">
+      {headings.length > 0 && <nav aria-label={t('lesson.proposalContents')} data-testid="lesson-preview-toc"><details><summary className="cursor-pointer text-sm">{t('lesson.contents')}</summary><ul className="mt-2 space-y-1">
         {headings.map((heading) => <li key={heading.id}><a href={`#${heading.id}`} className="text-sm text-muted-foreground hover:text-foreground" onClick={(event) => {
           event.preventDefault(); document.getElementById(heading.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }}>{heading.text}</a></li>)}
       </ul></details></nav>}
       {!diff.fallback && <>{proposal.baseLesson.title !== proposal.content.title ? <>{title('before', true)}{title('after', true)}</> : title('after')}</>}
-      {diff.fallback ? <><p role="status" className="text-sm text-muted-foreground">差异计算达到上限，以下在同一面板依次完整展示原课件和修改后课件，不省略内容。</p>{renderDocument('before')}{renderDocument('after')}</>
+      {diff.fallback ? <><p role="status" className="text-sm text-muted-foreground">{t('lesson.diffFallback')}</p>{renderDocument('before')}{renderDocument('after')}</>
         : <LessonText key="inline-diff" text={after} enhanced readOnly inDrawer={inDrawer} scope={`${proposal.id}-diff`}
           diffPlugins={[[lessonDiffRemark, { diff, proposalId: proposal.id, inDrawer }]]} />}
     </article>
@@ -202,6 +207,7 @@ function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposa
 }
 
 function MoveDiagram() {
+  const { t } = useTranslation('preview')
   const Cell = ({ name, valid }: { name: string; valid: boolean }) => (
     <div
       className={
@@ -211,20 +217,20 @@ function MoveDiagram() {
       }
     >
       <span className="font-mono text-sm">{name}</span>
-      <span className="font-mono text-xs">{valid ? 'ptr · len 5 · cap 5' : '已失效'}</span>
+      <span className="font-mono text-xs">{valid ? t('moveDiagram.valid') : t('moveDiagram.invalid')}</span>
     </div>
   )
   return (
     <figure className="flex flex-col gap-3 rounded-lg border bg-card p-5">
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
         <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">栈 · 执行 let s2 = s1; 之后</p>
+          <p className="text-xs font-medium text-muted-foreground">{t('moveDiagram.stack', { statement: 'let s2 = s1;' })}</p>
           <Cell name="s1" valid={false} />
           <Cell name="s2" valid />
         </div>
         <ArrowUpRight className="size-5 rotate-45 text-primary" aria-hidden />
         <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">堆</p>
+          <p className="text-xs font-medium text-muted-foreground">{t('moveDiagram.heap')}</p>
           <div className="flex gap-1 font-mono text-sm">
             {'hello'.split('').map((c, i) => (
               <span key={i} className="flex size-9 items-center justify-center rounded border bg-muted">
@@ -235,7 +241,7 @@ function MoveDiagram() {
         </div>
       </div>
       <figcaption className="text-xs leading-relaxed text-muted-foreground">
-        只有 s2 指向堆上的数据。s2 离开作用域时释放这块内存，s1 不会再次释放它。
+        {t('moveDiagram.caption')}
       </figcaption>
     </figure>
   )
@@ -296,6 +302,7 @@ function Block({ block }: { block: LessonBlock }) {
 }
 
 export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; onAsk?: () => void }) {
+  const { t } = useTranslation(['workbench', 'common'])
   const space = useSpace()
   const { setQuote, retryGeneration, setView, viewRecord, lesson: getLesson, capabilities, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
@@ -323,11 +330,11 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
   if (!unit) return (
     <Empty>
       <EmptyHeader>
-        <EmptyTitle>单元暂不可用</EmptyTitle>
-        <EmptyDescription>请返回学习路线选择可用单元。</EmptyDescription>
+        <EmptyTitle>{t('lesson.unitUnavailable')}</EmptyTitle>
+        <EmptyDescription>{t('lesson.chooseUnit')}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
-        <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
+        <Button variant="outline" onClick={() => setView('route')}>{t('lesson.backToPath')}</Button>
       </EmptyContent>
     </Empty>
   )
@@ -335,7 +342,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
   const location = (() => {
     for (const [si, st] of space.stages.entries()) {
       const ui = st.units.findIndex((u) => u.id === unit.id)
-      if (ui !== -1) return `阶段 ${si + 1} · ${st.title} · 单元 ${ui + 1}`
+      if (ui !== -1) return t('lesson.location', { stage: si + 1, title: st.title, unit: ui + 1 })
     }
     return ''
   })()
@@ -359,11 +366,11 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
             <h1 className="text-balance text-4xl font-semibold tracking-tight">{lesson?.title ?? unit.title}</h1>
             <StatusPill status={unit.status} />
           </div>
-          {unit.historicalPass && unit.status !== 'passed' && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="lesson-historical-pass">旧版已通过 / {unit.status === 'needs_work' ? '新版测评建议加强' : '新版尚未测评'}。旧版记录仍可查看，可选择继续学习路线或自行测评新版。</p>}
+          {unit.historicalPass && unit.status !== 'passed' && <p className="text-sm leading-relaxed text-muted-foreground" data-testid="lesson-historical-pass">{unit.status === 'needs_work' ? t('lesson.historicalNeedsWork') : t('lesson.historicalUnassessed')}</p>}
           <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
             <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               <Target className="size-3.5" aria-hidden />
-              本单元目标
+              {t('lesson.goals')}
             </p>
             <ul className="flex flex-col gap-1.5">
               {unit.goals.map((g) => (
@@ -377,13 +384,13 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
         </header>
 
         {unit.status === 'needs_work' && unit.lastAdvice && unit.lastAdvice.length > 0 && (
-          <Alert aria-label="测评建议" className="border-accent-foreground/25 bg-accent/50">
+          <Alert aria-label={t('lesson.advice')} className="border-accent-foreground/25 bg-accent/50">
             <RotateCcw className="text-accent-foreground" />
-            <AlertTitle className="text-accent-foreground">上次测评建议加强这些地方</AlertTitle>
+            <AlertTitle className="text-accent-foreground">{t('lesson.lastAdvice')}</AlertTitle>
             {lastRecord && (
               <AlertAction>
                 <Button variant="outline" size="xs" onClick={() => viewRecord(lastRecord.id)}>
-                  查看测评结果
+                  {t('lesson.viewResults')}
                 </Button>
               </AlertAction>
             )}
@@ -396,9 +403,9 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
                       variant="link"
                       size="xs"
                       className="h-auto shrink-0 p-0"
-                      onClick={() => { setQuote({ source: 'advice', label: '测评建议', text: a }); onAsk?.() }}
+                      onClick={() => { setQuote({ source: 'advice', label: t('common:quotes.advice'), caption: { kind: 'advice' }, text: a }); onAsk?.() }}
                     >
-                      就此提问
+                      {t('controls.ask')}
                     </Button>
                   </li>
                 ))}
@@ -410,11 +417,11 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
         {unit.contentState === 'generating' && capabilities.agent && (
           <Generating
             className="py-6"
-            title="正在为你生成课件"
-            steps={persistence ? ['分析单元目标', '生成课件内容', '整理课件内容', '保存课件'] : ['回顾你的学习目标与背景', '参考之前单元的会话与测评', '组织讲解与示例代码', '准备练习']}
+            title={t('lesson.generating')}
+            steps={persistence ? [t('lesson.analyzeUnit'), t('lesson.generateContent'), t('lesson.organizeContent'), t('lesson.save')] : [t('lesson.reviewGoals'), t('lesson.reviewHistory'), t('lesson.organizeExamples'), t('lesson.preparePractice')]}
             parts={persistence ? persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? [] : undefined}
             context={<RunContext runId={persistence?.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id} />}
-            note="课件会结合你此刻的学习情况生成，所以和别人看到的可能不一样。"
+            note={t('lesson.generationNote')}
           />
         )}
 
@@ -424,20 +431,20 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               <EmptyMedia variant="icon" className="bg-destructive/10 text-destructive">
                 <AlertTriangle />
               </EmptyMedia>
-              <EmptyTitle>课件生成失败</EmptyTitle>
+              <EmptyTitle>{t('lesson.failed')}</EmptyTitle>
               <EmptyDescription>
                 {capabilities.agent
-                  ? '生成过程中出现了问题，你的路线、会话和代码都没有受影响。可以重新生成，或先向 Agent 提问。'
-                  : '课件生成失败，当前生成服务暂不可用。你的路线、会话和代码都没有受影响。'}
+                  ? t('lesson.failedHint')
+                  : t('lesson.unavailableFailedHint')}
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent className="flex-row justify-center">
               <Button disabled={!capabilities.agent || !!persistence?.busy || !!persistence && !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>
                 <RotateCcw data-icon="inline-start" />
-                重新生成
+                {t('controls.regenerate')}
               </Button>
               <Button variant="outline" onClick={() => setView('route')}>
-                返回学习路线
+                {t('lesson.backToPath')}
               </Button>
             </EmptyContent>
           </Empty>
@@ -446,12 +453,12 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
         {!lesson && unit.contentState !== 'failed' && (unit.contentState !== 'generating' || !capabilities.agent) && (
           <Empty className="border">
             <EmptyHeader>
-              <EmptyTitle>课件暂不可用</EmptyTitle>
-              <EmptyDescription>当前单元尚无可读取的课件内容。你的学习路线、会话和代码不会受影响。</EmptyDescription>
+              <EmptyTitle>{t('lesson.unavailable')}</EmptyTitle>
+              <EmptyDescription>{t('lesson.unavailableHint')}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              {persistence && capabilities.agent && <Button disabled={persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>生成课件</Button>}
-              <Button variant="outline" onClick={() => setView('route')}>返回学习路线</Button>
+              {persistence && capabilities.agent && <Button disabled={persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>{t('lesson.generate')}</Button>}
+              <Button variant="outline" onClick={() => setView('route')}>{t('lesson.backToPath')}</Button>
             </EmptyContent>
           </Empty>
         )}
@@ -464,8 +471,8 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
             ))}
             <footer className="mt-6 flex flex-col gap-2 border-t pt-6 text-sm text-muted-foreground">
               <p>{capabilities.assessment
-                ? '读完并动手试过之后，可以点击右上角「开始单元测评」检验掌握情况。'
-                : '测评运行与评估暂不可用，仍可保存答案草稿。'}</p>
+                ? t('lesson.assessmentHint')
+                : t('lesson.assessmentUnavailable')}</p>
             </footer>
           </>
         )}
@@ -476,7 +483,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           size="sm"
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
-            setQuote({ source: 'lesson', label: `${unit.title} · 课件`, text: pop.text })
+            setQuote({ source: 'lesson', label: t('common:quotes.lesson', { title: unit.title }), caption: { kind: 'lesson', name: unit.title }, text: pop.text })
             window.getSelection()?.removeAllRanges()
             setPop(null)
             onAsk?.()
@@ -485,7 +492,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           className="fixed z-30 -translate-x-1/2 -translate-y-full rounded-full shadow-lg"
         >
           <MessageSquareQuote data-icon="inline-start" />
-          向 Agent 提问
+          {t('controls.askAgent')}
         </Button>
       )}
     </div>

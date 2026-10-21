@@ -1,9 +1,13 @@
 import type { TerminalEvent } from '@teach-me-coding/contracts'
 import { access } from './api'
+import { notice, type UiNotice } from '@/i18n/notice'
+
+// Local UI notices are not part of the terminal wire or saved output protocol.
+type LocalTerminalEvent = TerminalEvent | { type: 'notice'; notice: UiNotice }
 
 export class LocalTerminal {
   private socket?: WebSocket
-  private listeners = new Set<(event: TerminalEvent) => void>()
+  private listeners = new Set<(event: LocalTerminalEvent) => void>()
   private reconnect?: ReturnType<typeof setTimeout>
   private disposed = false
   private connecting = false
@@ -13,12 +17,12 @@ export class LocalTerminal {
   private inputs: Promise<unknown> = Promise.resolve()
   snapshot: Extract<TerminalEvent, { type: 'snapshot' }> | null = null
   constructor(private space: string, private status: (connected: boolean) => void, private beforeInput: () => Promise<void>) {}
-  subscribe(receive: (event: TerminalEvent) => void) {
+  subscribe(receive: (event: LocalTerminalEvent) => void) {
     this.listeners.add(receive)
     if (this.snapshot) receive(this.snapshot)
     return () => { this.listeners.delete(receive) }
   }
-  private emit(event: TerminalEvent) { for (const receive of this.listeners) receive(event) }
+  private emit(event: LocalTerminalEvent) { for (const receive of this.listeners) receive(event) }
   async connect() {
     if (this.disposed || this.connecting || this.socket?.readyState === WebSocket.OPEN) return
     this.connecting = true; this.attached = false
@@ -59,7 +63,7 @@ export class LocalTerminal {
       return Promise.resolve(this.send('input', { data }))
     }
     if (this.socket?.readyState !== WebSocket.OPEN || !this.snapshot || !this.attached) {
-      this.emit({ type: 'error', message: '连接中断，输入未发送；请重连后重新输入。' })
+      this.emit({ type: 'notice', notice: notice('common', 'errors.terminalDisconnected') })
       return Promise.resolve(false)
     }
     const generation = this.generation, id = this.snapshot.id, epoch = this.inputEpoch
@@ -70,7 +74,7 @@ export class LocalTerminal {
       catch {
         if (valid()) {
           this.inputEpoch++
-          this.emit({ type: 'error', message: '文件自动保存失败，输入未发送；请重试保存后重新输入。Ctrl+C 和停止仍可使用。' })
+          this.emit({ type: 'notice', notice: notice('common', 'errors.terminalAutosave') })
         }
         return false
       }
@@ -85,7 +89,7 @@ export class LocalTerminal {
   send(type: 'input' | 'resize' | 'stop' | 'restart', values: { data?: string; cols?: number; rows?: number } = {}) {
     if (type === 'stop' || type === 'restart') this.inputEpoch++
     if (this.socket?.readyState !== WebSocket.OPEN || !this.snapshot || !this.attached) {
-      if (type === 'input') this.emit({ type: 'error', message: '连接中断，输入未发送；请重连后重新输入。' })
+      if (type === 'input') this.emit({ type: 'notice', notice: notice('common', 'errors.terminalDisconnected') })
       return false
     }
     this.socket.send(JSON.stringify({ type, id: this.snapshot.id, ...values }))

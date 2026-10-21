@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { actionDecisionSchema, actionReceipt, commandProposalSchema, fileProposalSchema, idSchema, type ActionProposal, type CommandResult } from '@teach-me-coding/contracts';
+import { actionDecisionSchema, commandProposalSchema, fileProposalSchema, idSchema, type ActionProposal, type CommandResult } from '@teach-me-coding/contracts';
 import { hash } from '../agents/context.js';
 import { BusinessError, type Learning } from './learning.js';
 import type { Projects } from './projects.js';
@@ -36,7 +36,7 @@ export class Actions {
   get(space: string, id: string): ActionProposal {
     idSchema.parse(space); idSchema.parse(id);
     const row = this.learning.db.prepare('SELECT value FROM action_proposals WHERE space_id=? AND id=?').get(space, id) as { value: string } | undefined;
-    if (!row) throw new BusinessError(404, '操作提案不存在。');
+    if (!row) throw new BusinessError(404, { code: 'ACTION_PROPOSAL_NOT_FOUND' });
     return JSON.parse(row.value);
   }
   private update(space: string, proposal: ActionProposal) {
@@ -44,27 +44,27 @@ export class Actions {
   }
   private finish(space: string, p: ActionProposal, state: ActionProposal['state'], result: CommandResult | null) {
     this.learning.db.transaction(() => {
-      this.update(space, { ...p, state, result });
-      const text = actionReceipt({ ...p, state, result });
-      this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent',?,NULL,?)").run(space, p.sessionId, randomUUID(), text, Date.now());
+      const receiptId = randomUUID();
+      this.update(space, { ...p, state, result, receiptId });
+      this.learning.db.prepare("INSERT INTO messages VALUES (?,?,?,'agent','',NULL,?)").run(space, p.sessionId, receiptId, Date.now());
     })();
   }
   decide(space: string, id: string, raw: unknown): ActionProposal {
     const input = actionDecisionSchema.parse(raw), p = this.get(space, id);
-    if (input.digest !== p.digest) throw new BusinessError(409, '确认的提案内容不匹配，请刷新。');
+    if (input.digest !== p.digest) throw new BusinessError(409, { code: 'ACTION_DIGEST_MISMATCH' });
     if (input.decision === 'cancel' && p.state === 'running') { this.live.get(id)?.controller.abort(); return this.get(space, id); }
     if (p.state !== 'pending') return p; // Any retry or competing decision is inert.
-    if (this.closing) throw new BusinessError(503, '服务正在关闭。');
+    if (this.closing) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
     if (p.expiresAt <= Date.now()) { this.finish(space, p, 'expired', null); return this.get(space, id); }
     if (input.decision !== 'confirm') { this.finish(space, p, input.decision === 'reject' ? 'rejected' : 'cancelled', null); return this.get(space, id); }
-    if (this.learning.db.prepare("SELECT 1 FROM action_proposals WHERE space_id=? AND json_extract(value,'$.state')='running'").get(space)) throw new BusinessError(409, '当前空间已有本机操作执行中，请等待或取消后再确认。');
+    if (this.learning.db.prepare("SELECT 1 FROM action_proposals WHERE space_id=? AND json_extract(value,'$.state')='running'").get(space)) throw new BusinessError(409, { code: 'LOCAL_ACTION_RUNNING' });
     try {
-      if (p.action.cwd !== this.projects.root(space)) throw new BusinessError(409, '工作目录已变化。');
+      if (p.action.cwd !== this.projects.root(space)) throw new BusinessError(409, { code: 'ACTION_DIRECTORY_CHANGED' });
       if (p.action.kind === 'file') {
         const path = p.action.path;
         const current = this.projects.tree(space).find((e) => e.path === path);
-        if (p.action.version === null ? !!current : !current || this.projects.read(space, p.action.path).version !== p.action.version) throw new BusinessError(409, '文件版本已变化，请重新生成提案。');
-      } else if (hash(this.projects.tree(space)) !== p.action.projectVersion) throw new BusinessError(409, '项目已变化，请重新生成命令提案。');
+        if (p.action.version === null ? !!current : !current || this.projects.read(space, p.action.path).version !== p.action.version) throw new BusinessError(409, { code: 'ACTION_FILE_CHANGED' });
+      } else if (hash(this.projects.tree(space)) !== p.action.projectVersion) throw new BusinessError(409, { code: 'ACTION_PROJECT_CHANGED' });
     } catch (error) {
       this.finish(space, p, 'expired', null);
       throw error;
@@ -80,9 +80,10 @@ export class Actions {
         else {
           if (p.action.version === null) this.projects.newFile(space, p.action.path, p.action.content);
           else this.projects.save(space, { path: p.action.path, version: p.action.version, content: p.action.content });
-          result = { status: 'succeeded', output: `已保存 ${p.action.path}`, exitCode: 0, signal: null };
+          result = { status: 'succeeded', output: '', exitCode: 0, signal: null };
         }
-      } catch (error) { result = { status: 'failed', output: error instanceof BusinessError ? error.message : '本机操作失败；可能已有部分副作用。', exitCode: null, signal: null }; }
+      } catch (error) { result = { status: 'failed', output: '',
+        error: error instanceof BusinessError ? error.detail : { code: 'LOCAL_ACTION_FAILED' }, exitCode: null, signal: null }; }
       this.finish(space, p, result.status === 'succeeded' ? 'succeeded' : result.status === 'cancelled' ? 'cancelled' : 'failed', result);
     }).finally(() => this.live.delete(id));
     this.live.set(id, { controller, done });

@@ -2,6 +2,7 @@
 
 import { Check, CircleDashed, CircleDot, RotateCcw, SkipForward } from 'lucide-react'
 import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { defaultComponents } from 'streamdown'
 import { ChainOfThought, ChainOfThoughtContent, ChainOfThoughtHeader, ChainOfThoughtStep } from '@/components/ai-elements/chain-of-thought'
@@ -93,6 +94,7 @@ export function Generating({
   parts?: AgentDisplayPart[]
   context?: ReactNode
 }) {
+  const { t } = useTranslation('learning')
   const [simulated, setActive] = useState(0)
   const tool = parts?.findLast((p) => p.type === 'tool')
   const submitting = tool?.name.startsWith('submit_')
@@ -114,7 +116,7 @@ export function Generating({
         {context}
       </div>
       <ChainOfThought defaultOpen>
-        <ChainOfThoughtHeader>执行进度</ChainOfThoughtHeader>
+        <ChainOfThoughtHeader>{t('progress')}</ChainOfThoughtHeader>
         <ChainOfThoughtContent>
         {steps.map((s, i) => (
           <ChainOfThoughtStep key={s} label={s} status={i < active ? 'complete' : i === active ? 'active' : 'pending'}
@@ -130,20 +132,21 @@ export function Generating({
 
 const STATUS_META: Record<
   UnitStatus,
-  { label: string; variant: 'default' | 'secondary' | 'outline'; className?: string }
+  { variant: 'default' | 'secondary' | 'outline'; className?: string }
 > = {
-  not_started: { label: '尚未开始', variant: 'outline' },
-  learning: { label: '正在学习', variant: 'secondary', className: 'text-primary' },
-  needs_work: { label: '建议加强', variant: 'secondary', className: 'bg-accent text-accent-foreground' },
-  passed: { label: '已通过', variant: 'default' },
-  skipped: { label: '已跳过', variant: 'secondary' },
+  not_started: { variant: 'outline' },
+  learning: { variant: 'secondary', className: 'text-primary' },
+  needs_work: { variant: 'secondary', className: 'bg-accent text-accent-foreground' },
+  passed: { variant: 'default' },
+  skipped: { variant: 'secondary' },
 }
 
 export function StatusPill({ status, className }: { status: UnitStatus; className?: string }) {
+  const { t } = useTranslation('learning')
   const m = STATUS_META[status]
   return (
     <Badge variant={m.variant} className={cn(m.className, className)}>
-      {m.label}
+      {t(`status.${status}`)}
     </Badge>
   )
 }

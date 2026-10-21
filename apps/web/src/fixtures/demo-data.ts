@@ -1,3 +1,5 @@
+import i18n from '@/i18n'
+import { formatRelativeTime } from '@/i18n/format'
 import type { CodeFile, Requirement, Session, Space, Stage, Unit } from './types'
 
 let counter = 0
@@ -112,7 +114,7 @@ export function emptySpace(): Space {
   return {
     id: uid('space'),
     kind: 'generic',
-    name: '新的学习空间',
+    name: i18n.t('preview:spaceNames.new'),
     topic: '',
     requirement: null,
     onboarding: { messages: [], step: 0, agentTyping: false, summaryReady: false },
@@ -152,7 +154,7 @@ export function stagesFor(kind: Space['kind'], topic: string): Stage[] {
 
 export function newSession(unitId: string | null): Session {
   return {
-    id: uid('sess'), unitId, title: '新会话', updatedAt: Date.now(), messages: [],
+    id: uid('sess'), unitId, title: '', updatedAt: Date.now(), messages: [],
     composerText: '', composerQuote: null, routeSuggestion: '',
   }
 }
@@ -165,7 +167,7 @@ export function detectKind(text: string): Space['kind'] {
 export function topicFrom(text: string): string {
   if (/rust/i.test(text)) return 'Rust'
   const m = text.match(/学习?\s*([A-Za-z0-9+#.\u4e00-\u9fa5]{1,12})/)
-  return m ? m[1]!.replace(/[，。,.]/g, '') : '新主题'
+  return m ? m[1]!.replace(/[，。,.]/g, '') : i18n.t('preview:spaceNames.topicFallback')
 }
 
 export function initialRequirement(kind: Space['kind'], topic: string, answers: string[]): Requirement {
@@ -234,6 +236,7 @@ export function rustInProgressSpace(): Space {
         quote: {
           source: 'lesson',
           label: '所有权与借用 · 课件',
+          caption: { kind: 'lesson', name: '所有权与借用' },
           text: '将 String 赋值给另一个变量时，所有权会转移。之后继续使用原变量会导致编译错误。',
         },
         createdAt: now() - 1000 * 60 * 44,
@@ -251,7 +254,7 @@ export function rustInProgressSpace(): Space {
     ...emptySpace(),
     id: 'space_rust',
     kind: 'rust',
-    name: 'Rust 入门',
+    name: i18n.t('preview:spaceNames.rust'),
     topic: 'Rust',
     requirement: {
       rows: [
@@ -310,7 +313,7 @@ export function pytorchSpace(): Space {
     ...emptySpace(),
     id: 'space_pytorch',
     kind: 'pytorch',
-    name: 'PyTorch 基础',
+    name: i18n.t('preview:spaceNames.pytorch'),
     topic: 'PyTorch',
     requirement: {
       rows: [
@@ -371,11 +374,5 @@ export function nextUnit(space: Space, id: string): Unit | undefined {
 }
 
 export function relativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `${h} 小时前`
-  return `${Math.floor(h / 24)} 天前`
+  return formatRelativeTime(ts)
 }

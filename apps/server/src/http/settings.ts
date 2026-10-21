@@ -8,16 +8,16 @@ import type { SearchService } from '../extensions/search.js';
 export function settingsApi(models?: ModelService, mcp?: McpService, skills?: SkillService, search?: SearchService) {
   const api = new Hono();
   api.onError((error, c) => {
-    if (error instanceof BusinessError) return c.json({ error: error.message }, error.status);
-    if (error.name === 'ZodError' || error instanceof SyntaxError) return c.json({ error: '请求格式或字段无效。' }, 400);
-    return c.json({ error: '无法保存或读取设置，请检查数据目录权限和配置文件。' }, 503);
+    if (error instanceof BusinessError) return c.json(error.toResponse(), error.status);
+    if (error.name === 'ZodError' || error instanceof SyntaxError) return c.json({ code: 'INVALID_REQUEST' }, 400);
+    return c.json({ code: 'SETTINGS_READ_FAILED' }, 503);
   });
   api.use('/settings/*', async (c, next) => {
     const path = c.req.path;
     if (path.startsWith('/api/settings/mcp') && !mcp || path.startsWith('/api/settings/skills') && !skills
       || path.startsWith('/api/settings/search') && !search
       || !path.startsWith('/api/settings/mcp') && !path.startsWith('/api/settings/skills') && !path.startsWith('/api/settings/search') && !models) {
-      throw new BusinessError(503, '无法读取这类设置，请检查数据目录中的配置文件。');
+      throw new BusinessError(503, { code: 'SETTINGS_UNAVAILABLE' });
     }
     await next();
   });

@@ -19,6 +19,30 @@ const noenv = () => undefined;
 const config = { command: process.execPath, args: [fixture] };
 const temporary = () => realpathSync(mkdtempSync(join(tmpdir(), 'tmc-mcp-')));
 
+test('failed MCP connections expose semantic status without stderr or credentials and reconnect clears the error', async () => {
+  const root = temporary();
+  const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
+  try {
+    await service.save({ mcpServers: { broken: { command: process.execPath,
+      args: ['-e', 'process.stderr.write("PRIVATE-MCP-RESPONSE " + process.env.TOKEN); process.exit(1)'],
+      env: { TOKEN: 'synthetic-private-mcp-key' } } } });
+    assert.deepEqual(await service.tools(), []);
+    const failed = service.settings().servers[0]!;
+    assert.equal(failed.state, 'failed');
+    assert.deepEqual(failed.error, { code: 'MCP_CONNECTION_FAILED' });
+    assert.equal('errorDetail' in failed, false);
+    assert.deepEqual(failed.tools, []);
+    assert.doesNotMatch(JSON.stringify(failed), /PRIVATE-MCP-RESPONSE|synthetic-private-mcp-key|process\.stderr/);
+    assert.equal(service.settings().configuration.mcpServers.broken!.env!.TOKEN, '••••••••');
+    await service.saveServer({ name: 'broken', configuration: config }, 'broken');
+    assert.equal((await service.tools()).length, 4);
+    const connected = service.settings().servers[0]!;
+    assert.equal(connected.state, 'connected');
+    assert.equal(connected.error, null);
+    assert.equal('errorDetail' in connected, false);
+  } finally { await service.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test('real stdio tools preserve schemas, structured content, error state and cancellation', async () => {
   const root = temporary();
   const service = new McpService(join(root, 'mcp.json'), { env: noenv, cwd: root });
@@ -173,10 +197,10 @@ test('single-server writes preserve concurrent additions and masked credentials 
     assert.equal(stored.files.env.TOKEN, 'synthetic-files-secret');
     assert.equal(stored.docs, undefined);
     assert.ok(!JSON.stringify(service.settings()).includes('synthetic-rename-secret'));
-    await assert.rejects(service.saveServer({ name: 'files', configuration: before.docs }, 'documentation'), /同名/);
-    await assert.rejects(service.saveServer({ name: 'new', configuration: before.docs }), /认证字段/);
-    await assert.rejects(service.saveServer({ name: 'missing', configuration: before.files }, 'missing'), /不存在/);
-    await assert.rejects(service.removeServer('missing'), /不存在/);
+    await assert.rejects(service.saveServer({ name: 'files', configuration: before.docs }, 'documentation'), { message: 'MCP_SERVER_NAME_CONFLICT' });
+    await assert.rejects(service.saveServer({ name: 'new', configuration: before.docs }), { message: 'MCP_SECRET_REQUIRED' });
+    await assert.rejects(service.saveServer({ name: 'missing', configuration: before.files }, 'missing'), { message: 'MCP_SERVER_NOT_FOUND' });
+    await assert.rejects(service.removeServer('missing'), { message: 'MCP_SERVER_NOT_FOUND' });
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).mcpServers, stored, 'rejected writes must leave all servers unchanged');
     await service.removeServer('documentation');
     assert.deepEqual(Object.keys(service.settings().configuration.mcpServers), ['files']);
@@ -195,7 +219,7 @@ test('reconnecting and deleting one server leaves the other live transport untou
     for (const name of ['first', 'second']) await service.saveServer({ name, configuration: { ...config, env: { FIXTURE_NAME: name } } });
     await service.tools();
     const firstPid = transports.get('first')![0]!.pid!, secondPid = transports.get('second')![0]!.pid!;
-    await assert.rejects(service.reconnect('missing'), /不存在/);
+    await assert.rejects(service.reconnect('missing'), { message: 'MCP_SERVER_NOT_FOUND' });
     await service.reconnect('first'); await service.tools();
     assert.equal(transports.get('first')!.length, 2);
     assert.equal(transports.get('second')!.length, 1);

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BusinessErrorDetail } from './errors.js';
 
 export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const thinkingLevelSchema = z.enum(thinkingLevels);
@@ -22,7 +23,7 @@ export interface ProviderSummary {
   /** Credential saved by this app, if any. */
   stored: AuthMethod | null;
   /** A known authentication rejection; configured credentials may still be present. */
-  issue?: string;
+  issue?: BusinessErrorDetail;
   models: number;
 }
 export interface ModelSummary {
@@ -38,7 +39,7 @@ export interface ModelSettings {
   selection: ModelSelection | null;
   /** Configured and not known to require reauthentication; does not probe the provider. */
   ready: boolean;
-  issue: string | null;
+  issue: BusinessErrorDetail | null;
   providers: ProviderSummary[];
 }
 
@@ -94,7 +95,9 @@ export interface LoginSession {
   state: 'running' | 'succeeded' | 'failed' | 'cancelled';
   prompt: LoginPrompt | null;
   events: LoginEvent[];
-  error: string | null;
+  error: BusinessErrorDetail | null;
+  /** Upstream diagnostic, redacted separately from the first-party failure. */
+  diagnostic?: string;
 }
 
 const stringMap = z.record(z.string().min(1), z.string());
@@ -122,7 +125,7 @@ export type McpServerEntry = z.infer<typeof mcpServerEntrySchema>;
 export interface McpSettings {
   /** Environment/header values are masked; unchanged masks preserve their stored values on save. */
   configuration: McpConfiguration;
-  servers: { name: string; state: 'disabled' | 'connecting' | 'connected' | 'failed'; error: string | null;
+  servers: { name: string; state: 'disabled' | 'connecting' | 'connected' | 'failed'; error: BusinessErrorDetail | null;
     tools: { name: string; agentName: string; description: string }[] }[];
 }
 export const skillConfigurationSchema = z.object({

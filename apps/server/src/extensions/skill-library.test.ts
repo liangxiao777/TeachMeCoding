@@ -31,7 +31,7 @@ test('catalog adapter preserves public fields and distinguishes outage/schema dr
   assert.deepEqual(await searchSkills(' ', request), { skills: [] }); assert.equal(calls, 1);
   assert.deepEqual(await searchSkills('none', async () => Response.json({ skills: [] })), { skills: [] });
   for (const response of [new Response('', { status: 500 }), Response.json({ unexpected: [] }), Response.json({ skills: [{ ...entry, installs: '347' }] })]) {
-    await assert.rejects(searchSkills('loops', async () => response), /无法搜索/);
+    await assert.rejects(searchSkills('loops', async () => response), { message: 'SKILL_SEARCH_UNAVAILABLE' });
   }
   assert.deepEqual(skillSource('https://www.skills.sh/owner/repo/reviewing-loops?from=search'), { source: 'owner/repo', skill: 'reviewing-loops' });
   assert.deepEqual(skillSource('owner/repo#release@reviewing-loops'), { source: 'owner/repo#release@reviewing-loops', skill: undefined });
@@ -54,7 +54,7 @@ test('leaderboards retain upstream ranks and view metrics, identify domain sourc
   for (const response of [new Response('', { status: 500 }), Response.json({ skills: entries, page: 1, hasMore: false, total: 2 }),
     Response.json({ skills: [{ ...entries[0], installs: '81' }], page: 0, hasMore: false, total: 1 }),
     Response.json({ skills: [{ source: 'owner/repo', skillId: 'test', name: 'test', installs: 2 }], page: 0, hasMore: false, total: 1 })]) {
-    await assert.rejects(skillLeaderboard('hot', 0, async () => response), /无法读取.*榜单/);
+    await assert.rejects(skillLeaderboard('hot', 0, async () => response), { message: 'SKILL_LEADERBOARD_UNAVAILABLE' });
   }
 });
 
@@ -70,19 +70,19 @@ test('publisher acquisition requires the copied bundle, matching provenance and 
   const lockFile = join(project, 'skills-lock.json');
   const validate = () => library['publisherBundle'](project, 'https://publisher.invalid/');
   try {
-    assert.throws(validate, /校验/);
+    assert.throws(validate, { message: 'SKILL_PROVENANCE_INVALID' });
     writeFileSync(lockFile, JSON.stringify(lock));
     assert.equal(validate().hash, 'publisher-archive-digest'); assert.equal(validate().path, realpathSync(folder));
-    writeFileSync(join(folder, 'reference/examples.md'), 'tampered'); assert.throws(validate, /校验/);
+    writeFileSync(join(folder, 'reference/examples.md'), 'tampered'); assert.throws(validate, { message: 'SKILL_PROVENANCE_INVALID' });
     writeFileSync(join(folder, 'reference/examples.md'), 'A loop with an asymmetric initial counter: 3.');
     for (const invalid of [{ ...lock, version: 2 }, { ...lock, skills: {} },
       { ...lock, skills: { 'reviewing-loops': { ...lock.skills['reviewing-loops'], sourceUrl: 'https://another.invalid/' } } },
       { ...lock, skills: { 'reviewing-loops': { ...lock.skills['reviewing-loops'], sourceType: 'github' } } }]) {
-      writeFileSync(lockFile, JSON.stringify(invalid)); assert.throws(validate, /校验/);
+      writeFileSync(lockFile, JSON.stringify(invalid)); assert.throws(validate, { message: 'SKILL_PROVENANCE_INVALID' });
     }
     writeFileSync(lockFile, JSON.stringify(lock));
-    symlinkSync(join(folder, 'SKILL.md'), join(folder, 'extra-link')); assert.throws(validate, /链接/);
-    rmSync(join(folder, 'extra-link')); makeSkill(join(project, '.pi/skills'), 'another-skill'); assert.throws(validate, /多个技能/);
+    symlinkSync(join(folder, 'SKILL.md'), join(folder, 'extra-link')); assert.throws(validate, { message: 'SKILL_SYMLINK_UNSUPPORTED' });
+    rmSync(join(folder, 'extra-link')); makeSkill(join(project, '.pi/skills'), 'another-skill'); assert.throws(validate, { message: 'SKILL_NAME_REQUIRED' });
   } finally { await library.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -118,11 +118,11 @@ test('pinned public CLI installs the complete bundle, enables subsequent snapsho
     assert.equal(readFileSync(item.filePath, 'utf8'), original);
     chmodSync(join(dirname(item.filePath), 'scripts/example.sh'), 0o644);
     assert.equal((await skills.update({ filePath: item.filePath }, false)).modified, true, 'permission-only local edits matter');
-    await assert.rejects(skills.update({ filePath: item.filePath }, true), /本地改动/);
+    await assert.rejects(skills.update({ filePath: item.filePath }, true), { message: 'SKILL_LOCAL_CHANGES' });
     writeFileSync(item.filePath, `${original}\nLocal instructions that must survive.`);
-    await assert.rejects(skills.update({ filePath: item.filePath }, true), /本地改动/);
+    await assert.rejects(skills.update({ filePath: item.filePath }, true), { message: 'SKILL_LOCAL_CHANGES' });
     assert.match(readFileSync(item.filePath, 'utf8'), /must survive/);
-    await assert.rejects(skills.install({ source, skill: 'reviewing-loops' }), /同名/);
+    await assert.rejects(skills.install({ source, skill: 'reviewing-loops' }), { message: 'SKILL_NAME_CONFLICT' });
     skills.remove({ filePath: item.filePath });
     assert.equal(skills.reload().skills.length, 0); assert.equal(existsSync(dirname(item.filePath)), false);
     assert.equal(readFileSync(join(source, 'SKILL.md'), 'utf8'), original, 'uninstall never removes or edits upstream');
@@ -138,23 +138,23 @@ test('local references can be individually removed and restored without deleting
   try {
     const settings = skills.local({ path: source }), item = settings.skills.find((skill) => skill.name === 'reviewing-loops')!;
     assert.equal(item.installation, null); assert.equal(settings.skills.length, 2);
-    assert.throws(() => skills.local({ path: 'relative' }), /绝对/);
-    assert.throws(() => skills.local({ path: join(root, 'missing') }), /没有可加载/);
-    await assert.rejects(skills.update({ filePath: item.filePath }, false), /原目录/);
+    assert.throws(() => skills.local({ path: 'relative' }), { message: 'SKILL_LOCAL_PATH_REQUIRED' });
+    assert.throws(() => skills.local({ path: join(root, 'missing') }), { message: 'SKILL_NOT_LOADABLE' });
+    await assert.rejects(skills.update({ filePath: item.filePath }, false), { message: 'SKILL_REFERENCE_UPDATE' });
     skills.remove({ filePath: item.filePath });
     assert.deepEqual(skills.settings().skills.map((skill) => skill.name), ['explaining-types']);
     assert.ok(existsSync(item.filePath));
     assert.equal(new SkillService(db, join(root, 'app')).settings().skills.length, 1);
     assert.ok(!skills.snapshot('Explain').prompt.includes('reviewing-loops'));
     assert.equal(skills.local({ path: item.filePath }).skills.length, 2);
-    assert.throws(() => skills.details(join(root, 'secret')), /未找到/);
-    assert.throws(() => skills.file(item.filePath, '../../secret'), /请选择/);
+    assert.throws(() => skills.details(join(root, 'secret')), { message: 'SKILL_NOT_FOUND' });
+    assert.throws(() => skills.file(item.filePath, '../../secret'), { message: 'SKILL_FILE_REQUIRED' });
     symlinkSync(join(root, 'secret'), join(dirname(item.filePath), 'escape'));
-    assert.throws(() => skills.details(item.filePath), /链接/);
-    assert.throws(() => skills.remove({ filePath: join(root, 'external') }), /未找到/);
+    assert.throws(() => skills.details(item.filePath), { message: 'SKILL_SYMLINK_UNSUPPORTED' });
+    assert.throws(() => skills.remove({ filePath: join(root, 'external') }), { message: 'SKILL_NOT_FOUND' });
     rmSync(join(dirname(item.filePath), 'escape'));
     const collision = makeSkill(join(root, 'alternate'));
-    await assert.rejects(skills.install({ source: collision }), /同名/);
+    await assert.rejects(skills.install({ source: collision }), { message: 'SKILL_NAME_CONFLICT' });
     assert.equal(existsSync(join(skills.directory, 'reviewing-loops')), false);
   } finally { await skills.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -165,7 +165,7 @@ test('a local reference added during acquisition is not shadowed by the download
   try {
     const acquisition = skills.install({ source });
     skills.local({ path: source });
-    await assert.rejects(acquisition, /同名/);
+    await assert.rejects(acquisition, { message: 'SKILL_NAME_CONFLICT' });
     assert.equal(skills.settings().skills[0]!.filePath, join(source, 'SKILL.md'));
     assert.equal(skills.settings().skills[0]!.installation, null);
     assert.equal(existsSync(join(skills.directory, 'reviewing-loops')), false);
@@ -179,13 +179,13 @@ test('ambiguous, missing and invalid CLI acquisitions leave no installed files',
   const skills = new SkillService(db, join(root, 'app'));
   try {
     await assert.rejects(skills.install({ source, skill: '--global' }), /不能是命令选项/);
-    await assert.rejects(skills.install({ source }), /多个技能/);
-    await assert.rejects(skills.install({ source, skill: 'nonexistent' }), /无法获取/);
-    await assert.rejects(skills.install({ source: join(root, 'missing') }), /无法获取/);
+    await assert.rejects(skills.install({ source }), { message: 'SKILL_NAME_REQUIRED' });
+    await assert.rejects(skills.install({ source, skill: 'nonexistent' }), { message: 'SKILL_ACQUISITION_FAILED' });
+    await assert.rejects(skills.install({ source: join(root, 'missing') }), { message: 'SKILL_ACQUISITION_FAILED' });
     assert.deepEqual(readdirSync(skills.directory), []);
     assert.deepEqual(readdirSync(join(root, 'app/.skill-staging')), []);
     const pending = skills.install({ source, skill: 'reviewing-loops' });
-    await assert.rejects(skills.install({ source, skill: 'explaining-types' }), /另一个技能/);
+    await assert.rejects(skills.install({ source, skill: 'explaining-types' }), { message: 'SKILL_OPERATION_RUNNING' });
     await pending;
   } finally { await skills.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -221,7 +221,7 @@ test('acquisition does not inherit service credentials or global agent paths, an
   process.env.PATH = `${bin}:${process.env.PATH}`;
   process.env.OPENROUTER_API_KEY = 'synthetic-worker-private-key'; process.env.SSH_AUTH_SOCK = '/synthetic-private-agent';
   try {
-    await assert.rejects(skills.install({ source: 'synthetic/skills#test-ref', skill: 'reviewing-loops' }), /无法获取/);
+    await assert.rejects(skills.install({ source: 'synthetic/skills#test-ref', skill: 'reviewing-loops' }), { message: 'SKILL_ACQUISITION_FAILED' });
     const env = JSON.parse(readFileSync(dump, 'utf8'));
     assert.equal(env.OPENROUTER_API_KEY, undefined); assert.equal(env.SSH_AUTH_SOCK, undefined);
     assert.equal(env.DISABLE_TELEMETRY, '1'); assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
@@ -231,7 +231,7 @@ test('acquisition does not inherit service credentials or global agent paths, an
     assert.equal(existsSync(env.HOME), false, 'temporary acquisition home must be cleaned');
     const source = makeSkill(join(root, 'source'));
     const pending = skills.install({ source });
-    const rejected = assert.rejects(pending, /停止/);
+    const rejected = assert.rejects(pending, { message: 'SKILL_INSTALL_STOPPED' });
     await skills.close(); await rejected;
     assert.deepEqual(readdirSync(skills.directory), []);
     assert.deepEqual(readdirSync(join(root, 'app/.skill-staging')), []);

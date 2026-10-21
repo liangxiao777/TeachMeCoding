@@ -31,6 +31,8 @@ import type {
   ThemedToken,
 } from "shiki";
 import { createHighlighter } from "shiki";
+import { useTranslation } from "react-i18next";
+import { notice, NoticeError } from "@/i18n/notice";
 
 // Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
 // oxlint-disable-next-line eslint(no-bitwise)
@@ -466,13 +468,14 @@ export const CodeBlockCopyButton = ({
   className,
   ...props
 }: CodeBlockCopyButtonProps) => {
+  const { t } = useTranslation();
   const [isCopied, setIsCopied] = useState(false);
   const timeoutRef = useRef<number>(0);
   const { code } = useContext(CodeBlockContext);
 
   const copyToClipboard = useCallback(async () => {
     if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
-      onError?.(new Error("Clipboard API not available"));
+      onError?.(new NoticeError(notice('common', 'errors.clipboard')));
       return;
     }
 
@@ -504,6 +507,7 @@ export const CodeBlockCopyButton = ({
     <Button
       className={cn("shrink-0", className)}
       onClick={copyToClipboard}
+      aria-label={t(isCopied ? 'actions.copied' : 'actions.copy')}
       size="icon"
       variant="ghost"
       {...props}

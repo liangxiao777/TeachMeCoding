@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createAssistantMessageEventStream, Type } from '@earendil-works/pi-ai';
 import { Learning } from '../modules/learning.js';
 import { openDatabase } from '../storage/database.js';
+import { openDataDirectory } from '../storage/data-directory.js';
 import { TeachingRuntime } from './runtime.js';
 import { type FrozenContext, systemPrompt } from './context.js';
 import { createScenario } from './scenarios.js';
@@ -40,7 +41,7 @@ test('lesson submission validates bounded text without enforcing Markdown layout
   try {
     for (const content of [undefined, 123, '', '  \r\n ', 'x'.repeat(100_001)]) {
       await assert.rejects(submit.execute('bad', { title: '编译配置', content }), /content/);
-      assert.throws(() => task.commit(), /没有提交有效课件/);
+      assert.throws(() => task.commit(), { message: 'LESSON_ARTIFACT_MISSING' });
       assert.equal(learning.unit(space.id, unit.id).lesson, null);
     }
     const valid = { title: '编译配置', content: '  理解编译与运行。\n\n## 编译配置\r\n\n正文\n\n| 配置 | 值 |\n| --- | --- |\n| strict | true |\n\n:::unknown\n标记不完整也可以保存。\n' };
@@ -48,6 +49,36 @@ test('lesson submission validates bounded text without enforcing Markdown layout
     task.commit();
     assert.equal(learning.unit(space.id, unit.id).lesson!.content, valid.content);
   } finally { db.close(); }
+});
+
+test('normal model completion without a lesson artifact fails durably instead of publishing prose', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'tmc-missing-lesson-'));
+  let data = openDataDirectory(root), learning = new Learning(data.db);
+  const { space, units } = populated(learning), unit = units[0]!;
+  let requests = 0;
+  let runtime = new TeachingRuntime(learning, syntheticSource, { stream: () => {
+    requests++; return response(reply([{ type: 'text', text: '模型原文：这不是课件产物。' }]));
+  } });
+  try {
+    const run = runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 });
+    await runtime.idle(run.id);
+    const events = runtime.events(space.id, run.id).events;
+    for (const reload of [false, true]) {
+      if (reload) {
+        await runtime.close(); data.close();
+        data = openDataDirectory(root); learning = new Learning(data.db);
+        runtime = new TeachingRuntime(learning, syntheticSource);
+      }
+      const failed = runtime.get(space.id, run.id);
+      assert.equal(failed.state, 'failed');
+      assert.deepEqual(failed.error, { code: 'LESSON_ARTIFACT_MISSING' });
+      assert.deepEqual(runtime.events(space.id, run.id).events, events);
+      assert.deepEqual(events.at(-1)?.data, { type: 'state', state: 'failed', error: failed.error });
+      assert.ok(events.some((event) => event.data.type === 'text' && event.data.delta === '模型原文：这不是课件产物。'));
+      assert.equal(learning.unit(space.id, unit.id).lesson, null);
+    }
+    assert.equal(requests, 1);
+  } finally { await runtime.close(); data.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test('Pi reports unavailable write/execute and cross-scene tools without granting capabilities or changing artifacts', async () => {

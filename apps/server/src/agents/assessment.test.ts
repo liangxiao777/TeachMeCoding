@@ -121,8 +121,7 @@ test('Pi feeds invalid assessment submissions back without replacing a successfu
     await runtime.idle(run.id);
     assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
     assert.deepEqual(feedback.map((f) => f.failed), submissions.map((_, i) => i > 0));
-    assert.match(feedback[1]!.text, /public\.execution/);
-    assert.match(feedback[1]!.text, /reasoning/);
+    assert.deepEqual(JSON.parse(feedback[1]!.text), [{ type: 'text', text: 'CODE_PLAN_UNAVAILABLE' }]);
     assert.deepEqual(l.unit(space.id, unit).assessment, { ...valid.public, revision: 1 });
     assert.doesNotMatch(JSON.stringify(runtime.events(space.id, run.id)), /PRIVATE-RUBRIC/);
     submissions.splice(0, submissions.length, planless); feedback.length = 0;
@@ -193,7 +192,7 @@ test('immutable submissions grade original answers, never clear newer drafts, an
     assert.equal(l.unit(space.id, unit).draft.q1, 'NEW-DRAFT');
     assert.ok(l.unit(space.id, unit).records.every((r) => !r.valid));
     assert.notEqual(l.unit(space.id, unit).status, 'passed');
-    assert.throws(() => a.submit(space.id, unit, { kind: 'evaluation', revision: 1, specRevision: 1, q1: 'new', q2: '' }), /变化|改变/);
+    assert.throws(() => a.submit(space.id, unit, { kind: 'evaluation', revision: 1, specRevision: 1, q1: 'new', q2: '' }), { message: 'CONTENT_CHANGED' });
   } finally { db.close(); }
 });
 

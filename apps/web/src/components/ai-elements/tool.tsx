@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 import { isValidElement } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n";
 
 import { CodeBlock } from "./code-block";
 
@@ -48,16 +50,6 @@ export type ToolHeaderProps = {
     }
 );
 
-const statusLabels: Record<ToolPart["state"], string> = {
-  "approval-requested": "等待确认",
-  "approval-responded": "已回应",
-  "input-available": "执行中",
-  "input-streaming": "等待执行",
-  "output-available": "成功",
-  "output-denied": "已拒绝",
-  "output-error": "失败",
-};
-
 const statusIcons: Record<ToolPart["state"], ReactNode> = {
   "approval-requested": <ClockIcon className="size-4 text-yellow-600" />,
   "approval-responded": <CheckCircleIcon className="size-4 text-blue-600" />,
@@ -71,7 +63,7 @@ const statusIcons: Record<ToolPart["state"], ReactNode> = {
 export const getStatusBadge = (status: ToolPart["state"], label?: string) => (
   <Badge className="gap-1.5 rounded-full text-xs" variant="secondary">
     {statusIcons[status]}
-    {label ?? statusLabels[status]}
+    {label ?? i18n.t(`tool.status.${status}`)}
   </Badge>
 );
 
@@ -84,6 +76,7 @@ export const ToolHeader = ({
   statusLabel,
   ...props
 }: ToolHeaderProps) => {
+  const { t } = useTranslation();
   const derivedName =
     type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
 
@@ -98,7 +91,7 @@ export const ToolHeader = ({
       <div className="flex items-center gap-2">
         <WrenchIcon className="size-4 text-muted-foreground" />
         <span className="font-medium text-sm">{title ?? derivedName}</span>
-        {getStatusBadge(state, statusLabel)}
+        {getStatusBadge(state, statusLabel ?? t(`tool.status.${state}`))}
       </div>
       <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-open:rotate-180" />
     </CollapsibleTrigger>
@@ -141,6 +134,7 @@ export const ToolOutput = ({
   errorText,
   ...props
 }: ToolOutputProps) => {
+  const { t } = useTranslation();
   if (!(output || errorText)) {
     return null;
   }
@@ -158,7 +152,7 @@ export const ToolOutput = ({
   return (
     <div className={cn("space-y-2", className)} {...props}>
       <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        {errorText ? "Error" : "Result"}
+        {t(errorText ? 'tool.error' : 'tool.result')}
       </h4>
       <div
         className={cn(

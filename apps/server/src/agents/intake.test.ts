@@ -84,8 +84,13 @@ function answer(round: QuestionRound): QuestionAnswer {
   ] };
 }
 const answerText = '选择最终产物？\n终端账本\n\n什么时候练习？\n周三午休 17 分钟\n\n希望练哪些技能？\n回溯；反例；实际输入 <保留 & 内容>';
-function status(code: BusinessError['status'], pattern?: RegExp) {
-  return (error: unknown) => error instanceof BusinessError && error.status === code && (!pattern || pattern.test(error.message));
+function status(code: BusinessError['status'], detail?: BusinessError['detail']) {
+  return (error: unknown) => {
+    assert.ok(error instanceof BusinessError);
+    assert.equal(error.status, code);
+    if (detail) { assert.equal(error.message, detail.code); assert.deepEqual(error.detail, detail); }
+    return true;
+  };
 }
 function snapshot(learning: Learning) {
   return Object.fromEntries(['requirements', 'intake_questions', 'research_dossiers', 'sessions', 'messages', 'runs', 'agent_runs', 'requests', 'proposals']
@@ -120,7 +125,7 @@ async function publishResearch(learning: Learning, space: string, session: strin
   try {
     const { run } = submit(runtime, space, session);
     await runtime.idle(run.id);
-    assert.equal(runtime.get(space, run.id).state, 'succeeded', runtime.get(space, run.id).error ?? '');
+    assert.equal(runtime.get(space, run.id).state, 'succeeded', JSON.stringify(runtime.get(space, run.id).error));
     const ref = learning.space(space).requirement.intake!.researchRef!;
     return { ref, runId: run.id, fetchedText, dossier: learning.intake.research(space, ref) };
   } finally { await runtime.close(); }
@@ -231,7 +236,7 @@ test('answer receipt/message/run/key are atomic; failure and retry retain answer
     assert.deepEqual(learning.session(spaceId, sessionId).draft, composer);
     await runtime.idle(accepted.run.id); assert.equal(runtime.get(spaceId, accepted.run.id).state, 'failed');
     assert.equal(runtime.answer(spaceId, sessionId, round.id, key, raw).run.id, accepted.run.id);
-    assert.throws(() => runtime.answer(spaceId, sessionId, round.id, key, { answers: raw.answers.slice(1) }), status(409, /幂等键/));
+    assert.throws(() => runtime.answer(spaceId, sessionId, round.id, key, { answers: raw.answers.slice(1) }), status(409, { code: 'IDEMPOTENCY_KEY_REUSED' }));
     assert.throws(() => runtime.answer(spaceId, sessionId, round.id, randomUUID(), raw), status(409));
     const newer = learning.saveSessionDraft(spaceId, sessionId, { ...composer, text: 'NEW-DRAFT <keep & untouched>', routeSuggestion: '不同的安排' }).draft;
     const answered = structuredClone(learning.session(spaceId, sessionId).questions![0]);
@@ -288,8 +293,8 @@ test('cancel, length, changed requirement and publication failure never leak sta
       release(response(reply([{ type: 'text', text: '迟到的模型结尾' }], mode === 'length' ? 'length' : 'stop')));
       await runtime.idle(run.id);
       assert.equal(runtime.get(spaceId, run.id).state, mode === 'cancel' ? 'interrupted' : 'failed');
-      if (mode === 'length') assert.match(runtime.get(spaceId, run.id).error!, /截断/);
-      if (mode === 'late-edit') assert.match(runtime.get(spaceId, run.id).error!, /需求已改变/);
+      if (mode === 'length') assert.deepEqual(runtime.get(spaceId, run.id).error, { code: 'MODEL_OUTPUT_TRUNCATED' });
+      if (mode === 'late-edit') assert.deepEqual(runtime.get(spaceId, run.id).error, { code: 'CONTENT_CHANGED' });
       if (mode === 'question-storage-fault') assert.deepEqual(publication, { revision: 2, dossiers: 1 }, 'the fault must occur after both earlier writes, not fail incidentally before publication');
       assert.deepEqual(learning.space(spaceId).requirement, expected);
       assert.deepEqual(learning.session(spaceId, sessionId).questions, []);
@@ -329,7 +334,8 @@ test('confirmation needs an answered row, not a fixed checklist, classification 
       learning.saveRequirement(spaceId, { ...learning.space(spaceId).requirement, value });
       const current = learning.space(spaceId), before = snapshot(learning);
       assert.equal(current.readiness!.ready, false);
-      assert.deepEqual(current.readiness!.reasons, ['请先整理学习需求。']);
+      assert.equal('reasons' in current.readiness!, false);
+      assert.deepEqual(current.readiness!.issues, [{ code: 'REQUIREMENT_EMPTY' }]);
       assert.throws(() => learning.saveRequirement(spaceId, { ...current.requirement, confirmed: true }), status(422));
       assert.throws(() => runtime.plan(spaceId, randomUUID(), current.requirement), status(422));
       assert.deepEqual(snapshot(learning), before); assert.equal(current.route.content, null);
@@ -346,7 +352,7 @@ test('confirmation needs an answered row, not a fixed checklist, classification 
     } });
     try {
       const planned = runtime.plan(spaceId, randomUUID(), learning.space(spaceId).requirement); await runtime.idle(planned.run.id);
-      assert.equal(runtime.get(spaceId, planned.run.id).state, 'succeeded', runtime.get(spaceId, planned.run.id).error ?? '');
+      assert.equal(runtime.get(spaceId, planned.run.id).state, 'succeeded', JSON.stringify(runtime.get(spaceId, planned.run.id).error));
       const result = learning.space(spaceId);
       assert.equal(result.requirement.confirmed, true); assert.equal(result.readiness!.ready, true);
       assert.deepEqual(result.requirement.value, value);
@@ -368,13 +374,13 @@ test('pending questions gate confirmation, route freeze, propose and apply witho
     assert.equal(runtime.get(spaceId, asked.run.id).state, 'succeeded');
     const before = snapshot(learning), current = learning.space(spaceId);
     assert.equal(current.requirement.confirmed, true); assert.equal(current.readiness!.ready, false);
-    assert.throws(() => learning.saveRequirement(spaceId, { ...current.requirement, confirmed: true }), status(422, /问题/));
-    assert.throws(() => submit(runtime, spaceId, routeSession, '绕过 plan 入口'), status(409, /先接受或拒绝/));
-    assert.throws(() => learning.proposeRoute(spaceId, routeSession, content), status(422, /问题/));
-    assert.throws(() => learning.applyProposal(spaceId, proposal.id), status(422, /问题/));
+    assert.throws(() => learning.saveRequirement(spaceId, { ...current.requirement, confirmed: true }), status(422, { code: 'INTAKE_QUESTIONS_PENDING' }));
+    assert.throws(() => submit(runtime, spaceId, routeSession, '绕过 plan 入口'), status(409, { code: 'ROUTE_PROPOSAL_PENDING' }));
+    assert.throws(() => learning.proposeRoute(spaceId, routeSession, content), status(422, { code: 'INTAKE_QUESTIONS_PENDING' }));
+    assert.throws(() => learning.applyProposal(spaceId, proposal.id), status(422, { code: 'INTAKE_QUESTIONS_PENDING' }));
     assert.deepEqual(snapshot(learning), before); assert.equal(learning.space(spaceId).route.content, null); assert.equal(requests, 2);
     learning.rejectProposal(spaceId, proposal.id, {});
-    assert.throws(() => submit(runtime, spaceId, routeSession, '拒绝提案后仍需回答问题'), status(422, /问题/));
+    assert.throws(() => submit(runtime, spaceId, routeSession, '拒绝提案后仍需回答问题'), status(422, { code: 'INTAKE_QUESTIONS_PENDING' }));
   } finally { await runtime.close(); db.close(); }
 });
 
@@ -401,7 +407,7 @@ test('research writing only needs Markdown, accepts paraphrases and preserves co
     await assert.rejects(tool.execute('empty', { content: ' \n\t' }), /non-empty Markdown/);
     const { run } = submit(runtime, spaceId, sessionId);
     await runtime.idle(run.id);
-    assert.equal(runtime.get(spaceId, run.id).state, 'succeeded', runtime.get(spaceId, run.id).error ?? '');
+    assert.equal(runtime.get(spaceId, run.id).state, 'succeeded', JSON.stringify(runtime.get(spaceId, run.id).error));
     const saved = learning.space(spaceId);
     assert.equal(saved.requirement.confirmed, false); assert.equal(saved.readiness!.ready, true);
     const dossier = learning.intake.research(spaceId, saved.requirement.intake!.researchRef!);
@@ -434,7 +440,7 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
   try {
     assert.equal((await search.settings()).enabled, false);
     const { run } = submit(runtime, spaceId, sessionId); await runtime.idle(run.id);
-    assert.equal(runtime.get(spaceId, run.id).state, 'succeeded', runtime.get(spaceId, run.id).error ?? '');
+    assert.equal(runtime.get(spaceId, run.id).state, 'succeeded', JSON.stringify(runtime.get(spaceId, run.id).error));
     assert.equal(pages, 1); assert.equal(requests, 4);
     const original = learning.space(spaceId).requirement.intake!.researchRef!, dossier = learning.intake.research(spaceId, original);
     assert.equal(original.revision, 1); assert.equal(dossier.content, researchContent);
@@ -462,7 +468,7 @@ test('Markdown research preserves route/lesson pins, source diagnostics and exac
     } });
     const unit = content.stages[0]!.units[0]!.id;
     const task = lessonRuntime.generate(spaceId, unit, randomUUID(), { kind: 'lesson', revision: 0 }); await lessonRuntime.idle(task.id);
-    assert.equal(lessonRuntime.get(spaceId, task.id).state, 'succeeded', lessonRuntime.get(spaceId, task.id).error ?? '');
+    assert.equal(lessonRuntime.get(spaceId, task.id).state, 'succeeded', JSON.stringify(lessonRuntime.get(spaceId, task.id).error));
     assert.equal(learning.unit(spaceId, unit).lesson!.title, '三种损坏记录'); assert.equal(lessonCalls, 2);
     const fixed = JSON.parse((db.prepare('SELECT input FROM task_runs WHERE id=?').get(task.id) as { input: string }).input);
     assert.equal(fixed.research.id, original.id); assert.equal(fixed.research.revision, 1);

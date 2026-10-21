@@ -66,7 +66,7 @@ test('route adjustment tools generate IDs, preserve order, reject incomplete dra
   assert.equal(submitted.stages[0]!.units[0]!.summary, 'Uses A and B');
   assert.equal(submitted.stages[2]!.units[1]!.id, b.unitId);
   await call('update_route_unit', { unitId: a.unitId, title: 'A revised', position: 2 });
-  assert.throws(() => draft.proposal(), /尚未完整提交/);
+  assert.throws(() => draft.proposal(), { message: 'ROUTE_ARTIFACT_MISSING' });
   assert.equal(submitted.stages[2]!.units[0]!.title, 'A', 'Finalized snapshots cannot mutate through later draft edits');
   await call('submit_route_proposal', { note: 'Revised' });
   assert.deepEqual(draft.proposal()!.stages[2]!.units.map((u) => u.title), ['B', 'A revised']);
@@ -120,7 +120,7 @@ test('unstarted applied units with empty sessions and drafts can be retargeted o
     await call('submit_route_proposal', {});
     learning.applyProposal(space.id, learning.proposeRoute(space.id, routeSession, draft.proposal()).id);
     assert.deepEqual(learning.space(space.id).route.content!.stages[0]!.units, [units[0]!]);
-    assert.throws(() => learning.unit(space.id, units[1]!.id), /当前学习路线/);
+    assert.throws(() => learning.unit(space.id, units[1]!.id), { message: 'UNIT_NOT_IN_ROUTE' });
   } finally { db.close(); }
 });
 
@@ -148,9 +148,9 @@ test('unchanged updates preserve submissions and omitted fields, while actual go
     assert.deepEqual(draft.proposal(), submitted);
   }
   assert.equal((await call('update_route_unit', { unitId, goals: ['Explain A', 'Apply A'] })).changed, true);
-  assert.throws(() => draft.proposal(), /尚未完整提交/);
+  assert.throws(() => draft.proposal(), { message: 'ROUTE_ARTIFACT_MISSING' });
   await call('update_route_unit', { unitId });
-  assert.throws(() => draft.proposal(), /尚未完整提交/);
+  assert.throws(() => draft.proposal(), { message: 'ROUTE_ARTIFACT_MISSING' });
   await call('submit_route_proposal', {});
   assert.deepEqual(draft.proposal()!.stages[0]!.units[0], { id: unitId, title: 'A', summary: 'Original scope', goals: ['Explain A', 'Apply A'] });
   assert.deepEqual(current.stages[0]!.units[0]!.goals, ['Explain A', 'Compare A']);

@@ -1,8 +1,9 @@
 "use client"
 
-import { useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
+import { formatNotice, type NoticeValue } from "@/i18n/notice"
 
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -179,34 +180,15 @@ function FieldError({
   errors,
   ...props
 }: React.ComponentProps<"div"> & {
-  errors?: Array<{ message?: string } | undefined>
+  errors?: NoticeValue[]
 }) {
-  const content = useMemo(() => {
-    if (children) {
-      return children
-    }
-
-    if (!errors?.length) {
-      return null
-    }
-
-    const uniqueErrors = [
-      ...new Map(errors.map((error) => [error?.message, error])).values(),
-    ]
-
-    if (uniqueErrors?.length == 1) {
-      return uniqueErrors[0]?.message
-    }
-
-    return (
-      <ul className="ml-4 flex list-disc flex-col gap-1">
-        {uniqueErrors.map(
-          (error, index) =>
-            error?.message && <li key={index}>{error.message}</li>
-        )}
-      </ul>
-    )
-  }, [children, errors])
+  useTranslation()
+  const messages = [...new Set(errors?.map(formatNotice).filter(Boolean) ?? [])]
+  const content = children ?? (messages.length === 1 ? messages[0] : messages.length ? (
+    <ul className="ml-4 flex list-disc flex-col gap-1">
+      {messages.map((message) => <li key={message}>{message}</li>)}
+    </ul>
+  ) : null)
 
   if (!content) {
     return null

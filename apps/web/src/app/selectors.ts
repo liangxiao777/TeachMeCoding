@@ -1,4 +1,5 @@
 import { unlockedUnitIds } from '@teach-me-coding/contracts'
+import { currentLocale, formatRelativeTime } from '@/i18n/format'
 import type { CodeFile, Session, Space, SpaceView, Unit } from './types'
 
 export const allUnits = (space: Space): Unit[] => space.stages.flatMap((stage) => stage.units)
@@ -36,11 +37,7 @@ export function nextUnit(space: Space, id: string): Unit | undefined {
     : units.slice(units.findIndex((unit) => unit.id === id) + 1).find((unit) => available.has(unit.id) && needsLearning(unit))
 }
 export function relativeTime(ts: number): string {
-  const min = Math.floor((Date.now() - ts) / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
-  const hours = Math.floor(min / 60)
-  return hours < 24 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`
+  return formatRelativeTime(ts)
 }
 export function sessionUnitId(space: Space): string | null {
   if (space.view === 'result') return space.records.find((record) => record.id === space.viewingRecordId)?.unitId ?? null
@@ -67,5 +64,5 @@ export function projectChildren(space: Space, parentId: string | null) {
   return [
     ...space.directories.filter((entry) => entry.parentId === parentId).map((entry) => ({ ...entry, kind: 'directory' as const })),
     ...space.files.filter((entry) => entry.parentId === parentId).map((entry) => ({ ...entry, kind: 'file' as const })),
-  ].sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, 'zh-CN', { numeric: true }) : a.kind === 'directory' ? -1 : 1)
+  ].sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, currentLocale(), { numeric: true }) : a.kind === 'directory' ? -1 : 1)
 }

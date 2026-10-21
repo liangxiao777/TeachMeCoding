@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppModelProvider } from '@/app/context'
+import i18n from '@/i18n'
+import { notice } from '@/i18n/notice'
 import { ONBOARDING_QUESTIONS, composeReply, titleFrom } from './agent-script'
 import { evaluate, getAssessment } from './assessment'
 import { getLesson } from './lessons'
@@ -55,8 +57,8 @@ const withMessage = (s: Space, sessionId: string, msgId: string, fn: (m: Message
 
 const langOf = (s: Space): 'rust' | 'python' => (s.kind === 'pytorch' ? 'python' : 'rust')
 
-const termLines = (runId: string, kind: TermLine['kind'], lines: string[]): TermLine[] =>
-  lines.map((text) => ({ id: uid('t'), runId, kind, text }))
+const termLines = (runId: string, kind: TermLine['kind'], lines: string[], message?: TermLine['notice']): TermLine[] =>
+  lines.map((text) => ({ id: uid('t'), runId, kind, text, ...(message ? { notice: message } : {}) }))
 
 function useStoreImpl(initialState: () => AppState) {
   const [state, setState] = useState<AppState>(initialState)
@@ -136,7 +138,7 @@ function useStoreImpl(initialState: () => AppState) {
           }))
           next = withSession(next, sessionId, (x) => ({
             ...x,
-            title: x.title === '新会话' ? reply.title ?? titleFrom(userMsg.text, userMsg.quote) : x.title,
+            title: x.title || (reply.title ?? titleFrom(userMsg.text, userMsg.quote)),
           }))
           return next
         })
@@ -172,14 +174,15 @@ function useStoreImpl(initialState: () => AppState) {
       const runId = uid('run')
       const language = file.language
       if (language === 'text') {
-        pushTerm(spaceId, termLines(runId, 'info', ['此文件不可直接运行，原型支持 Rust 和 Python 练习。']))
+        pushTerm(spaceId, termLines(runId, 'info', ['此文件不可直接运行，原型支持 Rust 和 Python 练习。'], notice('preview', 'terminal.fileNotRunnable')))
         return
       }
       const path = entryPath(s, file.id)
       if (s.env !== 'connected') {
         pushTerm(
           spaceId,
-          termLines(runId, 'info', [s.env === 'lost' ? '环境连接已断开，请重新连接后再运行。' : '环境正在自动连接，请稍候再运行。']),
+          termLines(runId, 'info', [s.env === 'lost' ? '环境连接已断开，请重新连接后再运行。' : '环境正在自动连接，请稍候再运行。'],
+            notice('preview', s.env === 'lost' ? 'terminal.connectionLost' : 'terminal.connecting')),
         )
         return
       }
@@ -190,7 +193,8 @@ function useStoreImpl(initialState: () => AppState) {
         const lines = [
           ...termLines(runId, 'out', res.stdout),
           ...termLines(runId, 'err', res.stderr),
-          ...termLines(runId, 'info', [res.ok ? '进程已结束，退出码 0' : '运行失败，退出码 1']),
+          ...termLines(runId, 'info', [res.ok ? '进程已结束，退出码 0' : '运行失败，退出码 1'],
+            notice('preview', res.ok ? 'terminal.processExited' : 'terminal.runFailed')),
         ]
         pushTerm(spaceId, lines)
         mapSpace(spaceId, (x) => ({ ...x, running: false }))
@@ -214,7 +218,7 @@ function useStoreImpl(initialState: () => AppState) {
           if (step === 0) {
             const kind = detectKind(text)
             const topic = topicFrom(text)
-            patch = { kind, topic, name: kind === 'rust' ? 'Rust 入门' : `${topic} 学习` }
+            patch = { kind, topic, name: kind === 'rust' ? i18n.t('preview:spaceNames.rust') : i18n.t('preview:spaceNames.learning', { topic }) }
             reply = ONBOARDING_QUESTIONS.background
           } else if (step === 1) {
             reply = /(工具|项目|做出|写一个|完成)/.test(answers[0] ?? '')
@@ -321,7 +325,7 @@ function useStoreImpl(initialState: () => AppState) {
         const userMsg: Message = {
           id: uid('msg'),
           role: 'user',
-          text: text || '这段是什么意思？',
+          text,
           quote: quote ?? undefined,
           inAssessment: space.view === 'assessment',
           createdAt: Date.now(),
@@ -426,14 +430,14 @@ function useStoreImpl(initialState: () => AppState) {
       collapseDirectories: () => mapCur((s) => ({ ...s, expandedDirectoryIds: [], selectedEntryId: null })),
       createEntry: (name: string, kind: 'file' | 'directory', parentId: string | null) => {
         const s = cur()
-        if (!s) return '没有打开的学习空间'
+        if (!s) return notice('common', 'errors.noSpace')
         const result = addProjectEntry(s, name, kind, parentId)
         if (!result.error) mapCur(() => result.space)
         return result.error
       },
       renameEntry: (id: string, name: string) => {
         const s = cur()
-        if (!s) return '没有打开的学习空间'
+        if (!s) return notice('common', 'errors.noSpace')
         const result = renameProjectEntry(s, id, name)
         if (!result.error) mapCur(() => result.space)
         return result.error
@@ -505,26 +509,27 @@ function useStoreImpl(initialState: () => AppState) {
         if (tokens[0] === 'ls' || tokens[0] === 'cd') {
           const target = resolveProjectPath(s, tokens[1] ?? (tokens[0] === 'cd' ? '/' : '.'))
           if (!target || target.kind !== 'directory') {
-            pushTerm(s.id, termLines(runId, 'err', [`目录不存在：${tokens[1] ?? ''}`]))
+            pushTerm(s.id, termLines(runId, 'err', [`目录不存在：${tokens[1] ?? ''}`], notice('preview', 'terminal.directoryNotFound', { path: tokens[1] ?? '' })))
           } else if (tokens[0] === 'cd') {
             mapCur((sp) => ({ ...sp, terminalDirectoryId: target.id }))
           } else {
-            pushTerm(s.id, termLines(runId, 'out', [projectChildren(s, target.id).map((e) => `${e.name}${e.kind === 'directory' ? '/' : ''}`).join('   ') || '（空）']))
+            const entries = projectChildren(s, target.id).map((e) => `${e.name}${e.kind === 'directory' ? '/' : ''}`).join('   ')
+            pushTerm(s.id, termLines(runId, 'out', [entries || '（空）'], entries ? undefined : notice('preview', 'terminal.emptyDirectory')))
           }
           return
         }
         if (c === 'help') {
-          pushTerm(s.id, termLines(runId, 'out', ['原型模拟终端：pwd、cd <目录>、ls [目录]、clear、rustc <路径>、python <路径>、cargo run（仅模拟入口文件）']))
+          pushTerm(s.id, termLines(runId, 'out', ['原型模拟终端：pwd、cd <目录>、ls [目录]、clear、rustc <路径>、python <路径>、cargo run（仅模拟入口文件）'], notice('preview', 'terminal.help')))
           return
         }
         if (/^(rustc|python3?)$/.test(tokens[0] ?? '') || c === 'cargo run') {
           const target = resolveProjectPath(s, c === 'cargo run' ? '/src/main.rs' : tokens[1] ?? '')
           const f = target?.kind === 'file' ? s.files.find((x) => x.id === target.id) : undefined
           if (!f) {
-            pushTerm(s.id, termLines(runId, 'err', [`error: 找不到文件 ${tokens[1] ?? ''}`]))
+            pushTerm(s.id, termLines(runId, 'err', [`error: 找不到文件 ${tokens[1] ?? ''}`], notice('preview', 'terminal.fileNotFound', { path: tokens[1] ?? '' })))
             return
           }
-          if (c === 'cargo run') pushTerm(s.id, termLines(runId, 'info', ['原型仅模拟 src/main.rs，不执行 Cargo 构建或依赖解析。']))
+          if (c === 'cargo run') pushTerm(s.id, termLines(runId, 'info', ['原型仅模拟 src/main.rs，不执行 Cargo 构建或依赖解析。'], notice('preview', 'terminal.cargoSimulation')))
           runFileIn(s.id, f)
           return
         }

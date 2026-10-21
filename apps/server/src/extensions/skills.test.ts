@@ -35,7 +35,7 @@ test('Pi Skills use progressive XML metadata, explicit invocation and persisted 
     assert.match(explicit.text, /directory=/);
     skills.save({ paths: [], disabled: [automatic] });
     assert.ok(!skills.snapshot('review').prompt.includes('reviewing-code'));
-    assert.throws(() => skills.snapshot('/skill:reviewing-code'), /停用/);
+    assert.throws(() => skills.snapshot('/skill:reviewing-code'), { message: 'SKILL_DISABLED_OR_MISSING' });
     assert.equal(new SkillService(db, root).settings().skills.find((s) => s.filePath === automatic)?.enabled, false);
     const extra = join(root, 'extra'); make('assessing-code', false, extra, 'Losing duplicate body');
     const bad = join(extra, 'invalid'); mkdirSync(bad); writeFileSync(join(bad, 'SKILL.md'), '---\nname: invalid\n---\nMissing description.');
@@ -43,7 +43,7 @@ test('Pi Skills use progressive XML metadata, explicit invocation and persisted 
     assert.ok(settings.diagnostics.some((diagnostic) => diagnostic.type === 'collision'));
     assert.ok(settings.diagnostics.some((diagnostic) => diagnostic.type === 'warning'));
     assert.equal(settings.skills.find((s) => s.name === 'assessing-code')!.filePath, manual);
-    assert.throws(() => skills.save({ paths: ['relative/path'], disabled: [] }), /绝对/);
+    assert.throws(() => skills.save({ paths: ['relative/path'], disabled: [] }), { message: 'SKILL_PATH_ABSOLUTE_REQUIRED' });
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

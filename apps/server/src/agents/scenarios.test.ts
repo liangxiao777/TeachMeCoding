@@ -133,7 +133,7 @@ test('the opening request starts intake once, and only its tool fills the editab
     assert.deepEqual(learning.space(space.id).requirement, { value: expected, revision: 1, confirmed: false });
     assert.equal(runtime.createSpace(key, input).runs.length, 1);
     assert.equal(turns, 2);
-    assert.throws(() => runtime.submit(space.id, space.sessions[1]!.id, randomUUID(), { text: 'plan', quote: null, draftRevision: 0 }), /先确认/);
+    assert.throws(() => runtime.submit(space.id, space.sessions[1]!.id, randomUUID(), { text: 'plan', quote: null, draftRevision: 0 }), { message: 'REQUIREMENT_UNCONFIRMED' });
     const edited = learning.saveRequirement(space.id, { revision: 1, value: { rows: [...expected.rows.slice(0, 3), { question: '什么时候学习？', answer: '每周 7 小时' }] }, intake: conceptIntake, confirmed: false });
     assert.equal(edited.value.rows[3]!.answer, '每周 7 小时');
     assert.equal(learning.saveRequirement(space.id, { ...edited, confirmed: true }).confirmed, true);
@@ -246,7 +246,7 @@ test('initial roadmap applies on success while adjustments require confirmation 
       learning.applyProposal(space.id, p.id); learning.applyProposal(space.id, p.id);
       assert.equal(learning.space(space.id).route.revision, 1);
       const old = learning.proposeRoute(space.id, session, content);
-      assert.throws(() => runtime.submit(space.id, session, randomUUID(), { text: 'adjust', quote: null, draftRevision: learning.session(space.id, session).draft.revision }), /先接受或拒绝/);
+      assert.throws(() => runtime.submit(space.id, session, randomUUID(), { text: 'adjust', quote: null, draftRevision: learning.session(space.id, session).draft.revision }), { message: 'ROUTE_PROPOSAL_PENDING' });
       learning.rejectProposal(space.id, old.id, {});
       const adjustment = runtime.submit(space.id, session, randomUUID(), { text: 'adjust', quote: null, draftRevision: learning.session(space.id, session).draft.revision });
       await runtime.idle(adjustment.run.id);
@@ -257,7 +257,7 @@ test('initial roadmap applies on success while adjustments require confirmation 
       assert.equal(pending.runId, adjustment.run.id);
       learning.applyProposal(space.id, pending.id);
       assert.equal(learning.space(space.id).route.content!.note, 'adjusted');
-      assert.throws(() => learning.applyProposal(space.id, old.id), /已经结束/);
+      assert.throws(() => learning.applyProposal(space.id, old.id), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
       const unit = content.stages[0]!.units[0]!.id;
       learning.saveLesson(space.id, unit, { title: 'keep', content: 'learned' });
       const next = learning.proposeRoute(space.id, session, { ...content, note: 'adjust' });
@@ -265,9 +265,9 @@ test('initial roadmap applies on success while adjustments require confirmation 
       assert.equal(learning.unit(space.id, unit).lesson!.content, 'learned');
       const late = learning.proposeRoute(space.id, session, content);
       learning.saveRequirement(space.id, { ...learning.space(space.id).requirement, confirmed: true });
-      assert.throws(() => learning.applyProposal(space.id, late.id), /内容已改变/);
+      assert.throws(() => learning.applyProposal(space.id, late.id), { message: 'CONTENT_CHANGED' });
       learning.rejectProposal(space.id, late.id, {});
-      assert.throws(() => learning.proposeRoute(space.id, session, { ...content, stages: [{ ...content.stages[0]!, units: [{ ...content.stages[0]!.units[0]!, id: randomUUID() }] }] }), /不能移除/);
+      assert.throws(() => learning.proposeRoute(space.id, session, { ...content, stages: [{ ...content.stages[0]!, units: [{ ...content.stages[0]!.units[0]!, id: randomUUID() }] }] }), { message: 'ACTIVE_UNIT_REMOVAL' });
     } finally { await runtime.close(); db.close(); }
   }
 });
@@ -287,7 +287,7 @@ test('one space has one roadmap round across sessions and runtimes; a published 
     return response((roadmap ? routeReply(context.messages, { ...space.route.content!, note: 'Pending adjustment' }, true) : null) ?? reply([]));
   } });
   const secondRuntime = new TeachingRuntime(learning, syntheticSource, { stream: () => response(reply([])) });
-  const conflict = (pattern: RegExp) => (error: unknown) => error instanceof BusinessError && error.status === 409 && pattern.test(error.message);
+  const conflict = (code: BusinessError['detail']['code']) => (error: unknown) => error instanceof BusinessError && error.status === 409 && error.detail.code === code;
   const submit = (session: string) => runtime.submit(space.id, session, randomUUID(), { text: 'Input', quote: null, draftRevision: learning.session(space.id, session).draft.revision });
   try {
     const failed: string[] = [];
@@ -300,9 +300,9 @@ test('one space has one roadmap round across sessions and runtimes; a published 
     assert.equal(run.state, 'pending');
     const busy = () => {
       const before = learning.space(space.id), sessionBefore = learning.session(space.id, otherRoute);
-      assert.throws(() => secondRuntime.submit(space.id, otherRoute, randomUUID(), { text: 'Another adjustment', quote: null, draftRevision: 0 }), conflict(/正在调整路线/));
-      assert.throws(() => runtime.retry(space.id, failed[2]!, randomUUID()), conflict(/正在调整路线/));
-      assert.throws(() => learning.proposeRoute(space.id, otherRoute, space.route.content), conflict(/正在调整路线/));
+      assert.throws(() => secondRuntime.submit(space.id, otherRoute, randomUUID(), { text: 'Another adjustment', quote: null, draftRevision: 0 }), conflict('ROUTE_ADJUSTMENT_RUNNING'));
+      assert.throws(() => runtime.retry(space.id, failed[2]!, randomUUID()), conflict('ROUTE_ADJUSTMENT_RUNNING'));
+      assert.throws(() => learning.proposeRoute(space.id, otherRoute, space.route.content), conflict('ROUTE_ADJUSTMENT_RUNNING'));
       assert.deepEqual(learning.space(space.id), before);
       assert.deepEqual(learning.session(space.id, otherRoute), sessionBefore);
     };
@@ -320,14 +320,14 @@ test('one space has one roadmap round across sessions and runtimes; a published 
     for (const session of [intake, tutor, routeSession, otherRoute, ...newlyCreated.map((session) => session.id)]) {
       const before = learning.session(space.id, session), workspace = learning.space(space.id);
       const input = { text: 'Blocked ordinary input', quote: null, draftRevision: before.draft.revision };
-      assert.throws(() => runtime.submit(space.id, session, randomUUID(), input), conflict(/先接受或拒绝/));
-      assert.throws(() => learning.addMessage(space.id, session, input), conflict(/先接受或拒绝/));
+      assert.throws(() => runtime.submit(space.id, session, randomUUID(), input), conflict('ROUTE_PROPOSAL_PENDING'));
+      assert.throws(() => learning.addMessage(space.id, session, input), conflict('ROUTE_PROPOSAL_PENDING'));
       assert.deepEqual(learning.session(space.id, session), before);
       assert.deepEqual(learning.space(space.id), workspace);
     }
-    for (const id of failed) assert.throws(() => runtime.retry(space.id, id, randomUUID()), conflict(/先接受或拒绝/));
+    for (const id of failed) assert.throws(() => runtime.retry(space.id, id, randomUUID()), conflict('ROUTE_PROPOSAL_PENDING'));
     const beforePlan = learning.space(space.id);
-    assert.throws(() => runtime.plan(space.id, randomUUID(), beforePlan.requirement), conflict(/先接受或拒绝/));
+    assert.throws(() => runtime.plan(space.id, randomUUID(), beforePlan.requirement), conflict('ROUTE_PROPOSAL_PENDING'));
     assert.deepEqual(learning.space(space.id), beforePlan, 'Blocked planning must not change the requirement baseline.');
     const rejected = runtime.rejectProposal(space.id, pending[0]!.id, randomUUID(), {});
     assert.equal(rejected.run, null); assert.equal(rejected.followupError, null);
@@ -380,7 +380,7 @@ test('feedback rejection records one terminal decision and starts B from the app
     assert.deepEqual(decision.session.draft, draft);
     assert.equal(runtime.rejectProposal(space.id, a.id, key, { feedback }).run!.id, decision.run.id);
     assert.equal(runtime.rejectProposal(space.id, a.id, randomUUID(), { feedback }).run, null);
-    await runtime.idle(decision.run.id); assert.equal(runtime.get(space.id, decision.run.id).state, 'succeeded', runtime.get(space.id, decision.run.id).error ?? '');
+    await runtime.idle(decision.run.id); assert.equal(runtime.get(space.id, decision.run.id).state, 'succeeded', JSON.stringify(runtime.get(space.id, decision.run.id).error));
     const current = learning.space(space.id), b = current.proposals.at(-1)!;
     assert.equal(current.runs.length, space.runs.length + 2);
     assert.deepEqual(current.route, space.route);
@@ -389,8 +389,8 @@ test('feedback rejection records one terminal decision and starts B from the app
     assert.deepEqual(b.content.stages[0]!.units, [{ ...units[0]!, summary: 'B corrected wording' }, units[1]!]);
     assert.equal(current.proposals.filter((proposal) => proposal.state === 'pending').length, 1);
     assert.equal(learning.session(space.id, routeSession).messages.filter((message) => message.role === 'user' && message.text === feedback).length, 1);
-    assert.throws(() => learning.applyProposal(space.id, a.id), /已经结束/);
-    assert.throws(() => runtime.rejectProposal(space.id, a.id, randomUUID(), { feedback: 'Different decision' }), /已经结束/);
+    assert.throws(() => learning.applyProposal(space.id, a.id), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
+    assert.throws(() => runtime.rejectProposal(space.id, a.id, randomUUID(), { feedback: 'Different decision' }), { message: 'ROUTE_PROPOSAL_CANNOT_DECIDE' });
     assert.equal(runtime.rejectProposal(space.id, a.id, key, { feedback }).run!.id, decision.run.id);
     assert.equal(learning.space(space.id).runs.length, current.runs.length);
     learning.applyProposal(space.id, b.id); learning.applyProposal(space.id, b.id);
@@ -412,14 +412,14 @@ test('offline rejection saves the terminal decision and optional feedback withou
       const rejected = decision.workspace.proposals.find((item) => item.id === proposal.id)!;
       assert.equal(rejected.state, 'rejected'); assert.equal(rejected.feedback, feedback);
       assert.deepEqual(decision.session.messages.map((message) => [message.role, message.text]), feedback ? [['user', feedback]] : []);
-      if (feedback) assert.match(decision.followupError!, /已拒绝提案并保存修改意见.*教学模型不可用/);
+      if (feedback) assert.deepEqual(decision.followupError, { code: 'MODEL_UNAVAILABLE' });
       else assert.equal(decision.followupError, null);
       assert.equal(offline.rejectProposal(space.id, proposal.id, key, { feedback }).run, null);
       assert.equal(online.rejectProposal(space.id, proposal.id, key, { feedback }).run, null);
       assert.equal(online.rejectProposal(space.id, proposal.id, randomUUID(), { feedback }).run, null);
       assert.equal(learning.space(space.id).runs.length, 0);
       assert.deepEqual(learning.session(space.id, routeSession), decision.session);
-      assert.throws(() => learning.applyProposal(space.id, proposal.id), /已经结束/);
+      assert.throws(() => learning.applyProposal(space.id, proposal.id), { message: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
     } finally { await Promise.all([offline.close(), online.close()]); db.close(); }
   }
 });
@@ -454,7 +454,7 @@ test('pending-proposal HTTP gates preserve intake answers, permit session reads/
       const input = { text: 'Blocked', quote: null, draftRevision: learning.session(space.id, id).draft.revision };
       for (const endpoint of ['messages', 'runs']) {
         const blocked = await post(`${base}/sessions/${id}/${endpoint}`, input);
-        assert.equal(blocked.status, 409); assert.match((await blocked.json()).error, /先接受或拒绝/);
+        assert.equal(blocked.status, 409); assert.deepEqual(await blocked.json(), { code: 'ROUTE_PROPOSAL_PENDING' });
       }
     }
     assert.deepEqual(learning.session(space.id, intake), before, 'Rejected answer must remain pending and must not append its text.');
@@ -465,7 +465,7 @@ test('pending-proposal HTTP gates preserve intake answers, permit session reads/
     assert.equal((await app.request(`/api${decisionPath}/reject`, { method: 'POST', headers: { ...headers, 'X-TMC-Token': '' }, body: '{}' })).status, 401);
     const key = randomUUID(), rejected = await post(`${decisionPath}/reject`, { feedback: '  Offline feedback  ' }, key, offlineApp);
     assert.equal(rejected.status, 200); const receipt = await rejected.json();
-    assert.equal(receipt.run, null); assert.match(receipt.followupError, /保存修改意见.*教学模型不可用/);
+    assert.equal(receipt.run, null); assert.deepEqual(receipt.followupError, { code: 'MODEL_UNAVAILABLE' });
     assert.equal(receipt.workspace.proposals.find((item: { id: string }) => item.id === proposal.id).feedback, 'Offline feedback');
     assert.equal((await post(`${decisionPath}/reject`, { feedback: 'Offline feedback' }, key, offlineApp)).status, 200);
     assert.equal((await post(`${decisionPath}/reject`, { feedback: 'Changed feedback' }, key)).status, 409);
@@ -484,21 +484,21 @@ test('pending and running lesson activity protects IDs and goals at publication 
     const removed = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [units[1]!] }] };
     const proposal = learning.proposeRoute(space.id, routeSession, removed);
     const before = learning.space(space.id);
-    assert.throws(() => runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 }), /先接受或拒绝/);
+    assert.throws(() => runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 }), { message: 'ROUTE_PROPOSAL_PENDING' });
     assert.deepEqual(learning.space(space.id), before, 'Pending review prevents starting an independent task.');
     const reviewSession = learning.createSession(space.id, { scope: 'unit', unitId: unit.id, title: 'Review' });
     learning.saveSessionDraft(space.id, reviewSession.id, { revision: 0, text: 'Saved learning activity during review', quote: null, routeSuggestion: '' });
-    assert.throws(() => learning.applyProposal(space.id, proposal.id), /不能移除/);
+    assert.throws(() => learning.applyProposal(space.id, proposal.id), { message: 'ACTIVE_UNIT_REMOVAL' });
     learning.saveSessionDraft(space.id, reviewSession.id, { revision: 1, text: '', quote: null, routeSuggestion: '' });
     learning.rejectProposal(space.id, proposal.id, {});
     const task = runtime.generate(space.id, unit.id, randomUUID(), { kind: 'lesson', revision: 0 });
     assert.equal(task.state, 'pending');
     assert.equal(learning.unit(space.id, unit.id).started, false, 'An empty active task is protected but has not yet saved learning content.');
     assert.equal(learning.progress(space.id).find((progress) => progress.id === unit.id)!.active, true);
-    assert.throws(() => learning.proposeRoute(space.id, routeSession, removed), /不能移除/);
+    assert.throws(() => learning.proposeRoute(space.id, routeSession, removed), { message: 'ACTIVE_UNIT_REMOVAL' });
     await entered; assert.equal(runtime.get(space.id, task.id).state, 'running');
     const retargeted = { ...space.route.content!, stages: [{ ...space.route.content!.stages[0]!, units: [{ ...unit, goals: ['Replacement objective'] }, units[1]!] }] };
-    assert.throws(() => learning.proposeRoute(space.id, routeSession, retargeted), /学习目标/);
+    assert.throws(() => learning.proposeRoute(space.id, routeSession, retargeted), { message: 'ACTIVE_UNIT_GOALS_CHANGED' });
     const supplement = { id: randomUUID(), title: 'Inserted prerequisite', summary: '', goals: [] };
     const retained = { note: 'Supplement before active learning', stages: [
       { id: randomUUID(), title: 'Supplement', units: [supplement] },

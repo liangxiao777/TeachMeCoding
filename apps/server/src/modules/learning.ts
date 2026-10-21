@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   assessmentDraftSchema, assessmentResultSchema, assessmentSpecSchema, conclusionDecisionSchema, conclusionSchema, createSessionSchema, createSpaceSchema,
-  applyAgentEvent, executionFeedback, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, sessionSettingsSchema, unlockedUnitIds,
-  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type LearningConclusion, type Lesson, type LessonProposal, type LessonProposalApplication, type Message, type Proposal, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
+  applyAgentEvent, businessErrorResponse, idSchema, lessonChangeSchema, lessonMarkdown, lessonSchema, messageInputSchema, rejectLessonProposalSchema, rejectRouteProposalSchema, renameSpaceSchema, researchInputSchema, researchRefSchema, routeContentSchema, saveRequirementSchema, sessionDraftSchema, sessionSettingsSchema, unlockedUnitIds,
+  type AgentContext, type AgentDisplayPart, type AgentEventData, type AssessmentRecord, type BusinessErrorDetail, type LearningConclusion, type Lesson, type LessonProposal, type LessonProposalApplication, type Message, type Proposal, type ResearchRef, type ResearchSaveResult, type RouteContent, type SessionDetail, type SessionSummary, type SpaceSummary, type UnitDetail, type UnitProgress, type Workspace,
 } from '@teach-me-coding/contracts';
 import { Intake } from './intake.js';
 
@@ -11,16 +11,21 @@ export interface LessonReference { unitId: string; revision: number }
 export interface LessonBaseline { requirement: number; route: number; lesson: number }
 
 export class BusinessError extends Error {
-  constructor(public status: 400 | 404 | 409 | 413 | 422 | 503, message: string) { super(message); }
+  readonly detail: BusinessErrorDetail;
+  constructor(public status: 400 | 404 | 409 | 413 | 422 | 503, detail: BusinessErrorDetail) {
+    super(detail.code);
+    this.detail = businessErrorResponse(detail) as BusinessErrorDetail;
+  }
+  toResponse() { return businessErrorResponse(this.detail); }
 }
-const conflict = () => new BusinessError(409, '内容已改变，请重新读取后再保存；本次修改未写入。');
+const conflict = () => new BusinessError(409, { code: 'CONTENT_CHANGED' });
 
 export class Learning {
   readonly intake: Intake;
   constructor(readonly db: Database.Database) { this.intake = new Intake(db); }
   private one<T>(sql: string, ...params: unknown[]): T {
     const row = this.db.prepare(sql).get(...params) as T | undefined;
-    if (!row) throw new BusinessError(404, '所属空间、单元或记录不存在。');
+    if (!row) throw new BusinessError(404, { code: 'LEARNING_RECORD_NOT_FOUND' });
     return row;
   }
   private all<T>(sql: string, ...params: unknown[]): T[] { return this.db.prepare(sql).all(...params) as T[]; }
@@ -32,7 +37,7 @@ export class Learning {
     return this.db.transaction(() => {
       const old = this.db.prepare('SELECT fingerprint,response FROM requests WHERE key=?').get(key) as { fingerprint: string; response: string } | undefined;
       if (old) {
-        if (old.fingerprint !== fingerprint) throw new BusinessError(409, '幂等键已用于其他请求。');
+        if (old.fingerprint !== fingerprint) throw new BusinessError(409, { code: 'IDEMPOTENCY_KEY_REUSED' });
         return JSON.parse(old.response) as T;
       }
       const result = fn();
@@ -71,7 +76,7 @@ export class Learning {
       this.db.prepare('INSERT INTO requirements(space_id,value) VALUES (?,?)').run(id, JSON.stringify({ rows: [] }));
       this.db.prepare('INSERT INTO routes(space_id) VALUES (?)').run(id);
       for (const scope of ['intake', 'route']) {
-        this.db.prepare('INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,?,?)').run(id, randomUUID(), scope, scope === 'intake' ? '学习需求' : '学习路线');
+        this.db.prepare('INSERT INTO sessions(space_id,id,scope,title) VALUES (?,?,?,?)').run(id, randomUUID(), scope, '');
       }
       return this.space(id);
     })();
@@ -148,13 +153,15 @@ export class Learning {
          WHERE m.space_id=? AND m.session_id=? ORDER BY e.run_id,e.seq`, space, id);
       const parts = new Map<string, AgentDisplayPart[]>();
       const contexts = new Map<string, AgentContext>();
-      const errors = new Map<string, string>();
+      const errors = new Map<string, Pick<Message, 'error'>>();
+      const notices = new Map<string, NonNullable<Message['notice']>>();
       for (const event of events) {
         const data = JSON.parse(event.value) as AgentEventData;
         parts.set(event.runId, applyAgentEvent(parts.get(event.runId) ?? [], { runId: event.runId, seq: event.seq, data }));
         if (data.type === 'context') contexts.set(event.runId, data.context);
+        if (data.type === 'notice') notices.set(data.messageId, data.notice);
         if (data.type === 'state') {
-          if (data.error) errors.set(event.runId, data.error);
+          if (data.error) errors.set(event.runId, { error: data.error });
           else errors.delete(event.runId);
         }
       }
@@ -163,7 +170,8 @@ export class Learning {
         messages: messages.map((m) => ({ ...m, quote: m.quote === null ? null : JSON.parse(m.quote),
           ...(parts.has(m.id) ? { parts: parts.get(m.id) } : {}),
           ...(contexts.has(m.id) ? { context: contexts.get(m.id) } : {}),
-          ...(errors.has(m.id) ? { error: errors.get(m.id) } : {}),
+          ...errors.get(m.id),
+          ...(notices.has(m.id) ? { notice: notices.get(m.id) } : {}),
         })),
         ...(row.scope === 'intake' ? { questions: this.intake.questions(space, id) } : {}),
       };
@@ -174,7 +182,7 @@ export class Learning {
     const v = createSessionSchema.parse(input);
     if (v.unitId) this.unit(space, v.unitId);
     const id = randomUUID();
-    this.db.prepare('INSERT INTO sessions(space_id,id,scope,unit_id,title) VALUES (?,?,?,?,?)').run(space, id, v.scope, v.unitId, v.title);
+    this.db.prepare('INSERT INTO sessions(space_id,id,scope,unit_id,title) VALUES (?,?,?,?,?)').run(space, id, v.scope, v.unitId, v.title ?? '');
     return this.session(space, id);
   }
   saveSessionDraft(space: string, id: string, input: unknown) {
@@ -214,15 +222,6 @@ export class Learning {
     const submitted = this.db.prepare('SELECT MAX(attempt) AS n FROM submissions WHERE space_id=? AND unit_id=?').get(space, id) as { n: number | null };
     const evaluated: AssessmentRecord[] = records.map(({ result, answers, ...r }) => {
       const value = JSON.parse(result);
-      // Hide only our exact legacy diagnostic strings; keep stored evidence and learner content intact.
-      const execution = value.execution as AssessmentRecord['execution'];
-      const diagnostic = execution ? `执行 ${execution.id}，代码 SHA-256 ${execution.codeHash}；${execution.state}，匹配 ${execution.results.filter((r) => r.matches).length}/${execution.plan.cases.length} 个公开用例。`
-        : value.q2Kind === 'code' ? '只进行了静态模型评估；未运行所提交代码。' : '基于固定题目、rubric 和提交答案的非执行模型评估。';
-      value.evidence = value.evidence.filter((text: string) => text !== diagnostic);
-      value.toVerify = value.toVerify.filter((text: string) => text !== '需要完整的真实执行证据；缺工具链请自行配置，不自动安装。');
-      if (value.result === 'pass') value.summary = '本次作答符合题目要求。';
-      if (value.result === 'unverified') value.summary = execution ? executionFeedback(execution).summary : '本次没有可用的代码运行结果，尚不能判断代码是否符合要求。';
-      if (execution && value.result === 'needs_work' && value.summary.startsWith('实际输出与测试期望不符。')) value.summary = executionFeedback(execution).summary;
       const valid = !!versions.confirmed && ['non-execution', 'execution-verified'].includes(value.verification) && value.specRevision === spec?.revision && value.lessonRevision === (lesson?.revision ?? 0)
         && value.sources?.requirement === versions.requirement;
       return { ...r, ...value, valid, answers: JSON.parse(answers) };
@@ -288,30 +287,30 @@ export class Learning {
   }
   assertUnitInRoute(space: string, id: string) {
     if (!this.db.prepare(`SELECT 1 FROM routes r,json_each(r.content,'$.stages') s,json_each(s.value,'$.units') u
-      WHERE r.space_id=? AND json_extract(u.value,'$.id')=?`).get(space, id)) throw new BusinessError(404, '单元不在当前学习路线中。');
+      WHERE r.space_id=? AND json_extract(u.value,'$.id')=?`).get(space, id)) throw new BusinessError(404, { code: 'UNIT_NOT_IN_ROUTE' });
   }
   assertUnitUnlocked(space: string, id: string) {
     idSchema.parse(id);
     const units = this.space(space).route.content?.stages.flatMap((stage) => stage.units) ?? [];
-    if (!units.some((unit) => unit.id === id)) throw new BusinessError(404, '单元不在当前学习路线中。');
+    if (!units.some((unit) => unit.id === id)) throw new BusinessError(404, { code: 'UNIT_NOT_IN_ROUTE' });
     const published = new Set(this.lessonReferences(space).map((ref) => ref.unitId));
     const retained = new Set(this.progress(space).filter((unit) => unit.started || unit.active).map((unit) => unit.id));
     if (!unlockedUnitIds(units, published, retained).has(id)) {
       const first = units.find((unit) => !published.has(unit.id))!;
-      throw new BusinessError(422, `单元尚未解锁，请先生成并保存「${first.title}」的课件。`);
+      throw new BusinessError(422, { code: 'UNIT_LOCKED', params: { title: first.title } });
     }
   }
   lessonVersion(space: string, unit: string, revision: number) {
     idSchema.parse(space); idSchema.parse(unit);
     this.assertUnitInRoute(space, unit);
     const row = this.db.prepare('SELECT content FROM lesson_versions WHERE space_id=? AND unit_id=? AND revision=?').get(space, unit, revision) as { content: string } | undefined;
-    if (!row) throw new BusinessError(409, '本次任务固定的课件版本无法读取，不会改用最新版。请重新生成课件。');
+    if (!row) throw new BusinessError(409, { code: 'LESSON_VERSION_UNAVAILABLE' });
     return { ...lessonSchema.parse(JSON.parse(row.content)), revision };
   }
   checkLessonReferences(space: string, refs: readonly LessonReference[]) {
     const current = new Map(this.lessonReferences(space).map((ref) => [ref.unitId, ref.revision]));
     if (refs.some((ref) => current.get(ref.unitId) !== ref.revision)) {
-      throw new BusinessError(409, '参考课件已改变，请按当前资料重新生成课件；本次结果未保存。');
+      throw new BusinessError(409, { code: 'LESSON_REFERENCES_CHANGED' });
     }
     for (const ref of refs) this.lessonVersion(space, ref.unitId, ref.revision);
   }
@@ -333,16 +332,16 @@ export class Learning {
   // Internal business entrypoints for validated future generation tasks; not browser generation APIs.
   assertAgentInputAllowed(space: string) {
     if (this.db.prepare("SELECT 1 FROM proposals WHERE space_id=? AND state='pending'").get(space)) {
-      throw new BusinessError(409, '请先接受或拒绝当前路线提案，再继续对话。');
+      throw new BusinessError(409, { code: 'ROUTE_PROPOSAL_PENDING' });
     }
     if (this.db.prepare("SELECT 1 FROM lesson_proposals WHERE space_id=? AND state='pending'").get(space)) {
-      throw new BusinessError(409, '请先接受或拒绝当前课件提案，再继续对话或生成。');
+      throw new BusinessError(409, { code: 'LESSON_PROPOSAL_PENDING' });
     }
   }
   assertRouteAdjustmentAllowed(space: string, run?: string) {
     this.assertAgentInputAllowed(space);
     if (this.db.prepare("SELECT 1 FROM runs WHERE space_id=? AND kind='roadmap' AND state IN ('pending','running') AND id!=?").get(space, run ?? '')) {
-      throw new BusinessError(409, '这个学习空间正在调整路线，请等待完成或停止当前生成。');
+      throw new BusinessError(409, { code: 'ROUTE_ADJUSTMENT_RUNNING' });
     }
   }
   private validateRouteAdjustment(space: string, content: RouteContent, previous: RouteContent | null) {
@@ -351,21 +350,20 @@ export class Learning {
     for (const unit of previous?.stages.flatMap((stage) => stage.units) ?? []) {
       if (!protectedIds.has(unit.id)) continue;
       const replacement = next.get(unit.id);
-      if (!replacement) throw new BusinessError(409, `不能移除已开始学习或正在生成的单元「${unit.title}」，可以移动它或添加补充单元。`);
-      if (JSON.stringify(unit.goals) !== JSON.stringify(replacement.goals)) throw new BusinessError(409,
-        `「${unit.title}」已有学习活动，学习目标需要保留；新增目标请安排为补充单元。`);
+      if (!replacement) throw new BusinessError(409, { code: 'ACTIVE_UNIT_REMOVAL', params: { title: unit.title } });
+      if (JSON.stringify(unit.goals) !== JSON.stringify(replacement.goals)) throw new BusinessError(409, { code: 'ACTIVE_UNIT_GOALS_CHANGED', params: { title: unit.title } });
     }
   }
   proposeRoute(space: string, session: string, input: unknown, baseline?: { requirement: number; route: number }, run?: string) {
     const content = routeContentSchema.parse(input);
     return this.db.transaction(() => {
       const current = this.space(space);
-      if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, '路线提案需要已确认需求及路线会话。');
+      if (!current.requirement.confirmed || this.session(space, session).scope !== 'route') throw new BusinessError(422, { code: 'ROUTE_PROPOSAL_REQUIRES_CONFIRMATION' });
       this.intake.assertReady(space, current.requirement);
       const base = baseline ?? { requirement: current.requirement.revision, route: current.route.revision };
       if (base.requirement !== current.requirement.revision || base.route !== current.route.revision) throw conflict();
       const ids = content.stages.flatMap((s) => [s.id, ...s.units.map((u) => u.id)]);
-      if (new Set(ids).size !== ids.length) throw new BusinessError(422, '路线中的阶段和单元标识不能重复。');
+      if (new Set(ids).size !== ids.length) throw new BusinessError(422, { code: 'DUPLICATE_ROUTE_IDS' });
       this.assertRouteAdjustmentAllowed(space, run);
       this.validateRouteAdjustment(space, content, current.route.content);
       const id = randomUUID();
@@ -379,9 +377,9 @@ export class Learning {
     return this.db.transaction(() => {
       const current = this.space(space);
       const p = current.proposals.find((p) => p.id === id);
-      if (!p) throw new BusinessError(404, '路线提案不存在。');
+      if (!p) throw new BusinessError(404, { code: 'ROUTE_PROPOSAL_NOT_FOUND' });
       if (p.state === 'applied') return current;
-      if (p.state !== 'pending') throw new BusinessError(409, '这份路线提案已经结束，不能再应用。');
+      if (p.state !== 'pending') throw new BusinessError(409, { code: 'ROUTE_PROPOSAL_CANNOT_APPLY' });
       if (!current.requirement.confirmed || p.requirementRevision !== current.requirement.revision || p.baseRevision !== current.route.revision) throw conflict();
       this.intake.assertReady(space, current.requirement);
       const units = p.content.stages.flatMap((s) => s.units);
@@ -397,9 +395,9 @@ export class Learning {
     const input = rejectRouteProposalSchema.parse(raw);
     return this.db.transaction(() => {
       const current = this.space(space), proposal = current.proposals.find((proposal) => proposal.id === id);
-      if (!proposal) throw new BusinessError(404, '路线提案不存在。');
+      if (!proposal) throw new BusinessError(404, { code: 'ROUTE_PROPOSAL_NOT_FOUND' });
       if (proposal.state === 'rejected' && proposal.feedback === input.feedback) return current;
-      if (proposal.state !== 'pending') throw new BusinessError(409, '这份路线提案已经结束，不能再改变选择。');
+      if (proposal.state !== 'pending') throw new BusinessError(409, { code: 'ROUTE_PROPOSAL_CANNOT_DECIDE' });
       this.db.prepare("UPDATE proposals SET state='rejected',feedback=? WHERE space_id=? AND id=?").run(input.feedback, space, id);
       return this.space(space);
     })();
@@ -428,12 +426,12 @@ export class Learning {
       || frozen.spaceId !== space || frozen.unitId !== unit || frozen.unit?.id !== unit || frozen.scenario !== row.kind
       || frozen.requirement?.revision !== base.requirement || frozen.route?.revision !== base.route || frozen.lesson?.revision !== base.lesson
       || frozen.sessionId !== row.sessionId || (source.kind === 'run' && row.sessionId !== session)) {
-      throw new BusinessError(409, '课件提案来源或所属单元与固定输入不一致，不能保存。');
+      throw new BusinessError(409, { code: 'LESSON_PROPOSAL_SOURCE_MISMATCH' });
     }
     for (const ownerId of new Set([session, row.sessionId])) {
       if (!ownerId) continue;
       const owner = this.session(space, ownerId);
-      if (owner.scope !== 'unit' || owner.unitId !== unit) throw new BusinessError(422, '课件提案只能修改发起会话所属单元。');
+      if (owner.scope !== 'unit' || owner.unitId !== unit) throw new BusinessError(422, { code: 'LESSON_PROPOSAL_UNIT_MISMATCH' });
     }
     return row.state;
   }
@@ -461,13 +459,13 @@ export class Learning {
     idSchema.parse(id);
     return this.db.transaction(() => {
       const current = this.space(space), p = current.lessonProposals.find((p) => p.id === id);
-      if (!p) throw new BusinessError(404, '课件提案不存在。');
+      if (!p) throw new BusinessError(404, { code: 'LESSON_PROPOSAL_NOT_FOUND' });
       if (p.state === 'applied') return { workspace: current, unit: this.unit(space, p.unitId) };
-      if (p.state !== 'pending') throw new BusinessError(409, '这份课件提案已经结束，不能再应用。');
+      if (p.state !== 'pending') throw new BusinessError(409, { code: 'LESSON_PROPOSAL_CANNOT_APPLY' });
       const base = { requirement: p.requirementRevision, route: p.routeRevision, lesson: p.baseRevision };
       this.assertUnitUnlocked(space, p.unitId);
       this.checkBaseline(space, p.unitId, base);
-      if (this.lessonSource(space, p.unitId, p.source, base, p.sessionId) !== 'succeeded') throw new BusinessError(409, '课件提案的来源任务尚未正常完成，不能接受。');
+      if (this.lessonSource(space, p.unitId, p.source, base, p.sessionId) !== 'succeeded') throw new BusinessError(409, { code: 'LESSON_PROPOSAL_SOURCE_UNFINISHED' });
       this.checkLessonReferences(space, p.references);
       this.writeLesson(space, p.unitId, p.content, p.baseRevision + 1);
       this.db.prepare("UPDATE lesson_proposals SET state='applied' WHERE space_id=? AND id=?").run(space, id);
@@ -479,9 +477,9 @@ export class Learning {
     const input = rejectLessonProposalSchema.parse(raw);
     return this.db.transaction(() => {
       const current = this.space(space), p = current.lessonProposals.find((p) => p.id === id);
-      if (!p) throw new BusinessError(404, '课件提案不存在。');
+      if (!p) throw new BusinessError(404, { code: 'LESSON_PROPOSAL_NOT_FOUND' });
       if (p.state === 'rejected' && p.feedback === input.feedback) return current;
-      if (p.state !== 'pending') throw new BusinessError(409, '这份课件提案已经结束，不能再改变选择。');
+      if (p.state !== 'pending') throw new BusinessError(409, { code: 'LESSON_PROPOSAL_CANNOT_DECIDE' });
       this.db.prepare("UPDATE lesson_proposals SET state='rejected',feedback=? WHERE space_id=? AND id=?").run(input.feedback, space, id);
       return this.space(space);
     })();
@@ -491,7 +489,7 @@ export class Learning {
     const content = lessonSchema.parse(input);
     return this.db.transaction(() => {
       const revision = this.unit(space, unit).lesson?.revision ?? 0;
-      if (revision) throw new BusinessError(409, '已有课件必须通过课件提案并由用户明确接受，不能直接覆盖。');
+      if (revision) throw new BusinessError(409, { code: 'LESSON_OVERWRITE_REQUIRES_PROPOSAL' });
       this.assertAgentInputAllowed(space);
       this.assertUnitUnlocked(space, unit);
       const w = this.space(space);
@@ -532,7 +530,7 @@ export class Learning {
   decideConclusion(space: string, id: string, raw: unknown) {
     const input = conclusionDecisionSchema.parse(raw);
     const c = this.conclusions(space).find((c) => c.id === id);
-    if (!c) throw new BusinessError(404, '结论不存在。');
+    if (!c) throw new BusinessError(404, { code: 'CONCLUSION_NOT_FOUND' });
     if (c.revision !== input.revision || (input.adopted && !c.valid)) throw conflict();
     this.db.prepare('UPDATE conclusions SET adopted=?,revision=revision+1 WHERE space_id=? AND id=?').run(Number(input.adopted), space, id);
     return this.conclusions(space);

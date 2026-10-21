@@ -120,7 +120,7 @@ export function createRouteTools(current: RouteContent | null, progress: readonl
       }),
   ];
   return { tools, proposal() {
-    if (changed && !submitted) throw new BusinessError(422, '路线草稿尚未完整提交，未保存生成产物。');
+    if (changed && !submitted) throw new BusinessError(422, { code: 'ROUTE_ARTIFACT_MISSING' });
     return submitted;
   } };
 }

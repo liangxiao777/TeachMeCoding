@@ -5,9 +5,9 @@ import { BusinessError, type Learning } from '../modules/learning.js';
 import { hash, type FrozenContext } from './context.js';
 
 function referenceLessons(input: FrozenContext) {
-  if (!input.lessonRefs) throw new BusinessError(409, '旧课件任务没有固定的参考资料，请按当前资料重新生成课件。');
+  if (!input.lessonRefs) throw new BusinessError(409, { code: 'LESSON_RETRY_REFERENCES_MISSING' });
   const units = input.route?.content?.stages.flatMap((stage) => stage.units) ?? [];
-  if (!units.some((unit) => unit.id === input.unitId)) throw new BusinessError(409, '本次任务的单元不在固定路线中，请重新生成课件。');
+  if (!units.some((unit) => unit.id === input.unitId)) throw new BusinessError(409, { code: 'UNIT_NOT_IN_ROUTE' });
   const available = new Set(units.filter((unit) => unit.id !== input.unitId).map((unit) => unit.id));
   return input.lessonRefs.filter((ref) => available.has(ref.unitId));
 }
@@ -65,7 +65,7 @@ export function createLessonReadTools(learning: Learning, input: FrozenContext) 
       signal?.throwIfAborted();
       const unitId = idSchema.parse((args as { unitId: string }).unitId);
       const ref = refs.find((ref) => ref.unitId === unitId);
-      if (!ref) throw new BusinessError(422, '该单元不在本次可读取的参考课件中。请从固定路线中选择已有课件的其他单元。');
+      if (!ref) throw new BusinessError(422, { code: 'LESSON_REFERENCE_UNAVAILABLE' });
       const lesson = learning.lessonVersion(input.spaceId, unitId, ref.revision);
       const content = lessonMarkdown(lesson);
       consumed.set(unitId, ref);

@@ -9,7 +9,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels, InMemoryCredentialStore
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { loginAnswerSchema, loginStartSchema, modelSelectionSchema, type LoginEvent, type LoginSession, type ModelSelection,
-  type ModelSettings, type ModelSummary, type ProviderSummary } from '@teach-me-coding/contracts';
+  type BusinessErrorDetail, type ModelSettings, type ModelSummary, type ProviderSummary } from '@teach-me-coding/contracts';
 import type { EnvLookup } from '../config/model.js';
 import { BusinessError } from '../modules/learning.js';
 import { classifyModelFailure } from './failure.js';
@@ -17,7 +17,7 @@ import { classifyModelFailure } from './failure.js';
 export interface ModelChoice { selection: ModelSelection; model: Model<Api> }
 /** What the teaching runtime needs: the frozen choice for new work and model lookup for saved work. */
 export interface ModelSource {
-  readonly issue?: string | null;
+  readonly issue?: BusinessErrorDetail | null;
   current(): ModelChoice | null;
   resolve(selection: ModelSelection): Model<Api> | undefined;
   sessionRuntime(model: Model<Api>): Promise<ModelRuntime>;
@@ -40,8 +40,8 @@ type Live = LoginSession & { controller: AbortController; answer?: (value: strin
 export class ModelService implements ModelSource {
   readonly models: MutableModels;
   private credentials: CredentialStore;
-  private configurationIssue: string | null = '正在检查模型配置。';
-  private authIssues = new Map<string, string>();
+  private configurationIssue: BusinessErrorDetail | null = { code: 'MODEL_CONFIGURATION_CHECKING' };
+  private authIssues = new Map<string, BusinessErrorDetail>();
   private authEpochs = new Map<string, number>();
   private logins = new Map<string, Live>();
   constructor(private db: Database.Database | null, private options: {
@@ -57,7 +57,9 @@ export class ModelService implements ModelSource {
       // A request using old credentials must not invalidate a later login.
       if (epoch !== (this.authEpochs.get(model.provider) ?? 0)) return;
       const failure = message.stopReason === 'error' ? classifyModelFailure(model.provider, message.errorMessage) : undefined;
-      if (failure?.category === 'oauth_reauth_required') this.authIssues.set(model.provider, failure.message);
+      if (failure?.category === 'oauth_reauth_required') {
+        this.authIssues.set(model.provider, failure.detail);
+      }
     }, () => {});
     return stream;
   };
@@ -71,7 +73,7 @@ export class ModelService implements ModelSource {
 
   async sessionRuntime(model: Model<Api>) {
     const provider = this.models.getProvider(model.provider);
-    if (!provider) throw new BusinessError(503, '所选 Provider 已不可用。');
+    if (!provider) throw new BusinessError(503, { code: 'MODEL_PROVIDER_UNAVAILABLE' });
     const runtime = await ModelRuntime.create({ credentials: this.credentials, modelsPath: null, refreshOnCreate: false });
     const context = authContext(this.options.env);
     // Pi sessions and the teaching transport share credentials and the app's
@@ -109,11 +111,11 @@ export class ModelService implements ModelSource {
   /** Recompute availability. Auth checks never refresh OAuth or reveal credentials. */
   async refresh() {
     const selection = this.selection(), model = selection && this.resolve(selection);
-    let issue: string | null = null;
-    if (!selection) issue = '尚未选择教学模型，请在设置中选择 Provider 和模型。';
-    else if (!model) issue = '所选模型不在 pi-ai 模型目录中，请重新选择。';
-    else if (!getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) issue = '所选模型不支持当前推理强度，请重新选择。';
-    else if (!await this.models.checkAuth(selection.provider).catch(() => undefined)) issue = '所选 Provider 尚未配置凭据，请在设置中登录或配置 API Key。';
+    let issue: BusinessErrorDetail | null = null;
+    if (!selection) issue = { code: 'MODEL_NOT_SELECTED' };
+    else if (!model) issue = { code: 'MODEL_SELECTION_UNAVAILABLE' };
+    else if (!getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) issue = { code: 'MODEL_THINKING_UNAVAILABLE' };
+    else if (!await this.models.checkAuth(selection.provider).catch(() => undefined)) issue = { code: 'MODEL_CREDENTIALS_MISSING' };
     this.configurationIssue = issue;
   }
 
@@ -121,10 +123,11 @@ export class ModelService implements ModelSource {
     const stored = new Map((await this.credentials.list()).map((c) => [c.providerId, c.type]));
     const providers = await Promise.all(this.models.getProviders().map(async (p): Promise<ProviderSummary> => {
       const check = await this.models.checkAuth(p.id).catch(() => undefined);
+      const issue = this.authIssues.get(p.id);
       return {
         id: p.id, name: p.name, models: this.models.getModels(p.id).length, stored: stored.get(p.id) ?? null,
         configured: check ? { type: check.type, ...(check.source ? { source: check.source } : {}) } : null,
-        ...(this.authIssues.has(p.id) ? { issue: this.authIssues.get(p.id)! } : {}),
+        ...(issue ? { issue } : {}),
         auth: {
           ...(p.auth.apiKey ? { apiKey: { name: p.auth.apiKey.name, login: !!p.auth.apiKey.login } } : {}),
           ...(p.auth.oauth ? { oauth: { name: p.auth.oauth.name, ...(p.auth.oauth.loginLabel ? { label: p.auth.oauth.loginLabel } : {}), subscription: !!p.auth.oauth.isSubscription } } : {}),
@@ -134,14 +137,14 @@ export class ModelService implements ModelSource {
     return { selection: this.selection(), ready: this.ready, issue: this.issue, providers };
   }
   modelsOf(provider: string): ModelSummary[] {
-    if (!this.models.getProvider(provider)) throw new BusinessError(404, 'Provider 不存在。');
+    if (!this.models.getProvider(provider)) throw new BusinessError(404, { code: 'MODEL_PROVIDER_NOT_FOUND' });
     return this.models.getModels(provider).map((m) => ({ id: m.id, name: m.name, reasoning: m.reasoning,
       thinkingLevels: getSupportedThinkingLevels(m), contextWindow: m.contextWindow, maxTokens: m.maxTokens, input: [...m.input] }));
   }
   async select(raw: unknown) {
     const selection = modelSelectionSchema.parse(raw), model = this.resolve(selection);
-    if (!model) throw new BusinessError(422, '所选模型不在 pi-ai 模型目录中。');
-    if (!getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) throw new BusinessError(422, '所选模型不支持该推理强度。');
+    if (!model) throw new BusinessError(422, { code: 'MODEL_NOT_IN_CATALOG' });
+    if (!getSupportedThinkingLevels(model).includes(selection.thinkingLevel)) throw new BusinessError(422, { code: 'MODEL_THINKING_UNSUPPORTED' });
     this.save('model', selection);
     await this.refresh();
     return this.settings();
@@ -163,8 +166,8 @@ export class ModelService implements ModelSource {
   }
   login(providerId: string, raw: unknown): LoginSession {
     const { type } = loginStartSchema.parse(raw), provider = this.models.getProvider(providerId);
-    if (!provider) throw new BusinessError(404, 'Provider 不存在。');
-    if (type === 'oauth' ? !provider.auth.oauth : !provider.auth.apiKey?.login) throw new BusinessError(422, '该 Provider 不支持这种登录方式。');
+    if (!provider) throw new BusinessError(404, { code: 'MODEL_PROVIDER_NOT_FOUND' });
+    if (type === 'oauth' ? !provider.auth.oauth : !provider.auth.apiKey?.login) throw new BusinessError(422, { code: 'LOGIN_METHOD_UNSUPPORTED' });
     this.sweep();
     for (const s of this.logins.values()) if (s.providerId === providerId && s.state === 'running') s.controller.abort();
     const session: Live = { id: randomUUID(), providerId, type, state: 'running', prompt: null, events: [], error: null, controller: new AbortController(), secrets: [] };
@@ -192,10 +195,13 @@ export class ModelService implements ModelSource {
       .then(() => { this.resetAuthIssue(providerId); session.state = 'succeeded'; })
       .catch((error: unknown) => {
         session.state = session.controller.signal.aborted ? 'cancelled' : 'failed';
-        // Provider errors are shown; any secret typed in this session is redacted first.
-        let message = error instanceof Error ? error.message : '登录失败。';
-        for (const secret of session.secrets) if (secret) message = message.replaceAll(secret, '[已隐藏]');
-        session.error = session.state === 'cancelled' ? null : message.slice(0, 500);
+        session.error = session.state === 'cancelled' ? null : { code: 'LOGIN_FAILED' };
+        // Only upstream diagnostics retain prose, after session-secret redaction.
+        if (session.state !== 'cancelled' && error instanceof Error) {
+          let diagnostic = error.message;
+          for (const secret of session.secrets) if (secret) diagnostic = diagnostic.replaceAll(secret, '••••');
+          session.diagnostic = diagnostic.slice(0, 500);
+        }
       })
       .finally(() => {
         session.prompt = null; session.answer = undefined; session.secrets = []; session.finishedAt = Date.now();
@@ -205,13 +211,13 @@ export class ModelService implements ModelSource {
   }
   loginState(id: string) {
     const session = this.logins.get(id);
-    if (!session) throw new BusinessError(404, '登录会话不存在或已过期。');
+    if (!session) throw new BusinessError(404, { code: 'LOGIN_SESSION_NOT_FOUND' });
     return session;
   }
   getLogin(id: string) { return this.view(this.loginState(id)); }
   answerLogin(id: string, raw: unknown) {
     const input = loginAnswerSchema.parse(raw), session = this.loginState(id);
-    if (session.state !== 'running' || session.prompt?.id !== input.promptId || !session.answer) throw new BusinessError(409, '该提示已失效，请刷新登录状态。');
+    if (session.state !== 'running' || session.prompt?.id !== input.promptId || !session.answer) throw new BusinessError(409, { code: 'LOGIN_PROMPT_OUTDATED' });
     session.answer(input.value);
     return this.view(session);
   }
@@ -221,7 +227,7 @@ export class ModelService implements ModelSource {
     return this.view(session);
   }
   async logout(providerId: string) {
-    if (!this.models.getProvider(providerId)) throw new BusinessError(404, 'Provider 不存在。');
+    if (!this.models.getProvider(providerId)) throw new BusinessError(404, { code: 'MODEL_PROVIDER_NOT_FOUND' });
     await this.models.logout(providerId);
     this.resetAuthIssue(providerId);
     await this.refresh();

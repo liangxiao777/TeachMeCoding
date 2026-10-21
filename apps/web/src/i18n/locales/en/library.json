@@ -1,0 +1,38 @@
+{
+  "title": "Library",
+  "backToLearning": "Back to learning",
+  "description": "Upload your own materials for the Agent to read as needed in any Learning space.",
+  "upload": "Upload files",
+  "chooseFiles": "Choose material files",
+  "fileRequirements": "Any format · Up to 100 MB per file · Original files are stored locally",
+  "retry": "Retry",
+  "retryUpload": "Retry upload",
+  "uploadProgress": "Uploading {{index}}/{{total}}: {{name}}",
+  "loading": "Loading library…",
+  "filter": "Filter materials",
+  "searchPlaceholder": "Find by filename",
+  "refresh": "Refresh library",
+  "fileCount_one": "{{formattedCount}} file",
+  "fileCount_other": "{{formattedCount}} files",
+  "noMatch": "No matching materials",
+  "empty": "No materials yet",
+  "tryFilename": "Try another filename.",
+  "emptyDescription": "Upload courses, notes, or reference documents, then tell the Agent which materials to reference in the conversation.",
+  "files": "Material files",
+  "moreActions": "More actions for {{name}}",
+  "download": "Download",
+  "delete": "Delete",
+  "deleteTitle": "Delete {{name}}?",
+  "deleteDescription": "This permanently deletes the original file from the library. No Learning space will be able to read it again. Content already sent to the model will not be withdrawn.",
+  "cancel": "Cancel",
+  "deleteFile": "Delete file",
+  "errors": {
+    "actionFailed": "The operation failed. Please try again.",
+    "fileTooLarge": "Each file must not exceed 100 MB."
+  },
+  "size": {
+    "bytes": "{{value}} B",
+    "kilobytes": "{{value}} KB",
+    "megabytes": "{{value}} MB"
+  }
+}

@@ -59,7 +59,7 @@ export class McpService {
       if (config.enabled === false) continue;
       client.onClose(() => {
         if (connection.status.state === 'connected') {
-          connection.status.state = 'failed'; connection.status.error = '连接已断开，请重新连接。'; connection.tools = [];
+          connection.status.state = 'failed'; connection.status.error = { code: 'MCP_DISCONNECTED' }; connection.tools = [];
         }
       });
       const discover = async () => {
@@ -85,7 +85,9 @@ export class McpService {
         connection.status.tools = discovered.map((tool) => ({ name: tool.name, agentName: mcpToolName(name, tool.name), description: tool.description ?? '' }));
       };
       client.onNotification('notifications/tools/list_changed', () => {
-        void discover().catch(() => { connection.status.error = '工具列表更新失败，请重新连接。'; });
+        void discover().catch(() => {
+          connection.status.error = { code: 'MCP_TOOLS_REFRESH_FAILED' };
+        });
       });
       connection.ready = (async () => {
         try {
@@ -93,7 +95,7 @@ export class McpService {
           await discover();
           if (!this.closed && this.connections.get(name) === connection) connection.status.state = 'connected';
         } catch {
-          connection.status.state = 'failed'; connection.status.error = '无法连接，请检查命令、地址和认证配置。';
+          connection.status.state = 'failed'; connection.status.error = { code: 'MCP_CONNECTION_FAILED' };
           await client.close();
         }
       })();
@@ -124,13 +126,13 @@ export class McpService {
   private restoreSecrets(config: McpServerConfiguration, previous?: McpServerConfiguration) {
     for (const field of ['env', 'headers'] as const) for (const [key, value] of Object.entries(config[field] ?? {})) if (value === mask) {
       const original = previous?.[field]?.[key];
-      if (original === undefined) throw new BusinessError(400, '新的认证字段需要填写实际值。');
+      if (original === undefined) throw new BusinessError(400, { code: 'MCP_SECRET_REQUIRED' });
       config[field]![key] = original;
     }
   }
   private write(update: () => McpConfiguration): Promise<McpSettings> {
     const operation = this.writes.then(async () => {
-      if (this.closed) throw new BusinessError(503, '服务正在关闭。');
+      if (this.closed) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
       const parsed = mcpConfigurationSchema.parse(update());
       for (const [name, config] of Object.entries(parsed.mcpServers)) this.restoreSecrets(config, this.configuration.mcpServers[name]);
       const temporary = `${this.path}.tmp`;
@@ -156,8 +158,8 @@ export class McpService {
     const entry = mcpServerEntrySchema.parse(raw);
     return this.write(() => {
       const servers = this.configuration.mcpServers;
-      if (previousName !== undefined && !Object.hasOwn(servers, previousName)) throw new BusinessError(404, 'MCP 服务器不存在。');
-      if (entry.name !== previousName && Object.hasOwn(servers, entry.name)) throw new BusinessError(409, '已存在同名 MCP 服务器，请换一个名称。');
+      if (previousName !== undefined && !Object.hasOwn(servers, previousName)) throw new BusinessError(404, { code: 'MCP_SERVER_NOT_FOUND' });
+      if (entry.name !== previousName && Object.hasOwn(servers, entry.name)) throw new BusinessError(409, { code: 'MCP_SERVER_NAME_CONFLICT' });
       this.restoreSecrets(entry.configuration, previousName === undefined ? undefined : servers[previousName]);
       const next = { ...servers };
       if (previousName !== undefined && previousName !== entry.name) delete next[previousName];
@@ -167,15 +169,15 @@ export class McpService {
   }
   removeServer(name: string): Promise<McpSettings> {
     return this.write(() => {
-      if (!Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, 'MCP 服务器不存在。');
+      if (!Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, { code: 'MCP_SERVER_NOT_FOUND' });
       const next = { ...this.configuration.mcpServers }; delete next[name];
       return { mcpServers: next };
     });
   }
   reconnect(name?: string): Promise<McpSettings> {
     const operation = this.writes.then(async () => {
-      if (this.closed) throw new BusinessError(503, '服务正在关闭。');
-      if (name !== undefined && !Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, 'MCP 服务器不存在。');
+      if (this.closed) throw new BusinessError(503, { code: 'SERVICE_CLOSING' });
+      if (name !== undefined && !Object.hasOwn(this.configuration.mcpServers, name)) throw new BusinessError(404, { code: 'MCP_SERVER_NOT_FOUND' });
       const old = [...this.connections].filter(([server]) => name === undefined || server === name);
       await Promise.all(old.map(async ([server, entry]) => { this.connections.delete(server); await entry.client.close(); }));
       this.start(); return this.settings();

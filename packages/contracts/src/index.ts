@@ -11,3 +11,4 @@ export * from './preview.js';
 export * from './settings.js';
 export * from './library.js';
 export * from './lesson.js';
+export * from './errors.js';

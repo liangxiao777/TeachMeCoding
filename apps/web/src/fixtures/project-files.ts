@@ -1,5 +1,6 @@
 import { uid } from './demo-data'
 import type { CodeFile, Space } from './types'
+import { notice } from '../i18n/notice'
 
 export const fileLanguage = (name: string): CodeFile['language'] =>
   name.endsWith('.rs') ? 'rust' : name.endsWith('.py') ? 'python' : 'text'
@@ -52,9 +53,9 @@ export function closeProjectFile(space: Space, id: string): Space {
 
 function nameError(space: Space, name: string, parentId: string | null, exceptId?: string) {
   if (!name || name === '.' || name === '..' || /[\\/\u0000-\u001f]/.test(name))
-    return '请输入有效名称，不包含路径分隔符'
+    return notice('workbench', 'project.invalidName')
   if (projectChildren(space, parentId).some((e) => e.id !== exceptId && e.name === name))
-    return '此目录中已存在同名文件或文件夹'
+    return notice('workbench', 'project.nameConflict')
   return null
 }
 
@@ -84,7 +85,7 @@ export function addProjectEntry(space: Space, value: string, kind: 'file' | 'dir
 
 export function renameProjectEntry(space: Space, id: string, value: string) {
   const entry = [...space.directories, ...space.files].find((e) => e.id === id)
-  if (!entry) return { space, error: '文件或目录不存在' }
+  if (!entry) return { space, error: notice('workbench', 'project.entryMissing') }
   const name = value.trim()
   const error = nameError(space, name, entry.parentId, id)
   if (error) return { space, error }

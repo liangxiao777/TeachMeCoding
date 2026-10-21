@@ -1,10 +1,12 @@
 import { BrandMark } from '@/components/brand';
 import { StartupField, useStartupField } from '@/components/startup-field';
+import { useTranslation } from 'react-i18next';
 
 export function StartupLoading() {
+  const { t } = useTranslation();
   const { field, moveLight, resetLight } = useStartupField();
   return (
-    <main className="code-loading startup-page" aria-label="应用加载" onPointerMove={moveLight} onPointerLeave={resetLight}>
+    <main className="code-loading startup-page" aria-label={t('status.loadingApplication')} onPointerMove={moveLight} onPointerLeave={resetLight}>
       <StartupField ref={field} />
       <div className="code-loading-content">
         <div className="code-loading-brand">
@@ -12,7 +14,7 @@ export function StartupLoading() {
           <span>TeachMeCoding</span>
         </div>
         <div className="code-loading-status">
-          <p role="status">正在加载…</p>
+          <p role="status">{t('status.loading')}</p>
           <span className="code-loading-dots" aria-hidden>
             <span /><span /><span />
           </span>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BusinessErrorResponse } from './errors.js';
 
 const id = z.string().uuid();
 const label = z.string().trim().min(1).max(500);
@@ -32,4 +33,4 @@ export interface QuestionRound {
     options: (QuestionInput['questions'][number]['options'][number] & { id: string })[] })[];
   answers: QuestionAnswer['answers'] | null;
 }
-export interface IntakeReadiness { ready: boolean; reasons: string[] }
+export interface IntakeReadiness { ready: boolean; issues: BusinessErrorResponse[] }

@@ -1,4 +1,5 @@
-import type { LibraryDocument, RunEvent } from '@teach-me-coding/contracts';
+import type { BusinessErrorResponse, LibraryDocument, RunEvent } from '@teach-me-coding/contracts';
+import { NoticeError, notice } from '@/i18n/notice';
 
 let token: Promise<string> | undefined;
 const pending = new Map<string, string>();
@@ -14,13 +15,15 @@ function requestId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+export class ApiError extends NoticeError {
+  constructor(public status: number, detail?: Partial<BusinessErrorResponse>, fallback = notice('common', 'errors.requestFailed')) {
+    super(typeof detail?.code === 'string' ? { code: detail.code, params: detail.params } : fallback);
+  }
 }
 export async function access(refresh = false) {
   if (refresh) token = undefined;
   token ??= fetch('/api/access', { headers: { 'X-TMC-Client': 'browser' } }).then(async (response) => {
-    if (!response.ok) throw new ApiError(response.status, '无法连接本地服务，请重试。');
+    if (!response.ok) throw new ApiError(response.status, undefined, notice('common', 'errors.connection'));
     return (await response.json() as { token: string }).token;
   }).catch((error: unknown) => { token = undefined; throw error; });
   return token;
@@ -35,8 +38,8 @@ export async function api<T>(path: string, input?: unknown): Promise<T> {
   });
   let response = await send();
   if (response.status === 401) { token = undefined; response = await send(); }
-  const result = await response.json() as T & { error?: string };
-  if (!response.ok) throw new ApiError(response.status, result.error ?? '请求失败，请重试。');
+  const result = await response.json() as T & Partial<BusinessErrorResponse>;
+  if (!response.ok) throw new ApiError(response.status, result);
   pending.delete(fingerprint);
   return result;
 }
@@ -46,8 +49,8 @@ async function fileRequest(path: string, init?: RequestInit) {
   let response = await send();
   if (response.status === 401) { token = undefined; response = await send(); }
   if (!response.ok) {
-    const result = await response.json() as { error?: string };
-    throw new ApiError(response.status, result.error ?? '文件传输失败，请重试。');
+    const result = await response.json() as Partial<BusinessErrorResponse>;
+    throw new ApiError(response.status, result, notice('common', 'errors.transfer'));
   }
   return response;
 }
@@ -77,7 +80,7 @@ export async function streamRun(path: string, after: number, signal: AbortSignal
     const send = async () => fetch(`/api${path}/stream?after=${after}`, { signal: AbortSignal.any([signal, idle.signal]), headers: { 'X-TMC-Token': await access() } });
     let response = await send();
     if (response.status === 401) { token = undefined; response = await send(); }
-    if (!response.ok || !response.body) throw new ApiError(response.status, '事件连接中断，请重新连接。');
+    if (!response.ok || !response.body) throw new ApiError(response.status, undefined, notice('common', 'errors.stream'));
     reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
     let buffer = '';
     while (true) {

@@ -2,9 +2,10 @@ import { createContext, useContext, type ReactNode } from 'react'
 import type { ActionProposal, AgentContext, AgentDisplayPart, CodeExecution, IntakeMetadata, IntakeReadiness, LearningConclusion, LessonProposal, Proposal, QuestionAnswer, QuestionRound, ResearchDossier, ResearchRef, WorkStatus } from '@teach-me-coding/contracts'
 import type { AppState, AssessmentDraft, AssessmentSpec, Lesson, Quote, Requirement, Session, Space, SpaceView, Unit } from './types'
 import type { LocalTerminal } from '@/lib/terminal'
+import type { NoticeValue } from '@/i18n/notice'
 
 type Action = () => void
-type EntryResult = string | null | Promise<string | null>
+type EntryResult = NoticeValue | null | Promise<NoticeValue | null>
 export type RequirementDraft = Requirement & { intake?: IntakeMetadata | null }
 
 /** Data and actions consumed by the original UI, independent of storage or demo scripts. */
@@ -66,11 +67,11 @@ export interface AppModel {
   persistence?: {
     ready: boolean
     busy: boolean
-    error: string
+    error: NoticeValue
     retry: Action
     setYolo: (enabled: boolean, sessionId?: string) => void
     requirementConfirmed: boolean
-    planning: { run?: WorkStatus; error: string | null }
+    planning: { run?: WorkStatus; error: NoticeValue | null }
     intake: IntakeMetadata | null
     readiness?: IntakeReadiness
     questions: QuestionRound[]
@@ -83,7 +84,7 @@ export interface AppModel {
     saveName: Action
     assessmentDirty: boolean
     fileDirty: boolean
-    fileSaveError: string | null
+    fileSaveError: NoticeValue
     fileRenaming: boolean
     filesPending: boolean
     saveAssessment: Action

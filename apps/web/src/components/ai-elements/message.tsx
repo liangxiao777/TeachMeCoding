@@ -34,6 +34,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { useTranslation } from "react-i18next";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -263,11 +264,12 @@ export const MessageBranchPrevious = ({
   children,
   ...props
 }: MessageBranchPreviousProps) => {
+  const { t } = useTranslation();
   const { goToPrevious, totalBranches } = useMessageBranch();
 
   return (
     <Button
-      aria-label="Previous branch"
+      aria-label={t('chat.previousBranch')}
       disabled={totalBranches <= 1}
       onClick={goToPrevious}
       size="icon-sm"
@@ -286,11 +288,12 @@ export const MessageBranchNext = ({
   children,
   ...props
 }: MessageBranchNextProps) => {
+  const { t } = useTranslation();
   const { goToNext, totalBranches } = useMessageBranch();
 
   return (
     <Button
-      aria-label="Next branch"
+      aria-label={t('chat.nextBranch')}
       disabled={totalBranches <= 1}
       onClick={goToNext}
       size="icon-sm"
@@ -309,6 +312,7 @@ export const MessageBranchPage = ({
   className,
   ...props
 }: MessageBranchPageProps) => {
+  const { t } = useTranslation();
   const { currentBranch, totalBranches } = useMessageBranch();
 
   return (
@@ -319,7 +323,7 @@ export const MessageBranchPage = ({
       )}
       {...props}
     >
-      {currentBranch + 1} of {totalBranches}
+      {t('branchPosition', { current: currentBranch + 1, total: totalBranches })}
     </ButtonGroupText>
   );
 };
@@ -329,19 +333,22 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 const streamdownPlugins = { cjk, code, math, mermaid };
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
-      plugins={streamdownPlugins}
-      {...props}
-    />
-  ),
-  (prevProps, nextProps) =>
-    prevProps.children === nextProps.children &&
-    nextProps.isAnimating === prevProps.isAnimating
+  ({ className, ...props }: MessageResponseProps) => {
+    const { i18n } = useTranslation();
+    // Streamdown's memo comparator ignores translated components/remark plugins.
+    // Reset only the Markdown renderer, not the workspace's editor or terminal.
+    return (
+      <Streamdown
+        key={i18n.resolvedLanguage ?? i18n.language}
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className
+        )}
+        plugins={streamdownPlugins}
+        {...props}
+      />
+    );
+  }
 );
 
 MessageResponse.displayName = "MessageResponse";

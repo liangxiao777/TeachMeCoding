@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BusinessErrorDetail } from '@teach-me-coding/contracts';
 
 const oauthErrorSchema = z.object({ error: z.union([z.string(), z.object({ code: z.string().optional(), type: z.string().optional() })]) });
 const reauthCodes = new Set(['invalid_grant', 'invalid_client', 'refresh_token_expired', 'refresh_token_reused', 'refresh_token_invalidated']);
@@ -7,7 +8,7 @@ export interface ModelFailure {
   category: 'oauth_reauth_required' | 'oauth_refresh_failed';
   status: number | null;
   code: string | null;
-  message: string;
+  detail: BusinessErrorDetail;
 }
 
 /** Classify Pi's auth boundary, never arbitrary provider prose or response bodies. */
@@ -30,5 +31,5 @@ export function classifyModelFailure(provider: string, reason?: string): ModelFa
   const reconnect = code !== null || detail === 'Stored OpenAI OAuth credential does not contain an issued client ID; reconnect ChatGPT';
   const name = provider === 'openai' || provider === 'openai-codex' ? 'ChatGPT' : provider;
   return { category: reconnect ? 'oauth_reauth_required' : 'oauth_refresh_failed', status, code,
-    message: reconnect ? `${name} 登录已失效，请在应用设置中重新登录。` : `${name} 登录暂时无法续期，请稍后重试。` };
+    detail: { code: reconnect ? 'MODEL_OAUTH_REAUTH_REQUIRED' : 'MODEL_OAUTH_REFRESH_FAILED', params: { provider: name } } };
 }

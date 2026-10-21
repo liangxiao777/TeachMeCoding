@@ -1,6 +1,8 @@
 'use client'
 
 import { Activity, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { formatNotice } from '@/i18n/notice'
 import { AnimatePresence, MotionConfig, useReducedMotion } from 'motion/react'
 import { usePanelRef } from 'react-resizable-panels'
 import { AgentPanel } from '@/components/agent/agent-panel'
@@ -23,6 +25,7 @@ import { uiMotion, uiMotionVariables } from '@/lib/motion'
 const agentWidths = new Map<string, number>()
 
 function SpaceBody() {
+  const { t } = useTranslation()
   const { current } = useApp()
   const reducedMotion = useReducedMotion()
   const group = useRef<HTMLDivElement>(null)
@@ -61,7 +64,7 @@ function SpaceBody() {
           </main>
         </ResizablePanel>
         <ResizableHandle
-          aria-label="调整聊天面板宽度"
+          aria-label={t('chat.resize')}
           disabled={!current.agentOpen}
           className={current.agentOpen ? 'z-10 w-0! after:w-2 hover:after:bg-primary/15 data-[separator=active]:after:bg-primary/25' : 'hidden'}
         />
@@ -85,6 +88,7 @@ function SpaceBody() {
 }
 
 export function AppShell() {
+  const { t } = useTranslation()
   const { current, persistence } = useApp()
   const [libraryOpen, setLibraryOpen] = useState(() => !!persistence && location.pathname === '/library')
   const libraryTrigger = useRef<HTMLElement | null>(null)
@@ -144,24 +148,25 @@ export function AppShell() {
         <LibraryNavigation value={persistence ? openLibrary : null}>
           <div className="min-h-dvh" style={uiMotionVariables}>
             <div inert={settingsOpen || libraryOpen} aria-hidden={settingsOpen || libraryOpen}>
-              <Activity mode={libraryOpen || settingsCovered && settingsOpen ? 'hidden' : 'visible'}>
-                <div className="app-layout" data-fixture={!persistence || undefined}>
+              <Activity mode={libraryOpen ? 'hidden' : 'visible'}>
+                {/* Settings hide the surface without destroying editor/terminal Effects. */}
+                <div className="app-layout" data-fixture={!persistence || undefined} style={{ display: settingsCovered && settingsOpen ? 'none' : undefined }}>
                   {current ? <LessonDrawerProvider key={current.id}><SpaceBody /></LessonDrawerProvider> : <SpaceList />}
                   {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
                     <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
                       {persistence.error ? (
                         <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
-                          <span className="flex-1">{persistence.error}</span>
-                          <Button variant="outline" size="sm" disabled={persistence.busy} onClick={persistence.retry}>重试</Button>
+                          <span className="flex-1">{formatNotice(persistence.error)}</span>
+                          <Button variant="outline" size="sm" disabled={persistence.busy} onClick={persistence.retry}>{t('actions.retry')}</Button>
                         </div>
                       ) : (
-                        <p role="status" className="text-xs text-muted-foreground">正在读取或保存…</p>
+                        <p role="status" className="text-xs text-muted-foreground">{t('status.saving')}</p>
                       )}
                     </div>
                   )}
                   {!persistence && (
                     <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
-                      <a href="/diagnostics" data-testid="fixture-notice">开发夹具 · 内存数据 · 模拟回复与执行</a>
+                      <a href="/diagnostics" data-testid="fixture-notice">{t('fixture')}</a>
                     </footer>
                   )}
                 </div>

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { notice, NoticeError, type NoticeValue, type UiNotice } from '@/i18n/notice'
 import { applyAgentEvent, type AgentDisplayPart } from '@teach-me-coding/contracts'
 import type { ActionProposal, AgentRun, AssessmentDraft as SavedAssessmentDraft, CodeExecution, LearningConclusion, LessonProposalApplication, ProjectEntry, ProjectFile, ProposalRejection, QuestionAnswer, QuestionRound, RequirementState, ResearchDossier, ResearchRef, ResearchSaveResult, RunEvent, RunEvents, RunSubmission, SessionDetail, SpaceSummary, UnitDetail, WorkStatus, Workspace } from '@teach-me-coding/contracts'
 import { access, api, streamRun, ApiError } from '@/lib/api'
@@ -19,7 +21,7 @@ interface StoredSpace {
   files: Record<string, ProjectFile>
   renamingPath: string | null
   requirementDraft: RequirementDraft | null
-  planningError: string | null
+  planningError: NoticeValue | null
   taskParts: Record<string, AgentDisplayPart[]>
   runContexts: NonNullable<AppModel['persistence']>['runContexts']
   actions: ActionProposal[]
@@ -74,7 +76,7 @@ function unitState(detail: UnitDetail, saved: Workspace, executions: CodeExecuti
 function unitRecords(units: Record<string, UnitDetail>, stages: Space['stages']) {
   const metadata = stages.flatMap((stage) => stage.units)
   return Object.values(units).flatMap((unit) => unit.records.map((record) => ({ ...record,
-    unitTitle: metadata.find((m) => m.id === unit.id)?.title ?? '历史单元' }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
+    unitTitle: metadata.find((m) => m.id === unit.id)?.title ?? '' }))).sort((a, b) => a.createdAt - b.createdAt || a.attempt - b.attempt)
 }
 
 function projectEntries(tree: ProjectEntry[], old: Space['files'] = []) {
@@ -138,7 +140,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       // Older successful runs may have left an explicit proposal; keep it reachable.
       view: saved.route.content || latestPlan(saved)?.state === 'succeeded' ? 'route' : latestPlan(saved) ? 'planning' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
       ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
-      terminal: [], terminalDirectoryId: null, running: false, env: 'disconnected', envLabel: '终端尚未接入',
+      terminal: [], terminalDirectoryId: null, running: false, env: 'disconnected', envLabel: '',
       ideOpen: false, ideFullscreen: false, explorerOpen: true, agentOpen: true, draft: null, records, viewingRecordId: null,
       completed: units.length > 0 && units.every((unit) => unit.status === 'passed' || unit.status === 'skipped'),
       lastActive: Math.max(saved.createdAt, ...sessions.flatMap((s) => s.messages.map((m) => m.createdAt)), ...records.map((r) => r.createdAt)),
@@ -148,22 +150,23 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
 
 /** Persistent operations for the existing component model. No rendering or demo runtime. */
 export function usePersistentModel(): AppModel {
+  const { t } = useTranslation(['common', 'assessment', 'workbench'])
   const cache = useRef<Record<string, StoredSpace>>({})
   const [spaces, setSpaces] = useState<Space[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [globalView, setGlobalView] = useState<'home' | 'spaces'>('home')
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState<NoticeValue>(null)
   const [capabilities, setCapabilities] = useState({ agent: false, terminal: false, assessment: false })
   const refreshCapabilities = () => { void api<AppModel['capabilities']>('/capabilities').then(setCapabilities).catch(() => {}) }
   const subscriptions = useRef(new Map<string, AbortController>())
   const terminals = useRef(new Map<string, LocalTerminal>())
-  const errorRef = useRef('')
+  const errorRef = useRef<NoticeValue>(null)
   const retry = useRef<() => void>(() => {})
   const inFlight = useRef(new Map<string, Promise<unknown>>())
   const fileSaves = useRef(new Map<string, Promise<void>>())
-  const fileSaveErrors = useRef(new Map<string, string>())
+  const fileSaveErrors = useRef(new Map<string, UiNotice>())
   // An unacknowledged write is still unsaved after undoing to the old baseline.
   const unsavedFiles = (s: StoredSpace) => s.ui.files.filter((f) => fileSaves.current.has(`${s.ui.id}:${f.id}`)
     || fileSaveErrors.current.has(`${s.ui.id}:${f.id}`) || s.files[f.id] && f.content !== s.files[f.id]!.content)
@@ -185,9 +188,9 @@ export function usePersistentModel(): AppModel {
     const existing = inFlight.current.get(key)
     if (existing) return existing as Promise<T | undefined>
     retry.current = () => { void run(key, action) }
-    setBusy(true); setError(''); errorRef.current = ''
+    setBusy(true); setError(null); errorRef.current = null
     const promise = Promise.resolve().then(action).catch((cause: unknown) => {
-      errorRef.current = cause instanceof Error ? cause.message : '请求失败，请重试。'
+      errorRef.current = cause instanceof Error ? cause : notice('common', 'errors.requestFailed')
       setError(errorRef.current)
       retry.current = () => { void run(key, action) }
       return undefined
@@ -201,7 +204,7 @@ export function usePersistentModel(): AppModel {
   if (current && capabilities.terminal && !terminals.current.has(current.id)) {
     const id = current.id
     terminals.current.set(id, new LocalTerminal(id, (connected) => changeUi(id, (s) => ({ ...s,
-      env: connected ? 'connected' : 'lost', envLabel: '本机终端 · 非沙箱' })), () => flushFiles(id)))
+      env: connected ? 'connected' : 'lost' })), () => flushFiles(id)))
   }
   const localTerminal = current ? terminals.current.get(current.id) : undefined
   const needsAssessment = (space: string, unit: string) => {
@@ -226,7 +229,7 @@ export function usePersistentModel(): AppModel {
       const id = params.get('space')
       if (id) {
         const entry = cache.current[id]
-        if (!entry) throw new Error('学习空间不存在，请返回首页。')
+        if (!entry) throw new NoticeError(notice('common', 'errors.spaceNotFound'))
         const tab = params.get('tab')
         const view = tab === 'requirement' ? 'onboarding' : entry.ui.view === 'planning' || tab === 'planning' ? entry.ui.view
           : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
@@ -234,7 +237,7 @@ export function usePersistentModel(): AppModel {
         const unitId = (view === 'result' ? entry.ui.records.find((record) => record.id === recordId)?.unitId : null)
           ?? params.get('unit') ?? entry.ui.currentUnitId
         const blocked = !canAccessView(entry.ui, view, unitId)
-        if (blocked) setError('单元尚未解锁或不在当前路线中，已返回学习路线。')
+        if (blocked) setError(notice('common', 'errors.unitUnavailable'))
         entry.ui = { ...entry.ui, view: blocked ? 'route' : view, currentUnitId: blocked ? entry.ui.currentUnitId : unitId,
           draft: !blocked && view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: blocked ? null : recordId }
         setCurrentId(id)
@@ -272,7 +275,7 @@ export function usePersistentModel(): AppModel {
   const navigate = (view: SpaceView, unitId = current?.currentUnitId ?? null) => {
     if (!current) return false
     if (!canAccessView(cache.current[current.id]!.ui, view, unitId)) {
-      setError('单元尚未解锁，请先生成并保存全部前序课件。')
+      setError(notice('common', 'errors.unitLocked'))
       return false
     }
     changeUi(current.id, (s) => ({ ...s, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? cache.current[s.id]!.drafts[unitId] ?? null : s.draft, ideFullscreen: false }))
@@ -281,7 +284,7 @@ export function usePersistentModel(): AppModel {
   const viewedUnitId = current ? sessionUnitId(current) : null
   useEffect(() => {
     if (ready && current && !canAccessView(current, current.view, viewedUnitId)) {
-      setError('路线顺序已改变，当前单元尚未解锁，已返回学习路线。')
+      setError(notice('common', 'errors.routeReordered'))
       changeUi(current.id, (s) => ({ ...s, view: 'route', draft: null, viewingRecordId: null, ideFullscreen: false }))
     }
   }, [ready, current?.id, current?.view, viewedUnitId, current?.stages])
@@ -298,7 +301,7 @@ export function usePersistentModel(): AppModel {
     const pendingKey = `${space}:${key}`
     pendingEdits.current.set(pendingKey, { ...pendingEdits.current.get(pendingKey), ...patch })
     void run(`new-session:${space}:${key}`, async () => {
-      const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
+      const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current) })
       change(space, (s) => ({ ...s, sessions: { ...s.sessions, [saved.id]: saved }, ui: { ...s.ui, sessions: [...s.ui.sessions, { ...uiSession(saved), ...pendingEdits.current.get(pendingKey) }], activeSessionIds: { ...s.ui.activeSessionIds, [key]: saved.id } } }))
       pendingEdits.current.delete(pendingKey)
       sessionStorage.setItem(`session:${space}:${key}`, saved.id)
@@ -404,7 +407,7 @@ export function usePersistentModel(): AppModel {
     if (!ready || !currentId) return
     const refresh = () => {
       if (document.visibilityState === 'visible') void refreshBusiness(currentId).catch((error: unknown) =>
-        setError(error instanceof Error ? error.message : '无法刷新学习路线，请重试。'))
+        setError(error instanceof Error ? error : notice('common', 'errors.refreshRoute')))
     }
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refresh)
@@ -421,6 +424,7 @@ export function usePersistentModel(): AppModel {
     const receive = (event: RunEvent) => {
       if (terminal || event.runId !== work.id || event.seq <= cursor) return
       cursor = event.seq
+      if (event.data.type === 'notice') return // Separate host messages hydrate with their own IDs on refresh.
       parts = applyAgentEvent(parts, event)
       if (event.data.type === 'context') {
         const context = event.data.context
@@ -433,7 +437,7 @@ export function usePersistentModel(): AppModel {
       if (terminal && ['intake', 'roadmap'].includes(work.kind)) invalidateBusiness(space)
       if (work.sessionId) change(space, (s) => ({ ...s, saved: { ...s.saved, runs: s.saved.runs.map((r) => r.id === work.id ? { ...r, state } : r) },
         ...(work.id === latestPlan(s.saved)?.id ? {
-          planningError: event.data.type === 'state' ? event.data.error : s.planningError,
+          planningError: event.data.type === 'state' && event.data.error ? event.data.error : s.planningError,
         } : {}),
       }))
       if (!work.sessionId) {
@@ -514,10 +518,10 @@ export function usePersistentModel(): AppModel {
   const inputAllowed = (route = false) => {
     if (!selected) return false
     if (pendingDecision(cache.current[selected.saved.id]!.saved)) {
-      setError('请先接受或拒绝当前路线或课件提案，再继续对话。'); return false
+      setError(notice('common', 'errors.pendingConversation')); return false
     }
     if (route && selected.saved.runs.some((work) => work.kind === 'roadmap' && ['pending', 'running'].includes(work.state))) {
-      setError('正在生成路线调整，请等待完成或停止当前生成。'); return false
+      setError(notice('common', 'errors.routeRunning')); return false
     }
     return true
   }
@@ -529,7 +533,7 @@ export function usePersistentModel(): AppModel {
     if (!input.text.trim() && !input.quote) return Promise.resolve(false)
     let submission: RunSubmission | undefined, saved: SessionDetail | undefined, applied = false
     return run(`session:${id}`, async () => {
-      if (!submission && !saved && pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
+      if (!submission && !saved && pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingProposal'))
       await flushFiles(space)
       if (capabilities.agent) submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/runs`, input)
       saved ??= submission?.session ?? await api<SessionDetail>(`/spaces/${space}/sessions/${id}/messages`, input)
@@ -547,7 +551,7 @@ export function usePersistentModel(): AppModel {
     const snapshot = structuredClone(input)
     let submission: RunSubmission | undefined, applied = false
     return run(`session:${id}`, async () => {
-      if (!submission && pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
+      if (!submission && pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingProposal'))
       submission ??= await api<RunSubmission>(`/spaces/${space}/sessions/${id}/questions/${round}/answer`, snapshot)
       if (!applied) { acceptSession(space, submission.session, submission.run); applied = true }
       watchRun(space, submission.run)
@@ -576,7 +580,7 @@ export function usePersistentModel(): AppModel {
     }).then(Boolean)
   }
   const saveResearch = async (ref: ResearchRef, content: string): Promise<ResearchDossier> => {
-    if (!current) throw new Error('没有打开的学习空间')
+    if (!current) throw new NoticeError(notice('common', 'errors.noSpace'))
     const id = current.id
     const result = await api<ResearchSaveResult>(`/spaces/${id}/research/${ref.id}/${ref.revision}`, { content })
     invalidateBusiness(id)
@@ -593,8 +597,8 @@ export function usePersistentModel(): AppModel {
     let response = await fetchMarkdown()
     if (response.status === 401) response = await fetchMarkdown(true)
     if (!response.ok) {
-      const result = await response.json().catch(() => ({})) as { error?: string }
-      throw new ApiError(response.status, result.error ?? '资料导出失败，请重试。')
+      const result = await response.json().catch(() => ({})) as { code?: string; params?: Record<string, string> }
+      throw new ApiError(response.status, result, notice('common', 'errors.exportResearch'))
     }
     const url = URL.createObjectURL(await response.blob())
     const link = document.createElement('a')
@@ -625,7 +629,7 @@ export function usePersistentModel(): AppModel {
     const key = `${space}:${path}`, pending = fileSaves.current.get(key)
     if (pending) return pending
     const failure = fileSaveErrors.current.get(key)
-    if (failure === errorRef.current) { setError(''); errorRef.current = '' }
+    if (failure && failure === errorRef.current) { setError(null); errorRef.current = null }
     fileSaveErrors.current.delete(key)
     // Start immediately, but allow only one write per file. Edits arriving during
     // a request are picked up from the live buffer after its response, not replayed.
@@ -653,7 +657,7 @@ export function usePersistentModel(): AppModel {
         }
       }
     })().catch((cause: unknown) => {
-      const message = `自动保存 ${path} 失败：${cause instanceof Error ? cause.message : '请求失败，请重试。'}`
+      const message = notice('common', 'errors.autosave', { path, error: cause instanceof Error ? cause : notice('common', 'errors.requestFailed') })
       fileSaveErrors.current.set(key, message)
       errorRef.current = message; setError(message)
       retry.current = () => { void saveFile(space, path).catch(() => {}) }
@@ -674,7 +678,7 @@ export function usePersistentModel(): AppModel {
     if (!active.length) return
     const timer = setTimeout(() => {
       void Promise.all(active.map(async (s) => { await refreshBusiness(s.ui.id); await refreshFiles(s.ui.id) }))
-        .catch((e: unknown) => { setError(e instanceof Error ? e.message : '无法读取操作结果，请刷新。'); publish() })
+        .catch((e: unknown) => { setError(e instanceof Error ? e : notice('common', 'errors.readResults')); publish() })
     }, 750)
     return () => clearTimeout(timer)
   }, [spaces])
@@ -694,7 +698,7 @@ export function usePersistentModel(): AppModel {
     })
   }
   const createEntry = async (name: string, kind: 'file' | 'directory', parent: string | null, content?: string) => {
-    if (!current) return '没有打开的学习空间'
+    if (!current) return notice('common', 'errors.noSpace')
     const id = current.id, path = parent ? `${parent}/${name}` : name
     let created = false
     const result = await run(`create:${id}:${path}`, async () => {
@@ -711,14 +715,14 @@ export function usePersistentModel(): AppModel {
     })
     return result ? null : errorRef.current
   }
-  const unavailable = () => { setError('该能力尚未接入，不会执行模拟操作。') }
+  const unavailable = () => { setError(notice('common', 'errors.unavailable')) }
   const generateLesson = (space: string, unit: string) => {
     const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
     const owner = activeSession(cache.current[space]!.ui)
     const sessionId = owner?.unitId === unit ? owner.id : undefined
     void run(`lesson:${space}:${unit}`, async () => {
-      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再生成课件。')
-      if (!availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
+      if (pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingLesson'))
+      if (!availableUnitIds(cache.current[space]!.ui).has(unit)) throw new NoticeError(notice('common', 'errors.unitLocked'))
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, { kind: 'lesson', revision, sessionId })
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] },
         ui: { ...s.ui, stages: s.ui.stages.map((stage) => ({ ...stage, units: stage.units.map((u) => u.id === unit && !s.units[unit]?.lesson ? { ...u, contentState: 'generating' } : u) })) } }))
@@ -730,8 +734,8 @@ export function usePersistentModel(): AppModel {
     const input = kind === 'assessment' ? { kind, revision: detail.assessment?.revision ?? 0 }
       : { kind, revision: detail.draft.revision, specRevision: detail.assessment?.revision, ...answers(draft), execute: detail.assessment?.q2Kind === 'code' && !!detail.assessment.execution }
     void run(`${kind}:${space}:${unit}`, async () => {
-      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再开始新的测评任务。')
-      if (kind === 'evaluation' && needsAssessment(space, unit)) throw new Error('课件已更新，请先根据最新课件重新出题；原答案草稿会保留。')
+      if (pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingAssessment'))
+      if (kind === 'evaluation' && needsAssessment(space, unit)) throw new NoticeError(notice('common', 'errors.assessmentStale'))
       const task = await api<AgentRun>(`/spaces/${space}/units/${unit}/tasks`, input)
       change(space, (s) => ({ ...s, saved: { ...s.saved, tasks: [...s.saved.tasks.filter((t) => t.id !== task.id), task] } }))
       watchRun(space, task)
@@ -740,9 +744,9 @@ export function usePersistentModel(): AppModel {
   }
   const retryTask = (space: string, id: string) => {
     void run(`task-retry:${id}`, async () => {
-      if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案，再重试生成。')
+      if (pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingRetry'))
       const unit = cache.current[space]!.saved.tasks.find((task) => task.id === id)?.unitId
-      if (!unit || !availableUnitIds(cache.current[space]!.ui).has(unit)) throw new Error('单元尚未解锁，请先生成并保存全部前序课件。')
+      if (!unit || !availableUnitIds(cache.current[space]!.ui).has(unit)) throw new NoticeError(notice('common', 'errors.unitLocked'))
       const task = await api<AgentRun>(`/spaces/${space}/tasks/${id}/retry`, {})
       watchRun(space, task)
       await refreshBusiness(space)
@@ -775,7 +779,10 @@ export function usePersistentModel(): AppModel {
   }
   const recordUnit = current?.view === 'result' ? current.records.find((r) => r.id === current.viewingRecordId)?.unitId ?? current.currentUnitId : current?.currentUnitId
   const activeFile = current?.files.find((file) => file.id === current.activeFileId)
-  const uiCurrent = current && { ...current, onboarding: { ...current.onboarding,
+  const uiCurrent = current && { ...current,
+    envLabel: t('localTerminal'),
+    records: current.records.map((record) => ({ ...record, unitTitle: record.unitTitle || t('historicalUnit') })),
+    onboarding: { ...current.onboarding,
     agentTyping: !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming'),
     messages: current.view === 'onboarding' ? session?.messages ?? [] : current.onboarding.messages } }
 
@@ -790,7 +797,7 @@ export function usePersistentModel(): AppModel {
     },
     assessment: (unit) => {
       const spec = selected?.units[unit.id]?.assessment
-      return spec ? { revision: spec.revision, stale: current ? needsAssessment(current.id, unit.id) : false, abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: '解释题', prompt: spec.q1 }, q2: { title: spec.q2Kind === 'reasoning' ? '分析题' : '代码题', prompt: spec.q2, starter: spec.starter, file: '代码答案' } } : null
+      return spec ? { revision: spec.revision, stale: current ? needsAssessment(current.id, unit.id) : false, abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: t('assessment:result.explanation'), prompt: spec.q1 }, q2: { title: t(spec.q2Kind === 'reasoning' ? 'assessment:result.analysis' : 'assessment:result.code'), prompt: spec.q2, starter: spec.starter, file: t('codeAnswer') } } : null
     },
     goHome: () => { setCurrentId(null); setGlobalView('home') },
     goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
@@ -809,7 +816,9 @@ export function usePersistentModel(): AppModel {
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
     confirmRequirement: () => { if (!current?.requirement || !selected || !inputAllowed(true)) return
       if (!selected.saved.readiness?.ready) {
-        setError(selected.saved.readiness?.reasons.join(' ') || '请先核对学习对象、版本和资料，再确认需求。')
+        const readiness = selected.saved.readiness, issues = readiness?.issues ?? []
+        setError(new ApiError(422, issues.length > 1 ? { code: 'INTAKE_NOT_READY' } : issues[0],
+          notice('common', 'errors.requirementNotReady')))
         return
       }
       if (!capabilities.agent) { void saveRequirement(current.requirement, true); return }
@@ -857,7 +866,7 @@ export function usePersistentModel(): AppModel {
     },
     retryReply: (id) => { if (!current || !inputAllowed(selected?.saved.runs.find((work) => work.id === id)?.kind === 'roadmap')) return; const space = current.id
       void run(`retry:${id}`, async () => {
-        if (pendingDecision(cache.current[space]!.saved)) throw new Error('请先接受或拒绝当前提案。')
+        if (pendingDecision(cache.current[space]!.saved)) throw new NoticeError(notice('common', 'errors.pendingProposal'))
         const submission = await api<RunSubmission>(`/spaces/${space}/runs/${id}/retry`, {})
         acceptSession(space, submission.session, submission.run)
         change(space, (s) => ({ ...s, planningError: null }))
@@ -867,7 +876,7 @@ export function usePersistentModel(): AppModel {
     applyRouteAction: unavailable,
     newSession: () => { if (!current) return; const space = current.id, key = sessionKey(current)
       void run(`new-session:${space}:${key}`, async () => {
-        const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current), title: '新会话' })
+        const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current) })
         invalidateBusiness(space)
         change(space, (s) => ({ ...s, saved: { ...s.saved, sessions: [...s.saved.sessions, saved] }, sessions: { ...s.sessions, [saved.id]: saved }, ui: { ...s.ui, sessions: [...s.ui.sessions, uiSession(saved)], activeSessionIds: { ...s.ui.activeSessionIds, [key]: saved.id } } }))
         sessionStorage.setItem(`session:${space}:${key}`, saved.id)
@@ -886,7 +895,7 @@ export function usePersistentModel(): AppModel {
     collapseDirectories: () => { if (current) changeUi(current.id, (s) => ({ ...s, expandedDirectoryIds: [], selectedEntryId: null })) },
     createEntry,
     renameEntry: async (path, name) => {
-      if (!current || !selected) return '没有打开的学习空间'
+      if (!current || !selected) return notice('common', 'errors.noSpace')
       const space = current.id, affected = (p: string) => p === path || p.startsWith(`${path}/`)
       const destination = path.includes('/') ? `${path.slice(0, path.lastIndexOf('/'))}/${name}` : name
       const result = await run(`rename:${space}:${path}`, async () => {
@@ -968,9 +977,9 @@ export function usePersistentModel(): AppModel {
       intake: selected?.saved.requirement.intake ?? null, readiness: selected?.saved.readiness,
       questions: session ? selected?.sessions[session.id]?.questions ?? [] : [],
       answerQuestions,
-      loadResearch: (ref) => current ? api<ResearchDossier>(`/spaces/${current.id}/research/${ref.id}/${ref.revision}`) : Promise.reject(new Error('没有打开的学习空间')),
+      loadResearch: (ref) => current ? api<ResearchDossier>(`/spaces/${current.id}/research/${ref.id}/${ref.revision}`) : Promise.reject(new NoticeError(notice('common', 'errors.noSpace'))),
       saveResearch,
-      exportResearch: (ref) => current ? exportResearch(current.id, ref) : Promise.reject(new Error('没有打开的学习空间')),
+      exportResearch: (ref) => current ? exportResearch(current.id, ref) : Promise.reject(new NoticeError(notice('common', 'errors.noSpace'))),
       conclusions: selected?.saved.conclusions ?? [],
       execution: selected?.executions.filter((e) => e.unitId === recordUnit).at(-1),
       stopExecution: (id) => { if (current) void run(`stop-code:${id}`, async () => { await api(`/spaces/${current.id}/executions/${id}/stop`, {}); await refreshBusiness(current.id) }) },
@@ -1022,7 +1031,7 @@ export function usePersistentModel(): AppModel {
         if (!current) return
         const proposal = cache.current[current.id]!.saved.lessonProposals?.find((proposal) => proposal.id === id)
         if (!proposal || !availableUnitIds(cache.current[current.id]!.ui).has(proposal.unitId)) {
-          setError('提案的目标单元已不在可用路线中。请拒绝后重新调整。'); return
+          setError(notice('common', 'errors.proposalUnitUnavailable')); return
         }
         // No generation, session retargeting, buffer writes or fullscreen reset.
         changeUi(current.id, (s) => ({ ...s, view: 'unit', currentUnitId: proposal.unitId, agentOpen: true }))
@@ -1040,7 +1049,7 @@ export function usePersistentModel(): AppModel {
             // idempotent receipt rather than treating that as a stale new choice.
             if (!proposal || !['pending', 'applied'].includes(proposal.state) || proposal.state === 'pending' && lessonProposalStale(proposal, entry.saved.requirement.revision,
               entry.saved.route.revision, entry.saved.requirement.confirmed, versions, entry.ui.stages.some((stage) => stage.units.some((unit) => unit.id === proposal.unitId))))
-              throw new Error('需求、路线或课件来源已变化，不能接受这份提案。请拒绝后重新调整。')
+              throw new NoticeError(notice('common', 'errors.proposalStale'))
             receipt = await api<LessonProposalApplication>(`/spaces/${space}/lesson-proposals/${id}/apply`, {})
           }
           if (!applied) { acceptLesson(space, receipt); applied = true }
@@ -1065,7 +1074,7 @@ export function usePersistentModel(): AppModel {
             applied = true
           }
           await refreshBusiness(space)
-          if (receipt.followupError) setError(receipt.followupError)
+          if (receipt.followupError) setError(notice('common', 'notices.followup', { error: receipt.followupError }))
           return true
         }).then(Boolean)
       },
@@ -1097,7 +1106,7 @@ export function usePersistentModel(): AppModel {
             applied = true
           }
           await refreshBusiness(space)
-          if (receipt.followupError) setError(receipt.followupError)
+          if (receipt.followupError) setError(notice('common', 'notices.followup', { error: receipt.followupError }))
           return true
         }).then(Boolean)
       },

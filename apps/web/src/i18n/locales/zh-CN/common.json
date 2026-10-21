@@ -1,0 +1,39 @@
+{
+  "document": {
+    "title": "TeachMeCoding · Agent 伴学编程",
+    "description": "围绕学习目标创建学习空间，由 Agent 规划路线、生成课件、陪你答疑、实践与测评。"
+  },
+  "sessionTitles": { "intake": "学习需求", "route": "学习路线", "unit": "新会话" },
+  "receipts": {
+    "file": "文件修改{{status}}：{{path}}。",
+    "command": "命令执行{{status}}。",
+    "exitCode": "退出码 {{code}}。",
+    "status": { "pending": "待确认", "running": "执行中", "succeeded": "已完成", "failed": "失败", "rejected": "已拒绝", "expired": "已失效", "cancelled": "已取消", "interrupted": "已中断" }
+  },
+  "notices": { "autoApproval": "YOLO 自动审批未完成：{{error}}", "followup": "已拒绝提案并保存修改意见；{{error}}" },
+  "assessmentSummary": { "passed": "本次作答符合题目要求。", "unverified": "本次没有可用的代码运行结果，尚不能判断代码是否符合要求。" },
+  "language": { "label": "语言", "system": "跟随浏览器" },
+  "theme": { "light": "切换到亮色主题", "dark": "切换到暗色主题" },
+  "time": { "justNow": "刚刚" },
+  "historicalUnit": "历史单元",
+  "localTerminal": "本机终端 · 非沙箱",
+  "codeAnswer": "代码答案",
+  "quotes": { "practice": "{{title}} · 练习", "lesson": "{{title}} · 课件", "lessonFallback": "课件", "advice": "测评建议", "selectionSuffix": " · 选中代码" },
+  "branchPosition": "{{current}} / {{total}}",
+  "navigation": { "breadcrumb": "面包屑导航" },
+  "context": { "trigger": "上下文 {{usage}}", "label": "上下文占用", "estimating": "待估算", "input": "输入（不含缓存）", "output": "输出", "cacheRead": "缓存读取", "cacheWrite": "缓存写入" },
+  "chat": { "resize": "调整聊天面板宽度", "previousBranch": "上一分支", "nextBranch": "下一分支", "emptyTitle": "还没有消息", "emptyDescription": "开始对话后，消息会显示在这里", "latest": "滚动到最新消息", "thinking": "思考中…", "thought": "已思考", "duration_other": "思考了 {{count}} 秒", "reasoning": "思考过程", "stop": "停止", "submit": "提交", "addFiles": "添加图片或文件", "screenshot": "截取屏幕", "upload": "上传文件", "placeholder": "你想了解什么？", "assessmentQuote": "{{title}} · 测评" },
+  "tool": { "error": "错误", "result": "结果", "status": { "approval-requested": "等待确认", "approval-responded": "已回应", "input-available": "执行中", "input-streaming": "等待执行", "output-available": "成功", "output-denied": "已拒绝", "output-error": "失败" } },
+  "diff": { "empty": "（无）", "imageAddress": "图片「{{label}}」地址：", "linkAddress": "链接「{{label}}」地址：", "title": "悬停说明：", "addresses": "链接与图片地址", "formatting": "Markdown / 空白调整（· 空格，⇥ 制表，␍ CR，↵ 换行）", "syntax": "本版本写法：", "leading": "段前空白调整（· 空格，⇥ 制表，␍ CR，↵ 换行）", "trailing": "段后空白调整（· 空格，⇥ 制表，␍ CR，↵ 换行）", "before": "− 原有：", "after": "+ 改为：" },
+  "actions": { "close": "关闭", "closeDialog": "关闭对话框", "more": "更多", "retry": "重试", "copy": "复制", "copied": "已复制", "download": "下载", "cancel": "取消", "back": "返回" },
+  "status": { "loading": "正在加载…", "saving": "正在读取或保存…", "loadingApplication": "应用加载" },
+  "fixture": "开发夹具 · 内存数据 · 模拟回复与执行",
+  "errors": {
+    "requestFailed": "请求失败，请重试。", "connection": "无法连接本地服务，请重试。", "transfer": "文件传输失败，请重试。", "stream": "事件连接中断，请重新连接。",
+    "spaceNotFound": "学习空间不存在，请返回首页。", "unitUnavailable": "单元尚未解锁或不在当前路线中，已返回学习路线。", "unitLocked": "单元尚未解锁，请先生成并保存全部前序课件。", "routeReordered": "路线顺序已改变，当前单元尚未解锁，已返回学习路线。", "refreshRoute": "无法刷新学习路线，请重试。",
+    "pendingConversation": "请先接受或拒绝当前路线或课件提案，再继续对话。", "routeRunning": "正在生成路线调整，请等待完成或停止当前生成。", "pendingProposal": "请先接受或拒绝当前提案。", "noSpace": "没有打开的学习空间", "exportResearch": "资料导出失败，请重试。", "autosave": "自动保存 {{path}} 失败：{{error}}", "readResults": "无法读取操作结果，请刷新。", "unavailable": "该能力尚未接入，不会执行模拟操作。",
+    "pendingLesson": "请先接受或拒绝当前提案，再生成课件。", "pendingAssessment": "请先接受或拒绝当前提案，再开始新的测评任务。", "assessmentStale": "课件已更新，请先根据最新课件重新出题；原答案草稿会保留。", "pendingRetry": "请先接受或拒绝当前提案，再重试生成。", "requirementNotReady": "请先核对学习对象、版本和资料，再确认需求。", "proposalUnitUnavailable": "提案的目标单元已不在可用路线中。请拒绝后重新调整。", "proposalStale": "需求、路线或课件来源已变化，不能接受这份提案。请拒绝后重新调整。",
+    "terminalDisconnected": "连接中断，输入未发送；请重连后重新输入。", "terminalAutosave": "文件自动保存失败，输入未发送；请重试保存后重新输入。Ctrl+C 和停止仍可使用。", "clipboard": "剪贴板接口不可用", "screen": "无法读取屏幕画面", "fileType": "没有符合支持类型的文件。", "fileSize": "所有文件均超过大小限制。", "fileCount": "文件过多，部分文件未添加。"
+  },
+  "diagnostics": { "connecting": "正在连接本地服务…", "connected": "本地服务已连接", "unavailable": "本地服务不可用", "failed": "本地服务不可用，请检查服务进程后刷新。", "environment": "本地运行环境", "description": "工程启动检查页。", "preview": "打开界面演示", "previewNote": "开发夹具；刷新重置；不调用模型、不保存文件、不执行命令。", "permissions": "学习代码在本机执行，拥有当前用户权限，不具备沙箱隔离。" }
+}

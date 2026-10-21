@@ -36,7 +36,9 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
       requireToken: api && !publicRead,
       documentNavigation: !api && ['GET', 'HEAD'].includes(c.req.method),
     });
-    if (error) return c.json({ error: error === 401 ? 'Request token required' : 'Local access denied' }, error);
+    if (error) return c.json(error === 401
+      ? { code: 'REQUEST_TOKEN_REQUIRED' }
+      : { code: 'LOCAL_ACCESS_DENIED' }, error);
     await next();
   });
   app.get('/api/health', (c) => c.json({
@@ -45,15 +47,15 @@ export function createApp(access: LocalAccess, learning?: Learning, projects?: P
   app.get('/api/access', (c) => {
     // A cross-origin browser cannot add this header without a CORS preflight,
     // which is denied. Same-origin fetches need not carry an Origin header.
-    if (c.req.header('X-TMC-Client') !== 'browser') return c.json({ error: 'Local client header required' }, 403);
+    if (c.req.header('X-TMC-Client') !== 'browser') return c.json({ code: 'LOCAL_CLIENT_REQUIRED' }, 403);
     return c.json({ token: access.token });
   });
   app.post('/api/access/check', (c) => c.json({ ok: true }));
   if (models || mcp || skills || search) app.route('/api', settingsApi(models, mcp, skills, search));
   if (learning || library) app.route('/api', libraryApi(library));
   if (learning) app.route('/api', workspaceApi(learning, projects, agents));
-  app.all('/api', (c) => c.json({ error: 'Not found' }, 404));
-  app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
+  app.all('/api', (c) => c.json({ code: 'NOT_FOUND' }, 404));
+  app.all('/api/*', (c) => c.json({ code: 'NOT_FOUND' }, 404));
   app.use('*', serveStatic({ root: webRoot }));
   app.get('*', async (c) => {
     // Missing assets are errors, not successful HTML responses.

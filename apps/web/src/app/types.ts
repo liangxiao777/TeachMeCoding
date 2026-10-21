@@ -31,6 +31,7 @@ export interface Quote {
   source: QuoteSource
   text: string
   label: string
+  caption?: import('@teach-me-coding/contracts').Quote['caption']
   provenance?: import('@teach-me-coding/contracts').Quote['provenance']
 }
 
@@ -51,7 +52,8 @@ export interface Message {
   full?: string
   quote?: Quote
   status?: MessageStatus
-  error?: string
+  error?: import('@teach-me-coding/contracts').BusinessErrorDetail
+  notice?: import('@teach-me-coding/contracts').BusinessErrorResponse
   sequence?: number
   inAssessment?: boolean
   action?: RouteAction
@@ -90,6 +92,7 @@ export interface TermLine {
   runId: string
   kind: 'cmd' | 'out' | 'err' | 'info'
   text: string
+  notice?: import('@/i18n/notice').UiNotice
 }
 
 export type EnvStatus = 'disconnected' | 'connecting' | 'connected' | 'lost'

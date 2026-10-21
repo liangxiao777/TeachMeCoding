@@ -131,8 +131,13 @@ test('same-name tools within a scene or across providers fail instead of overrid
       cwd: () => '/synthetic/cwd', hasSkills: false, signal: new AbortController().signal,
       mcp: { async tools() { return source === 'mcp' ? [second] : []; } },
       search: { async tools() { return source === 'search' ? [second] : []; } },
-    }), (error: unknown) => error instanceof BusinessError && error.status === 422
-      && error.message.includes(name) && error.message.includes(`scenario / ${source}`));
+    }), (error: unknown) => {
+      assert.ok(error instanceof BusinessError);
+      assert.equal(error.status, 422);
+      assert.equal(error.message, 'TOOL_NAME_CONFLICT');
+      assert.deepEqual(error.detail, { code: 'TOOL_NAME_CONFLICT' });
+      return true;
+    });
   }
 });
 

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
 import { Moon, Sun } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 
 type Theme = 'light' | 'dark'
@@ -54,8 +55,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 }
 
 export function ThemeToggle({ className }: { className?: string }) {
+  const { t } = useTranslation()
   const { theme, toggle } = useContext(ThemeContext)!
-  const label = theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'
+  const label = t(theme === 'dark' ? 'theme.light' : 'theme.dark')
   return (
     <Button className={className} variant="ghost" size="icon" aria-label={label} title={label} onClick={toggle}>
       {theme === 'dark' ? <Sun /> : <Moon />}

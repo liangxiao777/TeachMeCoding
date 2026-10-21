@@ -8,6 +8,7 @@ import type { UIMessage } from "ai";
 import { ArrowDownIcon, DownloadIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
@@ -44,12 +45,15 @@ export type ConversationEmptyStateProps = ComponentProps<"div"> & {
 
 export const ConversationEmptyState = ({
   className,
-  title = "No messages yet",
-  description = "Start a conversation to see messages here",
+  title,
+  description,
   icon,
   children,
   ...props
-}: ConversationEmptyStateProps) => (
+}: ConversationEmptyStateProps) => {
+  const { t } = useTranslation();
+  const detail = description ?? t('chat.emptyDescription');
+  return (
   <div
     className={cn(
       "flex size-full flex-col items-center justify-center gap-3 p-8 text-center",
@@ -61,15 +65,16 @@ export const ConversationEmptyState = ({
       <>
         {icon && <div className="text-muted-foreground">{icon}</div>}
         <div className="space-y-1">
-          <h3 className="font-medium text-sm">{title}</h3>
-          {description && (
-            <p className="text-muted-foreground text-sm">{description}</p>
+          <h3 className="font-medium text-sm">{title ?? t('chat.emptyTitle')}</h3>
+          {detail && (
+            <p className="text-muted-foreground text-sm">{detail}</p>
           )}
         </div>
       </>
     )}
   </div>
-);
+  );
+};
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;
 
@@ -77,6 +82,7 @@ export const ConversationScrollButton = ({
   className,
   ...props
 }: ConversationScrollButtonProps) => {
+  const { t } = useTranslation();
   const { isAtBottom, scrollToBottom } = useStickToBottomContext();
 
   const handleScrollToBottom = useCallback(() => {
@@ -91,6 +97,7 @@ export const ConversationScrollButton = ({
           className
         )}
         onClick={handleScrollToBottom}
+        aria-label={t('chat.latest')}
         size="icon"
         type="button"
         variant="outline"
@@ -139,6 +146,7 @@ export const ConversationDownload = ({
   children,
   ...props
 }: ConversationDownloadProps) => {
+  const { t } = useTranslation();
   const handleDownload = useCallback(() => {
     const markdown = messagesToMarkdown(messages, formatMessage);
     const blob = new Blob([markdown], { type: "text/markdown" });
@@ -159,6 +167,7 @@ export const ConversationDownload = ({
         className
       )}
       onClick={handleDownload}
+      aria-label={t('actions.download')}
       size="icon"
       type="button"
       variant="outline"

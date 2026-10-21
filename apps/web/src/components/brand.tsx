@@ -1,6 +1,7 @@
 'use client'
 
 import { cn } from '@/lib/utils'
+import { useTranslation } from 'react-i18next'
 
 // 96 网格：底座圆角 96/φ³；气泡宽 96/φ；提示符高 22.66、> 宽 14、间距与笔画 5.35、_ 长 22.66。
 // 与 public/icon.svg 保持同一份几何。
@@ -30,6 +31,7 @@ export function BrandMark({ className }: { className?: string }) {
 }
 
 export function Brand({ onClick }: { onClick?: () => void }) {
+  const { t } = useTranslation('home')
   const inner = (
     <>
       <BrandMark />
@@ -42,7 +44,7 @@ export function Brand({ onClick }: { onClick?: () => void }) {
       type="button"
       onClick={onClick}
       className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted"
-      aria-label="返回首页"
+      aria-label={t('backHome')}
     >
       {inner}
     </button>
