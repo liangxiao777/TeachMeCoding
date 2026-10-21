@@ -1,279 +1,197 @@
-# TeachMeCoding
+<p align="center">
+  <img src="apps/web/public/icon.svg" width="80" alt="TeachMeCoding 标志" />
+</p>
 
-本地单用户 AI 编程教学应用。默认入口已接入 SQLite 持久化、真实项目文件、教学 Agent、本机终端、用户确认后的文件修改与命令执行，以及基于真实执行证据的代码测评。学习流程为：创建空间 → 澄清并确认需求 → 生成路线 → 学习课件与编程实践 → 测评反馈与继续学习。
+<h1 align="center">TeachMeCoding</h1>
 
-当前已完成 M1–M5，并集成到本地 `main`；M6 整体交付验收尚未开始。完整学习主流程、干净环境启动、备份恢复和最终回归仍需按 [ROADMAP](docs/ROADMAP.md) 验收，不能将已有专项验证视为整体交付完成。工程与 Agent 设计分别见[实施计划](docs/implementation-plan.md)和[上下文设计](docs/agent-context-design.md)。原型保留在 `.worktrees/prototype`，不作为正式启动入口；运行诊断页为 `/diagnostics`。
+<p align="center">
+  本地运行的 AI 编程教学应用：从学习目标出发，生成路线和课件，在真实项目里练习，并用真实执行结果测评。
+</p>
 
-正式入口与 `/preview` 复用原型迁入的同一套页面和组件树；`AppModel` 分别连接真实持久化数据和隔离内存夹具，不维护另一套仿制页面。保留 Tailwind 样式、空间卡片、需求摘要、路线、会话菜单、项目树、课件、普通／全屏 IDE 和测评组件；正式 IDE 文件在输入时立即自动保存，不提供手动保存或磁盘对比入口，终端使用真实项目文件；能力不可用时提示，不以模拟内容填补真实数据。
+<p align="center">
+  <img alt="Node 24.15" src="https://img.shields.io/badge/node-24.15-339933?logo=node.js&logoColor=white" />
+  <img alt="pnpm 11.1" src="https://img.shields.io/badge/pnpm-11.1-F69220?logo=pnpm&logoColor=white" />
+  <img alt="平台 macOS arm64" src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey?logo=apple" />
+  <img alt="状态 开发中" src="https://img.shields.io/badge/status-alpha-orange" />
+</p>
 
-所有 Agent 会话及学习需求入口使用通过 shadcn 官方 registry 导入的 AI Elements：Conversation、Message、PromptInput、Reasoning、Tool 和 ChainOfThought。源码在 `apps/web/src/components/ai-elements`，配置在 `apps/web/components.json`；仅对新组件做 Base UI 组合、事件及状态适配，不覆盖已有基础组件。模型与传输仍使用 Pi 和现有 SSE，不使用 Vercel AI SDK 的 `useChat` 或服务端协议。流式 Markdown 支持表格、代码、数学公式；代码块保留「带入 IDE」，行内代码没有该操作。
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/configuration.md">配置指南</a> ·
+  <a href="docs/architecture.md">架构</a> ·
+  <a href="docs/development.md">开发与测试</a> ·
+  <a href="docs/ROADMAP.md">路线图</a>
+</p>
 
-正式生成页按真实事件区分分析、生成内容、校验和保存，保留 Agent 内容、工具状态、停止操作和真实失败反馈；不显示等待秒数、参数字符数、重连提示或装饰性骨架条。工具准备不等于已执行或产物已保存。SSE 静默断线后在后台通过持久事件游标恢复，不会自动重发模型请求。请求诊断清单记录响应 ID、HTTP 状态、接收事件数及时间、结束原因和错误指纹，不保留原始 Provider 错误正文或凭据。
+![TeachMeCoding 学习路线与 Agent 对话](docs/images/route-agent.png)
 
-Geist、Geist Mono 和中文 Noto Sans SC 后备字体通过固定版本 Fontsource 包随构建分发，中文优先使用原型已有的系统字体；Lucide 图标编入应用，站点图标随静态资源提供。不需要 Next.js，也不请求在线字体或 Analytics。
+TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent 先和你澄清需求，再规划学习路线、编写课件；你在内置 IDE 和本机终端中动手练习，代码题会在本机真实运行后再由模型评估。所有数据保存在本机 SQLite 和项目目录中，服务只有一个 Node 进程。
 
-## 界面演示与开发夹具
+> [!WARNING]
+> Agent 以服务账号的本机权限读取文件、执行 Bash 和访问网络，**不是沙箱**。请只在信任模型、工具和资料的环境中运行，详见 [SECURITY.md](SECURITY.md)。
 
-显式访问 `/preview` 进入演示。开发和生产构建均可演示；底部会明确标注模拟状态。所有回复、课件、测评和终端结果均来自 `apps/web/src/fixtures`，仅在浏览器内存中运行，刷新重置；不会调用模型、写入项目文件或执行本机命令。原型控制台没有迁入默认入口，也不作为产品功能。演示数据不会迁入正式空间，正式 API 请求失败也不会回落到演示。
+## 目录
 
-回归可直接访问 `/preview?scene=spaces`（两个空间）、`?scene=route`（Rust 路线）、`?scene=unit`（Rust 单元）；`&fault=reply` 或 `&fault=lesson` 让下一次模拟回复或课件生成失败。参数只在显式预览路径生效，不作为真实 API 失败后的回退。
+- [功能特性](#功能特性)
+- [项目状态](#项目状态)
+- [快速开始](#快速开始)
+- [使用方式](#使用方式)
+- [配置](#配置)
+- [项目结构](#项目结构)
+- [开发](#开发)
+- [文档](#文档)
+- [参与贡献](#参与贡献)
+- [致谢](#致谢)
+- [许可证](#许可证)
 
-## 本地运行
+## 功能特性
 
-要求 Node **24.15.0（24 LTS）**、pnpm **11.1.0**。依赖版本通过清单和 `pnpm-lock.yaml` 固定。
+- **完整学习流程**：创建空间 → 澄清并确认需求 → 生成路线 → 学习课件与编程实践 → 测评反馈与继续学习。
+- **可调整的学习路线**：按阶段和单元组织，Agent 提出的调整需你确认后才生效；后续单元在前序课件完成后解锁。
+- **真实项目与终端**：每个空间对应磁盘上的项目目录，IDE 输入即自动保存，终端是基于 xterm 和 PTY 的真实 shell。
+- **基于执行证据的测评**：代码题在本机运行并比对标准输出，支持 Python、JavaScript、TypeScript、Rust 和 Bash。
+- **可审阅的文件修改**：辅导 Agent 以 diff 提案修改文件，你确认后才写入。
+- **多模型 Provider**：基于 [Pi](https://github.com/earendil-works/pi) 接入多家 Provider，支持 API Key 与 OAuth 登录。
+- **资料库**：上传任意格式的参考资料，Agent 按需用原生工具读取，不做向量索引。
+- **联网能力**：可选 14 种搜索服务（含无需 API Key 的 DuckDuckGo），以及内置的公开网页抓取。
+- **MCP 与 Skills**：在设置中添加 MCP 服务器，从 [skills.sh](https://skills.sh) 浏览和安装 Skills。
+- **English 与简体中文界面**，亮色与暗色主题，以及不调用模型的内置演示模式 `/preview`。
 
-在全屏「设置 → 模型配置」中选择 pi-ai 提供的 Provider、模型、推理强度及登录方式；保存的选择用于新运行，进行中的运行继续使用创建时的模型。API Key / OAuth 凭据只保存在服务端数据目录的 `credentials.json`（600），不返回浏览器。原有 `.env` 的 `OPENROUTER_API_KEY` 和 `OPENROUTER_MODEL=stealth/space-bunny-alpha` 可继续作为初始配置；服务端环境变量优先，保存模型选择后不再使用模型回退值。缺少配置时仍可查看数据和使用终端；设置页说明缺少哪项配置。实际模型检查见[模型兼容性检查](#模型兼容性检查)。
+<table>
+  <tr>
+    <td><img src="docs/images/home.png" alt="首页：输入学习目标" /></td>
+    <td><img src="docs/images/ide-fullscreen.png" alt="全屏 IDE、终端与 Agent" /></td>
+  </tr>
+  <tr>
+    <td align="center">首页</td>
+    <td align="center">全屏 IDE</td>
+  </tr>
+</table>
 
-月亮／太阳按钮是全局主题入口，首页、空间列表、需求确认、路线规划、学习与测评、全屏 IDE 和设置页均可直接切换。首次使用跟随系统，手动选择后保存在当前浏览器，刷新后保留并在同源标签页间同步；不会改变模型配置或重新加载学习页面。
+<sub>截图来自 `/preview` 演示数据。</sub>
 
-界面支持 English 与简体中文，在设置页右上角选择语言；默认取浏览器首个支持的语言，否则回退英文。切换不刷新页面，不改写学习内容、模型回复或历史记录。翻译资源随构建分发，贡献流程及检查命令见[界面翻译贡献](docs/translating.md)。
+## 项目状态
+
+项目处于早期开发阶段。里程碑 M1–M5 已完成并合入 `main`；M6 整体交付验收（完整学习主流程、干净环境启动、备份恢复和最终回归）尚未开始。进度见 [ROADMAP](docs/ROADMAP.md)。
+
+目前只在 **macOS 26 / arm64、Node 24.15.0、Google Chrome** 上实际验证过。Linux、Windows 和 Intel Mac 未经验证。
+
+## 快速开始
+
+### 环境要求
+
+- [Node.js](https://nodejs.org/) 24.15.0（24 LTS）
+- [pnpm](https://pnpm.io/) 11.1.0
+- Python 3、C/C++ 编译器和 make（编译 `better-sqlite3`、`node-pty`；macOS 安装 Xcode Command Line Tools 即可）
+- 可选：测评所需的语言工具链，如 `python3`、`node`、`rustc`
+
+### 安装与启动
 
 ```sh
+git clone https://github.com/liangxiao777/TeachMeCoding.git
+cd TeachMeCoding
 pnpm install --frozen-lockfile
-pnpm dev          # 同时启动 127.0.0.1:5173 前端和 127.0.0.1:4310 API
-pnpm check
+
+pnpm dev    # 开发模式：前端 http://127.0.0.1:5173，API 127.0.0.1:4310
+```
+
+生产模式由一个 Node 服务同时提供界面和 API：
+
+```sh
 pnpm build
-pnpm test         # 需要先 build；含生产启动、正常重启和崩溃恢复检查
-pnpm test:browser # 使用本机 Google Chrome；确保 14320、14321、15173 端口空闲
-pnpm start        # 一个 Node 服务在 http://127.0.0.1:4310 提供 UI 和 API
+pnpm start  # http://127.0.0.1:4310
 ```
 
-`Ctrl+C` 停止服务。API 端口可通过 `PORT` 设置，开发前端可通过 `TMC_WEB_PORT` 设置；`pnpm dev` 将相同配置用于代理和本地访问白名单。编译产物可从任意工作目录用 `node /绝对路径/apps/server/dist/index.js` 启动，静态资源和默认数据目录不依赖当前目录。
+### 配置模型
 
-## 资料库与 Agent Bash
+启动后打开「设置 → 模型配置」，选择 Provider、模型和登录方式即可。凭据只保存在服务端数据目录，不会返回浏览器。
 
-「资料库」是独立页面 `/library`，可从首页、学习空间、需求确认及普通／全屏工作台进入，不属于设置类别。所有学习空间共享同一资料库。支持多文件上传，不按格式或 MIME 类型筛选，单个文件最多 100 MiB（界面简称 100 MB）；保留原文件字节、名称、大小、上传时间和 SHA256。同名文件分开保存，失败重试不重复添加，下载使用附件响应，删除需确认。页面支持文件名筛选、刷新、亮暗主题及窄屏布局；返回学习保留当前编辑器、未发送问题和终端连接。刷新页面仍遵循原有未保存内容规则。
-
-不做向量检索、分块、自动解析、摘要或后台索引。所有六种 Agent 场景可通过 `list_library_files` 发现文件，再用 `read`、`ls`、`find`、`grep` 按需读取。PDF、Office 等二进制格式能否提取正文取决于本机已有工具；上传成功不代表解析成功，应用不自动安装依赖。资料和工具输出是不可信参考材料，不应作为新的指令。工具正文只用于当前运行，持久消息仍省略正文。
-
-所有六种 Agent 场景默认提供自主 Bash，不设开关或首次启用弹窗，不逐条确认命令。停止 Agent 或关闭服务会取消命令，但不能撤销已产生的副作用。
-
-使用固定版本 Pi 的 `createBashTool`，不引入 `AgentSession` 或默认 edit/write 工具。参数为 `command` 和可选 `timeout`（秒）；没有默认单命令超时，也没有整个 Agent 运行的总时长期限，命令可通过可选超时或主动停止取消。模型看到最后 2,000 行或 50 KiB，显示截断不停止进程；完整原始输出留在私有运行目录供本次继续读取，运行结束清理，重启删除遗留临时输出。应用另设每条命令 32 MiB 原始输出硬上限，超过时停止命令以保护磁盘；这是应用限额，不是 Pi 的显示限额。小型 pnpm 补丁增加输出目录选项、私有文件权限（600）及写入失败传播，避免文件流错误导致服务崩溃；输出格式和截断仍由 Pi 处理。子进程使用环境变量白名单，不直接继承模型凭据；正常完成、取消和单命令超时均清理普通后台进程，刻意脱离进程树的守护进程不保证被清理。
-
-**Bash 不是沙箱，资料库工作目录不是权限边界。**它可按服务账号权限读写文件、运行程序和访问网络，也能绕过第一方项目修改／命令提案的逐次确认。提案流程仍保留，但不构成全局执行保护；环境变量白名单也不能阻止命令读取本机凭据文件。仅在信任模型、工具和资料的环境中运行应用。
-
-## 搜索服务
-
-在「设置 → 搜索服务」中选择服务商并开启独立总开关，默认关闭。现支持 14 个服务：Brave Search、Tavily、Exa、Firecrawl、Parallel、Perplexity Search、MiniMax Search、Gemini、Grok、Kimi、Codex Hosted Search、DuckDuckGo、Firecrawl Free、Ollama Web Search。所有服务都通过普通 `web_search` 工具提供给教学 Agent，DeepSeek 等支持工具调用的教学模型无需更换。不自动选择其他服务或在失败后回退。
-
-- DuckDuckGo、Firecrawl Free 无需 API Key；Free 模式不会发送付费 Firecrawl 凭据。匿名搜索仍可能限流、遇到验证码或受上游可用性影响。
-- Codex Hosted Search 使用「登录 Codex」的 ChatGPT OAuth，复用模型设置中的同一账号，不改变教学模型选择。退出会移除该账号凭据，也会影响使用该账号的 Codex 教学模型。
-- 其他服务使用各自的 API Key。Gemini、Grok、Kimi 可独立配置搜索模型；MiniMax、Kimi 可选择全球或中国服务区域。Ollama 使用 `ollama.com/api/web_search` 托管服务，不调用本地 Ollama 模型或守护进程。MiniMax Search 需要支持搜索接口的 Coding Plan 凭据。
-- 服务端环境变量为 `BRAVE_API_KEY`、`TAVILY_API_KEY`、`EXA_API_KEY`、`FIRECRAWL_API_KEY`、`PARALLEL_API_KEY`、`PERPLEXITY_API_KEY`、`GEMINI_API_KEY`、`XAI_API_KEY`、`OLLAMA_API_KEY`。MiniMax 按顺序读取 `MINIMAX_CODE_PLAN_KEY`、`MINIMAX_CODING_API_KEY`、`MINIMAX_OAUTH_TOKEN`、`MINIMAX_API_KEY`；Kimi 优先 `KIMI_API_KEY`，其次 `MOONSHOT_API_KEY`。设置页保存的密钥优先；不借用教学模型的凭据，也不自动读取本机 Codex 登录文件。
-
-开关直接保存，关闭时保留配置，阻止后续内置搜索调用并取消正在执行的搜索请求；不保证服务商撤销已接收的请求或费用，也不关闭 MCP、Skills 或其他联网路径。服务商、搜索模型、区域和 API Key 在每次 Agent 运行开始时固定，修改用于新运行；Codex OAuth 在调用时检查。API Key 及搜索配置原子保存在数据目录的 `search.json`（600），OAuth 使用已有服务端凭据存储。读取设置只返回配置状态，不返回密钥；输入留空保留当前服务的凭据，切换服务不会覆盖其他服务的配置。损坏配置不会自动重建，也不阻止其他设置和学习数据读取。
-
-「保存配置」不调用服务商。「测试搜索」使用已保存配置查询「Rust 官方文档」，直接调用同一搜索适配器、显示结果链接与耗时，不调用教学模型；即使 Agent 搜索关闭也可手动测试。测试与 Agent 搜索都可能产生服务费用，查询会发送给所选服务商；请勿在查询中包含凭据或不宜发送的私人信息。搜索不是全文抓取：默认返回 5 条、最多 10 条带标题和 URL 的结果片段，按上游顺序保留；Gemini、Grok、Kimi、Codex 返回有搜索依据的回答及可用来源。回答和片段作为不可信外部材料提供给 Agent，设置页只显示文本，不执行 HTML 或 Markdown 中的图片。工具正文仅保留在当前运行，后续请求清单记录来源 URL、标题、时间与正文 hash，不额外持久化整份检索正文。
-
-适配参考 [OpenClaw 的普通搜索工具](https://github.com/openclaw/openclaw/blob/6693bb9665ced2a4fea3e286f62acfd0116e2c72/src/agents/tools/web-search.ts)：固定 HTTPS 服务端点、禁止 HTTP 重定向、30 秒总期限、1 MiB 响应／协议输出限制、取消传播和安全错误。Kimi 的工具重放最多三轮，共用一个期限。不复用 OpenClaw 插件宿主，不注入当前教学模型的原生搜索，不自动重试或缓存结果。
-
-Codex 通过固定版本 `@openai/codex@0.160.0` 的 app-server 执行独立 hosted-search 任务，使用私有临时 HOME、最小环境和无本地执行环境的只读线程；禁用命令、文件修改、MCP、插件及额外 Agent，检查实际搜索完成后才接受回答，调用结束清理进程组及临时目录。这些是能力限制，不是完整操作系统隔离；当前不支持 Windows。协议和取消流程由离线 fixture 覆盖，并验证了真实二进制的初始化及受限线程创建；付费服务和真实 OAuth 搜索仍需用有效账号实测。
-
-## 网页抓取
-
-Agent 默认提供模型无关的 `web_fetch`，用于读取已知公开网址或进一步读取搜索结果。与 [OpenClaw 的网页抓取工具](https://github.com/openclaw/openclaw/blob/6693bb9665ced2a4fea3e286f62acfd0116e2c72/src/agents/tools/web-fetch.ts) 一样，直接抓取不需要搜索 API Key，不受 `web_search` 开关约束。参数为 `url`、`extractMode`（`markdown` 或 `text`，默认 Markdown）和 `maxChars`（100–20,000，默认 20,000，包含不可信内容边界标记）。本次没有新增设置项。
-
-只执行 HTTP(S) GET，不传递模型凭据、应用凭据或 Cookie。HTML 使用 Readability 提取正文，失败时读取本地清理后的 HTML，保留代码块与安全来源链接；也支持 Markdown、纯文本及 JSON。返回原始／最终 URL、标题、状态、格式、时间、截断标记和有界正文。下载最多 750,000 字节，超过时只提取前缀并明确警告；最多 3 次重定向，每一跳重新验证地址。30 秒网络期限覆盖 DNS、连接、重定向与正文读取；停止 Agent 或关闭应用会取消请求，不返回取消后的成功结果。不执行 JavaScript、登录或 PDF 提取，不调用付费抓取服务，不自动重试、缓存或写入正文临时文件。
-
-拒绝本机、内网、元数据、保留地址及 IPv6 转换／隧道地址；DNS 的全部结果均须通过校验，再固定到 Undici 连接的 lookup 中，避免连接时重新解析导致 DNS 重绑定。使用直接连接，不委托环境代理解析目标地址；依赖代理或 fake-IP 网络的部署可能无法抓取。网页及其元数据是不可信外部资料，不能改变 Agent 指令或确认规则；工具正文只用于当前运行，持久化沿用正文省略规则，仅在来源清单记录 URL、标题、时间与 hash。不要把私人资料或凭据放进 URL／查询参数。
-
-## MCP 与 Skills
-
-全屏设置提供真实 MCP / Skills 配置，切换类别或返回学习不会丢失编辑器、会话输入或终端连接。不自动加载其他应用的配置或安装 MCP 服务；Skill 安装由用户在设置中主动发起。
-
-**MCP：**默认展示服务器列表，每行右侧开关直接保存启用状态，连接是否成功另行显示；仅在连接成功后显示工具数量。点击「添加 MCP Server」打开表单，选择本地进程（stdio）或远程地址（HTTP）；每行菜单可编辑、重连或删除该服务器，不重连其他服务器。弹窗也支持 JSON：粘贴单个服务器配置，或仅包含一个服务器的 `mcpServers` 配置；取消不会保存草稿。
-
-支持本地 stdio 的 `command`、`args`、`cwd`、`env`，以及远程 Streamable HTTP 的 `url`、`headers`；`enabled: false` 不启动服务，`timeout` 的单位是秒，默认 60。表单中的启动参数每行一个，工作目录、环境变量和超时位于高级配置。相对 `cwd` 基于应用数据目录，不是源代码目录。`env` / `headers` 支持 `${变量名}`，从私有服务端环境查询；不执行 `!command`。命令是可执行程序名，不是 shell 命令串。
-
-```json
-{
-  "mcpServers": {
-    "remote": {
-      "url": "https://example.com/mcp",
-      "headers": { "Authorization": "Bearer ${MCP_TOKEN}" },
-      "enabled": false
-    }
-  }
-}
-```
-
-配置保存在数据目录的 `mcp.json`（600）。读取设置时隐藏 `env` / `headers` 中的字面值，保存未改动的掩码会保留原值，重命名也保留；认证信息应放在这些字段，不放进 URL 或命令参数。设置页显示连接状态、实际工具名称和描述；删除配置条目会关闭对应连接。修改或重连正在使用的服务器可能使该调用失败，不自动重放调用。
-
-使用 `@earendil-works/pi-mcp@1.0.0` 的客户端、stdio / HTTP transport 和结果转换，将远端动态 JSON Schema 适配为现有 Agent 的原生工具，保留结构化结果、错误状态、取消和工具列表变更通知。工具使用稳定的独立名称，不覆盖教学工具；每次运行固定当时的工具集合，后续配置和工具列表更新供新运行使用。关闭应用会关闭连接并清理其拥有的 stdio 进程。单次取消会发送 MCP 取消通知，但不保证远端撤销已发生的操作。
-
-**启用服务器即信任其工具可被 Agent 直接调用。**MCP 不受第一方文件/命令提案的逐次确认机制约束，可能发送学习资料或产生外部副作用；仅配置信任的服务。stdio 使用本机账号权限，继承基础环境及明确配置的 `env`，不直接继承整个服务端环境。当前接入 MCP 工具能力；不包含 legacy SSE、远端 OAuth 登录界面、MCP resources / prompts 管理或 codemode。
-
-**Skills：**默认打开「已安装」列表，每行菜单提供详情、检查更新及卸载／移除，最右侧开关保存启用状态。「技能市场」无需搜索即可浏览 skills.sh 的 All Time（累计安装）、Trending（近 24 小时安装）和 Hot（近一小时安装及较昨日同小时的变化）榜单，保留上游排序，支持加载更多和全市场搜索。列表显示排名、技能／来源、安装量及安装状态；网络失败可重试，加载更多失败保留已加载条目。「从链接安装」和「导入本地目录」位于页面右上方，手机上换行排列。链接支持 skills.sh 具体技能页、HTTPS 仓库／发布网站或 `owner/repo`；来源包含多个技能时需指定名称。本地引用支持目录或单个 Markdown 文件的绝对路径，也支持 `~/`。详情可预览 `SKILL.md` 与支持文件，不要求用户操作 CLI。
-
-使用固定的 `skills@1.7.0` 公开 CLI，以独立 cwd、HOME、XDG 与临时目录执行非交互 Pi/copy 安装，关闭遥测，不向获取进程传递模型凭据、SSH agent 或用户 Git 配置。CLI 在临时项目的 `.pi/skills/` 获取文件；应用校验后完整移入 `<TMC_DATA_DIR>/skills/`（默认 `~/.teach-me-coding/skills/`），不安装到其他 Agent 的目录。安装不执行包中的脚本或安装其依赖。网络来源用于公开仓库／下载，不提供私有 Git 登录流程；该进程仍使用本机权限，并非沙箱。
-
-榜单中的网站来源按 HTTPS 发布地址获取，不误当成 GitHub 仓库。该版本 CLI 的 well-known 获取不支持 JSON 输出，因此只对网站发布源省略 `--json`；必须同时取得单个 Pi 技能目录及匹配的 `skills-lock.json` 来源记录，独立校验 CLI 文件摘要后才安装。保留发布包摘要和来源 URL，不把它们当成 Git 提交号。
-
-应用安装的目录附带 `.tmc-install.json`，记录来源、请求的 ref、CLI 来源哈希及独立计算的文件内容／执行权限哈希。来源哈希不等于 Git 提交号，未解析 ref 时不声称固定了远端提交。检查更新只在临时目录获取和比较；确认更新后才替换整包，检测到本地修改时拒绝覆盖。启停状态在更新后保留；中断的目录替换在启动时恢复。卸载只删除应用管理的安装目录，本地引用的「移除」仅隐藏对应技能，保留原文件及同目录中的其他技能；再次添加路径可恢复引用。
-
-默认扫描应用技能目录，额外路径按配置顺序加载，应用目录优先；同名冲突和无效 frontmatter 使用 Pi 的诊断。启停、路径及被移除的本地引用保存在 SQLite 的 `app_settings`。新安装默认启用，对后续 Agent 运行生效，不重启服务或向进行中的运行主动追加上下文。搜索使用官方 CLI 的匿名 `https://skills.sh/api/search`，榜单使用 `https://skills.sh/api/skills/{view}/{page}`，不要求 Vercel 登录；两者均为未版本化兼容接口，上游失败或格式改变会明确报错，不伪装为空结果或拿搜索结果替代榜单。榜单接口的 `total` 不代表 skills.sh 全站技能总量，页面不据此宣传市场规模。
-
-复用 `@earendil-works/pi-coding-agent@1.0.0` 的 `loadSkills` / `formatSkillsForPrompt`，不创建 `AgentSession`、加载默认 coding tools 或改变现有 SQLite 会话格式。系统 XML 只增加 Skill 名称、描述和路径；模型匹配任务时通过原生 `read` 工具读取正文及参考文件。所有教学场景均可使用已启用的 Skills；每次运行重新发现文件，再固定本次元数据。`disable-model-invocation: true` 不进入自动发现提示，仍可用 `/skill:名称 你的请求` 显式调用；停用后不再广告或展开该命令，但它不是文件读取权限封锁。Skill 不改变场景任务、工具集合或原有执行确认规则。
-
-实现依据：[Pi Skills 1.0.0](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/skills.md)、[Skills CLI 1.7.0](https://github.com/vercel-labs/skills/tree/v1.7.0)、[Pi MCP 1.0.0](https://github.com/earendil-works/pi/tree/v1.0.0/packages/mcp)、[裸 Agent MCP 示例](https://github.com/earendil-works/pi/tree/v1.0.0/packages/agent/examples/mcp-codemode)。
-
-## 网络访问
-
-默认只监听 `127.0.0.1`。需要从可信网络访问时，在启动命令中设置 `HOST`（支持 `127.0.0.1` 或 `0.0.0.0`）：
+也可以用环境变量提供初始配置：
 
 ```sh
-HOST=0.0.0.0 PORT=5173 pnpm start # 先 pnpm build；单服务提供 UI 和 API
-HOST=0.0.0.0 pnpm dev            # 前端 5173、API 4310 均监听所有 IPv4 接口
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env，填写 OPENROUTER_API_KEY 和 OPENROUTER_MODEL
 ```
 
-其他设备访问 `http://<运行机器的 IPv4 地址>:5173`，而不是 `0.0.0.0`。服务启动时把本机 IPv4 地址及对应端口加入 Host/Origin 白名单，保留令牌和跨站请求保护，不允许任意域名；网卡地址改变后需重启。网络模式回归可运行 `HOST=0.0.0.0 pnpm exec playwright test tests/browser/startup.spec.ts --workers=1`，使用独立测试数据，覆盖开发/生产实际 IP 访问、提交和重试。
+## 使用方式
 
-**网络模式没有登录鉴权，也没有用户隔离。能连接端口的人可以读取和修改学习数据、调用模型、使用 Agent 文件读取能力、管理全局资料库并开启自主 Bash、操作本机终端、确认执行提案及运行测评代码；请求令牌只防跨站请求，不是登录密码。仅用于可信网络，不要将端口暴露到公网。**终端、Bash、确认后的命令及测评代码均使用服务账号的本机权限，不是沙箱；确认界面不构成用户身份鉴权。这里不提供公网部署或任意反向代理配置。
+1. 在首页描述你想学的内容，例如「我想学习 Rust，最后能写一个命令行工具」。
+2. 和 Agent 澄清背景、目标和时间安排，确认需求摘要。
+3. 查看生成的学习路线，需要时让 Agent 调整。
+4. 逐个单元阅读课件，在 IDE 和终端中练习，随时向 Agent 提问。
+5. 完成测评，根据反馈继续学习。
 
-## Devin Desktop 内置预览
+不配置模型也能体验界面：访问 `/preview` 进入演示模式。演示数据只存在于浏览器内存中，不调用模型、不写文件、不执行命令。
 
-Devin 的预览地址与项目服务地址使用不同端口。默认访问保护会拒绝这个额外来源，页面脚本可能返回 403；默认的防嵌入策略也会阻止编辑器中的 iframe。需要内置预览时，显式设置 `TMC_PREVIEW_ORIGIN` 为 Devin 实际生成的预览地址（不是项目端口）。
+## 配置
 
-先启动项目并让 Devin 创建预览，记下预览地址；保留预览代理，正常停止项目服务，再在原启动命令中添加该变量，例如：
+常用环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `TMC_DATA_DIR` | `~/.teach-me-coding/` | 数据根目录（数据库、项目文件、资料库、配置） |
+| `PORT` | `4310` | API 服务端口（生产模式同时提供界面） |
+| `TMC_WEB_PORT` | `5173` | 开发模式前端端口 |
+| `HOST` | `127.0.0.1` | 设为 `0.0.0.0` 允许可信局域网访问，**没有登录鉴权** |
+| `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | — | 尚未在设置页保存模型时的初始配置 |
+| `TMC_PREVIEW_ORIGIN` | — | 允许 Devin Desktop 等编辑器内置预览的本机来源 |
+
+搜索服务、网页抓取、MCP、Skills、数据备份与恢复等完整说明见[配置指南](docs/configuration.md)。
+
+## 项目结构
+
+```text
+apps/
+  server/        Node 服务：Hono HTTP、Pi Agent、SQLite 存储、PTY 终端
+  web/           React 19 + Vite 前端，Tailwind CSS、AI Elements、CodeMirror、xterm
+packages/
+  contracts/     前后端共享的类型与协议
+tests/           集成测试、Playwright 浏览器测试与视觉基线
+docs/            设计文档、配置与开发指南
+patches/         pnpm 依赖补丁
+```
+
+## 开发
 
 ```sh
-# 示例预览端口 54492 必须替换为 Devin 实际给出的端口。
-TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm dev
-# 已构建的单服务也支持；PORT、HOST、TMC_DATA_DIR 沿用所需配置。
-TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm start
+pnpm check          # 类型检查
+pnpm build
+pnpm test           # 单元与集成测试，需要先 build
+pnpm test:browser   # Playwright 浏览器与截图回归，使用本机 Google Chrome
+pnpm test:native    # SQLite 与 PTY 原生依赖检查
+pnpm test:provider  # 真实模型冒烟测试，会产生 Provider 费用
 ```
 
-该配置仅接受一个准确的 HTTP `127.0.0.1` 或 `localhost` 来源，可带端口及末尾斜杠，不接受其他主机、路径、凭据或通配符；`localhost` 与 `127.0.0.1` 不互相替代。重新创建预览导致端口改变时，需更新变量并重启项目服务。变量由启动环境读取，不从模型配置 `.env` 自动加载。
+`pnpm test` 需要本机有 `python3` 和 `pdftotext`（Poppler）。测试端口、夹具、视觉基线更新流程等见[开发与测试](docs/development.md)。
 
-启用后允许指定代理来源，嵌入范围限定为同源、该预览来源及 Devin／VS Code 编辑器 webview。API 和终端仍需原有令牌，外部 Origin、其他未配置端口及跨站 API 请求仍被拒绝，不开放 CORS；仅非 API 的 GET/HEAD iframe 导航可通过嵌入所需的 Fetch Metadata 检查。取消变量并重启即恢复默认策略。不要将其作为公网嵌入或登录鉴权方案。
+## 文档
 
-## 本机终端与确认执行
+- [配置指南](docs/configuration.md)：模型、数据目录、网络访问、搜索、网页抓取、MCP 与 Skills
+- [架构与运行机制](docs/architecture.md)：界面、Agent 工具、本机执行、测评、上下文与接口访问边界
+- [开发与测试](docs/development.md)：命令、演示夹具、回归测试与兼容性检查
+- [界面翻译贡献](docs/translating.md)：翻译流程与检查命令
+- [实施计划](docs/implementation-plan.md)、[Agent 上下文设计](docs/agent-context-design.md)、[学习需求确认设计](docs/intake-design.md)
+- [ROADMAP](docs/ROADMAP.md)：里程碑与验收记录
+- [SECURITY.md](SECURITY.md)：安全模型与漏洞报告
 
-正式工作台的普通／全屏 IDE 使用 xterm 和真实 PTY，打开 IDE 时自动连接当前空间的项目目录。终端按空间复用，浏览器刷新或断线重连不会重放输入，也不会仅因连接断开而结束 shell；终端退出后可显式新建。停止终端或关闭服务会清理应用管理的进程，服务重启不恢复旧 shell 或自动执行历史命令。刻意脱离进程树的守护进程不保证被清理。
+## 参与贡献
 
-终端执行磁盘中的文件。输入会等待当前空间的自动保存完成，保证命令使用最新编辑；保存失败时丢弃等待的输入并提示，重试保存不会自动执行旧输入。Ctrl+C 和停止不等待保存，取消、重连或新建 shell 会丢弃等待中的输入。终端修改或生成的文件可通过「刷新目录」发现；刷新不覆盖保存中或保存失败的编辑。终端输出可以选中后引用到会话。
+欢迎通过 [Issues](https://github.com/liangxiao777/TeachMeCoding/issues) 反馈问题或提出建议。提交 Pull Request 前请：
 
-所有 Agent 的命令执行统一使用默认自主执行的 `bash`，无需逐次审批，不再提供 `propose_command`。辅导 Agent 仍可用 `propose_file_change` 生成文件修改提案；模型成功结束后，界面展示相对文件路径和代码 diff，用户确认后才写入。提案 30 分钟后失效，确认时校验提案摘要和文件版本；编辑器文件自动保存完成后才能确认，保存改变了提案基线时仍需重新生成提案。同一空间的确认操作互斥，拒绝、过期、重复确认及服务重启均不会重新执行；结果保存在原会话，供后续辅导读取。
+- 阅读 [AGENTS.md](AGENTS.md) 中的工具与界面设计约定。
+- 从 `main` 新建 `<type>/<short-description>` 分支，例如 `feat/local-project-files`。
+- 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)，例如 `fix(projects): reject symlink traversal`。
+- 确保 `pnpm check`、`pnpm build`、`pnpm test` 通过；涉及界面时同时运行 `pnpm test:browser`。
 
-历史命令提案及其确认、执行结果仍保留兼容；该旧流程的命令最多运行 30 秒、收集 256 KiB 输出，这不是自主 Bash 或交互式终端的默认时限。shell 不加载用户启动脚本，子进程只继承白名单环境变量，不直接继承服务端模型凭据；这不阻止程序按本机权限读取文件。缺少工具链时显示实际错误，应用不会自动安装。停止或取消不回滚已经产生的文件修改或其他副作用。
+## 致谢
 
-## 真实代码测评
+- [Pi](https://github.com/earendil-works/pi)：Agent 核心、模型接入、MCP 客户端与 Skills 加载
+- [AI Elements](https://ai-sdk.dev/elements) 与 [shadcn/ui](https://ui.shadcn.com/)：会话与输入组件
+- [OpenClaw](https://github.com/openclaw/openclaw)：搜索与网页抓取工具的参考实现
+- [Skills CLI](https://github.com/vercel-labs/skills) 与 [skills.sh](https://skills.sh)
+- [xterm.js](https://xtermjs.org/)、[node-pty](https://github.com/microsoft/node-pty)、[better-sqlite3](https://github.com/WiseLibs/better-sqlite3)、[Hono](https://hono.dev/)、[CodeMirror](https://codemirror.net/)
 
-代码题带有版本化执行方案，定义语言、命令行参数和预期标准输出。当前支持 Python、JavaScript、TypeScript、Rust 和 Bash，分别使用本机的 `python3`、`node`、`rustc` 或 `/bin/bash`，依赖已有工具链。界面显示执行命令与预期输出；点击「运行」或「提交测评」会执行当次固定的代码快照，每个用例使用一次性目录，不依赖空间项目文件。整次执行共用 30 秒和 256 KiB 输出限制；临时目录不是沙箱。
+## 许可证
 
-新代码题在 `submit_assessment` 时就要求执行方案，缺失时反馈给模型补充，避免用户点击运行后才发现不能执行；纯分析题无需方案。解释题可保存完整 Markdown，不再按短标题限制；无起始代码时可省略 `starter`，四组评分反馈也可省略，由宿主补空值。历史题目不强制补造方案，既有数据仍可读取。
-
-执行记录保存代码、题目版本、命令、输出、退出状态和预期匹配结果。提交测评时，评估绑定该次不可变答案、私有评分标准版本及对应的真实执行证据；单独试运行的记录不代替提交时的证据。运行与评估期间可以继续编辑新草稿，新内容不会覆盖已提交答案。
-
-只有全部用例完成、标准输出匹配预期且模型评估通过，代码题才可能判为通过；输出不符判为需加强。缺少工具链、报错、超时、取消或缺少执行证据时，代码题不会判为通过，页面提供对应原因和下一步建议。纯分析题使用非执行评分。旧代码题缺少执行方案、或旧题目缺少私有评分标准时，需要重新出题。当前检查覆盖题目列出的用例，不代表任意输入都正确。
-
-## 数据目录与恢复
-
-默认数据根目录为 `~/.teach-me-coding/`，独立于源码。也可显式选择另一个绝对路径：
-
-```sh
-TMC_DATA_DIR="$HOME/teach-me-coding-dev" pnpm dev
-# 生产启动使用同一配置方式；同一目录不能同时启动开发和生产实例。
-TMC_DATA_DIR="$HOME/teach-me-coding-data" pnpm start
-```
-
-- `app.db`：共享 SQLite 数据库，按空间保存需求、路线、单元、课件、会话、消息/引用、测评草稿与固定提交、评估结果、Agent 运行事件、文件／命令提案及代码执行记录。
-- `projects/<space-id>/`：真实项目目录；项目源码以磁盘文件为准，数据库不保存编辑器工作副本。消息引用、已发布文件提案和测评提交中的代码是对应操作的固定快照，不与项目文件自动同步。
-- `library/<file-id>/`：全局共享的原始资料及上传元数据，备份时应一起保存。
-- `bash-output/run-<run-id>/`：当前 Agent 运行的私有临时输出，不是持久资料；运行结束或重启后清理。
-- `app.lock`：实例锁文件；服务退出或崩溃后锁自动释放。**不要为启动第二个实例而删除或替换它**。SQLite 的 `-wal`、`-shm` 等文件由数据库管理。
-
-会话中尚未发送的文字、引用和路线调整想法只保留在当前页面内存中，不自动保存，也没有手动保存按钮。页面内切换空间、单元和会话会保留各自输入；刷新或重新打开页面后输入框为空，也不恢复旧版本已保存的会话草稿。发送成功的消息及 Agent 回复自动持久化；发送失败或迟到的响应不会清空后来编辑的新内容。
-
-需求修改和测评答案草稿仍需手动保存；IDE 文件每次输入立即触发自动保存，不等待失焦、停顿或定时器。同一文件串行写入，请求期间继续输入时只接着保存最新内容；带入 IDE 的代码同样自动保存。保存中或失败的文件仍有离开页面警告，失败保留编辑并提供重试；页面内切换和关闭标签不取消保存。提交测评只保存该次作答，不清空后来编辑的新答案。刷新/重启恢复已保存的业务内容，正式空间不会用演示内容填补模型失败。
-
-项目 API 仅访问应用管理的目录，支持多层目录、读取、创建、重命名和保存，不提供删除或任意外部目录接入。编辑器支持最大 1 MB 的 UTF-8 文本；路径穿越、符号链接、硬链接和非普通文件会被拒绝。外部改动可用「刷新目录」发现；自动保存遇到版本冲突时读取最新版本并重试，以当前编辑器输入为准覆盖磁盘内容，不自动合并、不显示比较面板。连续冲突最多重试三次，其他写入失败直接提示；服务端仍执行版本检查和原子替换。重命名会先等待自动保存，并暂时禁止编辑受影响的文件。路径检查不是针对同权限恶意进程竞态的沙箱。
-
-空目录首次启动时初始化数据库；后续启动按版本事务迁移。迁移失败、高于当前程序的数据库版本或打不开数据库时，服务退出并提示，不删除数据重建。重复启动同一数据目录会被拒绝；应停止原实例或选择独立目录。重启时未完成的 Agent 任务、运行、命令操作和代码执行标记为中断，待确认提案失效，不自动调用模型、恢复 shell 或重放操作。切页或断开事件订阅不会取消后台运行；主动停止才取消，停止不代表回滚已有副作用。
-
-不要在服务运行时只复制 `app.db` 或修改数据库文件。需要保留数据时先正常停止服务，再复制整个数据根目录，连同项目文件及可能存在的 SQLite 辅助文件一起保存；保留原目录，勿用空目录覆盖。更换源码或重新构建不会迁移内存演示数据，也不应替换数据目录。完整备份恢复验收仍属于后续整体交付。
-
-## 界面回归
-
-`pnpm test` 包含会话归属、事务/幂等写入、项目路径边界、迁移故障、重复启动和真实进程恢复测试；进程集成测试使用 14310、14340、14341 端口及可丢弃目录。`pnpm check` 同时检查浏览器测试及截图脚本的类型。`pnpm test:browser --workers=1` 在开发代理和生产单服务两种模式验证交互与截图，保留原有访问保护检查，不复用已运行的用户服务。正式持久化检查由 `tests/serve-browser.ts` 创建并清理临时数据目录，内部业务入口写入明确标注的验收课件和路线；`/preview` 回归仍使用内存夹具。不需要模型密钥，不读写已有学习数据。
-
-资料库文档回归使用 `tests/fixtures/library-reference.docx`、双页 `library-reference.pdf` 和纯图片 `library-scanned.pdf`，验证上传后通过 Agent 原生工具提取中文、英文、XML 转义、表格及第二页正文，以及文字层为空和解析工具缺失的反馈。DOCX 命令只使用 Python 3 标准库，PDF 命令使用本机 `pdftotext`（Poppler）；运行 `pnpm test` 需要这两个命令，缺失时测试失败，不自动安装或跳过。模型工具选择仍是确定性流，实际文件、Bash 和解析进程均为真实执行；不代表真实模型已通过自主解析或 OCR 验收。
-
-本机执行专项使用真实 PTY 和可丢弃文件；Agent 回复使用确定性测试 Provider，不调用收费模型。先执行 `pnpm build`，再分别运行以下命令（两组共用测试端口，不能同时运行）：
-
-```sh
-pnpm test:browser tests/browser/execution.spec.ts --workers=1
-pnpm exec playwright test -c tests/agents.config.ts --workers=1 -g 'local proposals|real code assessment'
-```
-
-第一组覆盖终端连接、重连、退出和保存一致性；第二组覆盖提案确认、冲突与取消，以及真实代码运行、测评证据和新草稿保留。命令默认验证开发和生产两种模式。真实 Provider 评分的既有验证及平台限制记录在 [ROADMAP](docs/ROADMAP.md)，不以确定性回复代替真实模型文案质量验收。
-
-视觉场景固定为 1440×1000、浅色系统主题、减少动画、确定日期；全屏 IDE 自身仍为深色。12 个状态覆盖首页、空间列表、需求确认、路线与 Agent、普通/全屏 IDE、课件抽屉、测评作答、通过/需加强及课件/回复失败。两种服务模式共用 `tests/browser/__screenshots__/darwin` 中的基线；当前仅在 macOS arm64、本机 Google Chrome 验证，浏览器或系统字体变化需要重新检查，不能直接认定为产品回归。
-
-原型仍在本机运行时，可执行 `pnpm exec tsx tests/capture-prototype.ts`（默认 3000 端口，可用 `PROTOTYPE_URL` 指定本机地址）。脚本与 Vite 测试共用 `tests/visual-scenes.ts` 操作序列，只隐藏 Next 开发浮层和原型控制按钮；不修改参考源码，不掩盖业务内容。原型截图保存到 `.amp/in/artifacts/reference/`，浏览器失败截图和差异图保存到 `.amp/in/artifacts/browser/`。首次在新 checkout 运行前，用 `git rev-parse --git-path info/exclude` 找到本地排除文件，保留已有规则并加入 `/.amp/in/`，避免提交评审临时文件。
-
-组件迁移另用 `pnpm exec tsx tests/compare-components.ts <未修改参考版本的 apps/web 目录> <当前 Vite 地址>` 对照。参考目录须包含同版本依赖和 contracts，并可独立启动；脚本占用 15174，结束后关闭参考服务。它在相同输入下检查 15 个状态（上述 12 个状态另加需求编辑、会话菜单、独立路线规划页），逐组件比较 DOM、类名、文本、图标和计算样式；只忽略新增的「切换会话」无障碍标签。规划页冻结原型时钟后单独验收，不能只检查最终路线页。截图和签名保存在 `.amp/in/artifacts/component-parity/`。该检查验证展示组件没有偏移，不能替代正式入口的真实 API、保存、重试、刷新和文件冲突测试，两类检查必须分别通过。
-
-Base UI 仍固定为 1.5.0。其 React 19 生产模式存在菜单可见但 `aria-expanded=false` 的[已知问题 #4956](https://github.com/mui/base-ui/issues/4956)；`patches/@base-ui__utils@0.2.9.patch` 仅回移[上游 #4866 的 store selector 修复](https://github.com/mui/base-ui/pull/4866)，通过 pnpm 自动应用，不升级组件或修改样式。浏览器回归检查异步保存期间新建会话、菜单重新打开时的无障碍状态及 Escape 关闭。将来升级包含该修复的版本时，应删除补丁并重跑这些检查。
-
-有意调整视觉后，先运行 `pnpm test:browser tests/browser/visual.spec.ts --project=production --update-snapshots`，**实际打开基线并与原型/旧截图对照**，再运行不带更新参数的 `pnpm test:browser`。不能用自动更新截图来掩盖失败。最初迁移允许的差异为本地字体替换和独立 24px 夹具页脚；随后用户授权用 AI Elements 替换会话、输入和思考/执行过程展示，这些区域不再与旧原型逐像素相同。其他布局及课件抽屉的左侧深色样式仍保留。截图不证明真实教学或执行已接通。
-
-## 原生依赖检查
-
-`pnpm test:native` 使用系统临时目录验证 SQLite 写入后关闭复开，以及 PTY 输入、输出、非零退出码和强制关闭后的 PID 消失；测试后删除数据。不读写已有学习数据库。
-
-已实际验证 **macOS 26.6.2 / arm64、Node 24.15.0、better-sqlite3 13.0.3、node-pty 1.1.0**。未验证 Linux、Windows 或 Intel Mac，不据此宣称支持。
-
-本机安装使用 Python 3.14.6、Xcode Command Line Tools、Apple clang 21.0.0。原生构建需要 Python、C/C++ 编译器和 make；缺失时由用户安装工具链，应用不会自动安装或申请管理员权限。
-
-`node-pty 1.1.0` 的 macOS 预编译 helper 缺少执行位（[上游问题 #850](https://github.com/microsoft/node-pty/issues/850)）。仓库通过 `patches/node-pty@1.1.0.patch` 在 macOS 固定走包自身的源码编译分支，随 `pnpm install --frozen-lockfile` 自动应用，不手工修改已安装文件。这样也避免 pnpm 11 过滤 `npm_config_*` 导致强制源码编译变量失效。`pnpm-workspace.yaml` 显式允许所需构建脚本；安装成功后仍须运行原生检查。
-
-## 模型兼容性检查
-
-Pi Core 与 AI 包固定为 `@earendil-works/pi-agent-core@1.0.0`、`@earendil-works/pi-ai@1.0.0`，不加载 Pi Extension 宿主。`pnpm test` 的模型部分使用确定性流，不访问 Provider。
-
-真实测试使用 `pnpm test:provider`，会发送两次短请求（正常流式响应、收到文字后取消），可能产生 Provider 费用。在根目录 `.env` 配置 `OPENROUTER_API_KEY` 与准确的 `OPENROUTER_MODEL`；没有 `.env` 时可参考 `.env.example` 新建，权限设为 `600`，不要覆盖已有配置或把密钥写进命令行。服务端环境变量优先于文件；缺失配置或 Provider 错误会返回失败，不切换模型。`.env` 路径相对代码定位，不依赖启动目录；读取不会把凭据注入全局环境或终端子进程。
-
-教学模型和推理强度来自应用设置，环境变量仅提供尚未保存选择时的默认值。宿主不额外设置输入或输出 token 预算，不按长度裁剪上下文，也不累计输出 token 来终止运行。按 2026-10-10 用户决定，兼容性冒烟和教学运行保留与 pi-coding-agent 1.0.0 普通调用相同的 simple-stream 策略：调用 `Models.streamSimple`，不额外传 `maxTokens` 或重写 Pi 输出预算，继续由 Models 处理鉴权、Provider 适配器处理推理映射及派生输出上限。Provider 自身限制仍存在；这不是无限输出，也不包含自动 compaction。
-
-教学运行没有总时长、模型请求次数或工具调用次数上限，工具仍顺序执行。参照 Pi coding-agent 默认策略，模型请求注入 300 秒 `timeoutMs`（具体支持取决于 SDK）；支持自定义 fetch 的 HTTP 适配器另有 300 秒响应头／正文空闲保护，不替换全局 fetch。Google／Vertex、Bedrock 和未知 API 保留原生 SDK 传输，WebSocket 仍由 Pi 管理，不宣称具有宿主 HTTP 空闲保护。持续输出的 OpenAI 兼容流不会因整轮累计超过 300 秒被取消。
-
-瞬时模型错误按 Pi 分类器最多自动重试 3 次，默认退避为 2／4／8 秒，每次成功 assistant 响应重置次数；鉴权、额度／计费及上下文溢出不自动恢复。重试只继续失败的模型轮次，不重放已完成工具或整个业务任务，保留已暂存的有效产物；失败尝试留作诊断，但不进入本次或后续会话的模型投影。重试可能增加 Provider 费用，主动停止或服务关闭会取消正在等待的退避。截断工具参数由 Pi 拒绝并反馈模型重新提交，最终文本仍截断、恢复失败或业务校验失败时不发布产物。服务重启仍只标记中断，不自动重放。请求清单保留实际 usage、原始结束原因、传输诊断与执行策略。
-
-教学确定性测试使用 `pnpm exec playwright test -c tests/agents.config.ts --project=production --workers=1`（开发模式换为 `development`），需先构建，占用与普通浏览器测试相同端口，不同时运行。该套件包含真实本机执行与提案确认场景，模型回复仍为确定性流。`pnpm exec tsx tests/teaching-provider-smoke.ts` 是显式收费真实模型检查：只使用可丢弃数据库和合成文件，串联需求→路线→课件→只读辅导→出题→评估；不上传用户项目，不执行提交的代码，因此不能替代真实执行验收。Provider 失败会使脚本失败；真实和确定性结果见 [ROADMAP](docs/ROADMAP.md)，不保证模型每次输出相同。
-
-## 教学上下文与留存
-
-单元按路线中的阶段顺序、阶段内单元顺序访问：首个单元可进入，之后每个单元须等待全部前序课件正式保存；不要求测评通过，跳过状态也不能代替课件保存。生成中的工具暂存、失败、取消不解锁。路线总览仍展示所有后续计划，锁定单元不能进入学习、测评或发起生成任务；直接打开锁定单元链接会返回路线。重新生成失败但旧课件仍在时，不撤销已满足的解锁条件。解锁状态由路线顺序和已有课件计算，不新增数据库字段。
-
-课件任务提供 `read_learning_route({})` 和 `read_previous_lesson({unitId})`。前者返回完整路线、当前单元位置及各单元是否已有课件，包括后续阶段；后者只返回本次固定路线中前序单元的完整课件。提示词引导 Agent 先看整体安排，再按需参考相关前文；不要求逐篇阅读，不预先拼接全部历史课件，也不自动提炼章节大纲、摘要或依赖图。工具参数不要求模型管理空间 ID、修订号、偏移或 token 预算，最终仍用 `submit_lesson({title, content})` 提交完整 Markdown。
-
-任务建立时只固定前序课件的版本引用，前序正文从历史版本按需读取；不会悄悄改读最新版。重新生成时，当前单元的旧课件仍进入默认上下文。保存结果和重试前检查需求、路线、当前课件及全部前序课件版本；来源已改变时拒绝过期结果，需按当前资料重新生成，不自动重做后续课程。缺少版本引用的旧失败任务不能直接重试；已有课件及旧块格式仍保留，只在读取时无损转换为 Markdown。以上是产品访问和课件工具边界，不是自主 OS/Bash 读取的沙箱。
-
-系统指令及应用控制的上下文使用独立 XML 资源；Pi 原生消息与工具协议不改成 XML。SQLite 保留业务记录、消息及每请求来源/版本/hash、选择和预算清单，不引入 coding-agent 的 JSONL SessionManager。新会话仅自动共享同空间已确认需求、有效测评和用户采纳的有效结论，不继承所有旧聊天。需求、路线、课件来源变化会使相关证据失效；结论可撤销采纳。
-
-所有 Agent 默认提供 `read/ls/find/grep`、资料库工具和自主 `bash`；辅导 Agent 另有 `propose_file_change`，该文件提案仍须用户确认，模型不能直接执行提案。**读取无需逐次授权，没有敏感文件名过滤或项目围栏；cwd 不是沙箱。**绝对路径、父目录、home 和链接目标按服务账号 OS 权限访问。因此 Agent 可能读取凭据等私人文件并将其发送给 Provider；XML/提示词不是安全边界。浏览器项目文件 API 和文件修改提案仍使用应用管理的项目边界，命令执行使用本机权限。服务端配置不会主动加入上下文或日志。
-
-默认保留用户主动消息、引用、可展示模型回复和合法产物；自动读取的 toolResult 正文仅用于当前运行，持久化时省略正文、保留调用/结果关系及 hash，不因自动读取额外永久复制源码。已发布文件提案的修改前后内容、确认操作结果、测评固定提交及代码执行证据会持久化。模型可能在可展示回复中引用材料；该策略不是内容防泄漏器。仅凭清单和 hash 不能逐字重放历史请求。公开题目与私有 rubric 分离，后者不进入浏览器 API、任务文字事件或 tutor 默认上下文；自主 OS 读取不构成数据库隔离。
-
-真实推理、正文、工具状态和公开调用参数按模型轮次/内容段/调用 ID 保存为有序事件，刷新或重连不会重复追加。展开工具显示模型传入的 JSON，包括失败参数；生成中的参数按增量展示，停止后保留已收到部分。旧事件不含参数时不从私有消息补写。Pi 原生 thinking/signature 留在内部消息中供后续请求使用，浏览器不接收签名或被 Provider 隐去的内容。出题/评分不发送推理正文，工具参数仅公开题目字段和面向学生的评估字段，私有 rubric 不进入事件。规划和课件页的正式执行进度由真实事件推进，定时演示仅存在于 `/preview`。
-
-全部工具沿用 Pi 的错误反馈：参数拒绝、执行异常和 MCP 等显式错误结果返回模型，由模型决定纠正、换方法或说明限制；单次错误不直接使整轮失败，之后无关工具成功也不代表失败操作已完成。成功暂存仅被后续成功提交替换，错误调用的失败状态与参数继续保留。正常结束后由场景检查产物、版本及确认要求再发布；没有有效必需产物、取消、截断或发布事务失败仍不能保存成果。整轮成功不代表每个工具成功，也不代表测评通过或提案已执行。
-
-首次路线只有一个业务工具 `submit_route({stages, note?})`，一次表达完整阶段与单元。嵌套关系表示归属，数组顺序表示学习顺序；模型不填写 ID 或位置，服务端统一生成身份。单元 `summary`、`goals` 和安排说明 `note` 可省略，服务端分别补空字符串、空数组和空字符串；有用的教学范围和目标仍由工具说明与提示词引导填写，不检查固定清单或排版。
-
-已有路线保留 `add_route_stage`、`add_route_unit`、`update_route_stage`、`update_route_unit`、`remove_route_unit`、`remove_route_stage`，通过已有 ID 定位并保留课件、测评和学习记录。更新中省略字段意味着保留原值；新增单元的概要和目标允许省略。最后调用 `submit_route_proposal({note?})` 提交组装后的调整，不重复整份路线。所有编辑暂存于本轮；只有实际内容或顺序变化才使提交失效，`changed=false` 的更新无需重新提交。运行正常结束并通过版本校验才保存，首次路线自动应用，调整仍待用户确认。模型可根据工具错误修正参数，单次错误不会永久锁死后续有效提交。
-
-必要时显式设置 `TMC_AGENT_DEBUG_SNAPSHOTS=1`，服务会在所选数据目录的 `agent-debug/` 写入完整请求快照（新目录 700、文件 600）。**快照可能含源码、路径、引用和私有评分标准**；不要提交、上传或公开它们。取消该环境变量并重启即停止新增；停止服务后，可检查并删除该目录中的快照文件，不要删除 `app.db` 或项目文件。关闭快照不自动删除已有文件。
-
-评估绑定不可变提交、题目/rubric 版本及证据；重试原任务不会增加提交尝试或评估新草稿。真实执行证据必须与提交、代码摘要、题目版本和执行方案匹配；完成运行的代码题标记为 `execution-verified`，是否通过还取决于输出匹配和模型评估。执行未完成或失败、仅有静态反馈或模拟执行夹具时，代码题结果为 `unverified`；纯分析题可产生有效的 `non-execution` 评分。需求、路线或课件变化后，旧记录保留为历史，其有效性按来源版本判定。
-
-## 本地接口访问边界
-
-Node 服务默认监听 `127.0.0.1`，可显式通过 `HOST=0.0.0.0` 开启可信网络访问。Host/Origin 白名单包含 `localhost`、`127.0.0.1`，网络模式下额外包含启动时本机网卡的 IPv4 地址；生产模式允许配置的服务端口，开发模式额外允许前端端口（默认 5173，可用 `TMC_WEB_PORT` 调整）。API 端口通过 `PORT` 配置，Vite 保留原始 Host/Origin 代理 HTTP 与 WebSocket 升级请求。`pnpm dev` 显式启用开发模式，`pnpm start` 强制生产模式；不开放 CORS，不信任转发头，默认不接受额外代理来源；内置预览仅可通过上述显式配置增加准确的本机来源，不接受任意域名。可信网络访问仍是同一单用户实例，具有上文所述权限。
-
-除健康检查和令牌初始化外，所有 `/api` 请求需要 `X-TMC-Token`。本机页面用 `X-TMC-Client: browser` 请求 `GET /api/access`，在内存中保存响应令牌，然后携带令牌请求 API；当前 `POST /api/access/check` 只返回 `{ "ok": true }`，无业务副作用。初始化端点同样校验 Host/Origin 和 Fetch Metadata，跨域预检被拒绝；同源 GET 缺少 Origin 是浏览器正常行为，允许通过。令牌每次服务启动随机生成，不写入文件、日志、URL 或浏览器持久存储，API 响应禁止缓存。
-
-`/api/terminal/socket?space=<space-id>` 提供真实终端 WebSocket 连接，要求合法 Host、明确 Origin，以及子协议 `tmc-terminal` 和 `tmc-token.<请求令牌>`；令牌不接受查询参数传递。通过访问检查并验证空间存在后，创建或连接该空间的 PTY，支持输入、输出、尺寸调整、停止和新建终端。访问检查失败返回 401/403，无效空间返回 400；连接断开不会重放输入或自动结束 shell。
-
-这些措施用于防止外部网页滥用本地接口，不是登录系统，也不能防御拥有本机权限的恶意进程、同源脚本攻击或把本机执行变成沙箱。模型密钥只能配置在服务端，不要放入 `VITE_*` 变量。测试覆盖同源访问、开发代理、非法 Host/Origin、缺失及错误令牌、实际升级请求，以及 Vite/生产静态资源不能读取根 `.env`。
+尚未选择开源许可证。在仓库添加 `LICENSE` 文件之前，代码保留所有权利。
