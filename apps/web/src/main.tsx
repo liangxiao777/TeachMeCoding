@@ -6,7 +6,6 @@ import { initializeTheme, ThemeProvider } from './app/theme';
 import { initializeLanguage, LanguageProvider } from './i18n/language';
 import './style.css';
 
-const Preview = lazy(() => import('./fixtures/preview'));
 const PersistentApp = lazy(() => import('./app/workspace'));
 
 initializeTheme();
@@ -16,7 +15,7 @@ createRoot(document.getElementById('root')!).render(<StrictMode>
   <LanguageProvider>
   <ThemeProvider>
     <Suspense fallback={<StartupLoading />}>
-      {location.pathname === '/preview' ? <Preview /> : location.pathname === '/diagnostics' ? <Diagnostics /> : <PersistentApp />}
+      {location.pathname === '/diagnostics' ? <Diagnostics /> : <PersistentApp />}
     </Suspense>
   </ThemeProvider>
   </LanguageProvider>

@@ -65,7 +65,7 @@ const retired = new Set(['actionReceipt', 'executionFeedback', 'errorDetail', 'i
 function sourceViolations(file, source) {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const result = [];
-  const web = file.startsWith('apps/web/src/') && !file.includes('/fixtures/');
+  const web = file.startsWith('apps/web/src/');
   const report = (node, reason) => result.push(`${file}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1}: ${reason}`);
   const copy = (node, value) => {
     const text = value.trim();

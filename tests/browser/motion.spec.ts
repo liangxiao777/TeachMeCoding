@@ -22,9 +22,9 @@ async function disclosureFrames(root: Locator) {
 }
 
 for (const theme of ['light', 'dark'] as const) {
-  test(`motion: route Agent retains content on exit and reverses naturally (${theme})`, async ({ page }) => {
+  test(`motion: route Agent retains content on exit and reverses naturally (${theme})`, async ({ page }, info) => {
     await page.emulateMedia({ colorScheme: theme });
-    await page.goto('/preview?scene=route');
+    await page.goto(`/?space=${seed(info).spaceId}&tab=route`);
     const panel = page.locator('aside[aria-label="Agent"]');
     const dock = panel.locator('..');
     await page.getByRole('textbox', { name: '向 Agent 提问', exact: true }).fill('不要丢掉这条未发送的问题');
@@ -184,7 +184,7 @@ test('motion: settings restores route reading position without replacing its scr
 
 test('motion: reduced-motion switches all three samples without an animated interval', async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.goto('/preview?scene=route');
+  await page.goto(`/?space=${seed(info).spaceId}&tab=route`);
   const widths = await page.locator('aside[aria-label="Agent"]').locator('..').evaluate(async (el) => {
     document.querySelector<HTMLButtonElement>('button[aria-label="Agent"]')!.click();
     const widths = [];

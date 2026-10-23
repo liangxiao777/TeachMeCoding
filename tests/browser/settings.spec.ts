@@ -1,8 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type TestInfo } from '@playwright/test';
 import type { LoginSession, ModelSelection, ModelSettings, ModelSummary } from '../../packages/contracts/src/settings';
 import type { seedWorkspaces } from '../seed-workspaces';
+
+const seed = (info: TestInfo) => JSON.parse(readFileSync(`.amp/in/browser-${info.project.name}.json`, 'utf8')) as ReturnType<typeof seedWorkspaces>;
 
 for (const [name, viewport] of [
   ['desktop', { width: 1440, height: 1000 }],
@@ -607,7 +609,8 @@ for (const system of ['light', 'dark'] as const) {
     await page.reload();
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
     expect(await page.evaluate(() => getComputedStyle(document.body).colorScheme)).toBe(selected);
-    await page.goto('/preview?scene=unit');
+    const data = seed(info);
+    await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${data.unitIds[0]}`);
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${selected}\\b`));
     await expect(page.getByRole('heading', { name: '所有权与借用', exact: true })).toBeVisible();
     await page.screenshot({ path: `.amp/in/artifacts/theme-unit-${selected}-${info.project.name}.png`, animations: 'disabled' });
@@ -648,6 +651,7 @@ test('theme switching still works when browser storage is unavailable', async ({
 });
 
 test('global theme controls work throughout learning without opening settings', async ({ page }, info) => {
+  const data = seed(info);
   await page.emulateMedia({ colorScheme: 'light' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   const toggle = async (scene: string) => {
@@ -660,39 +664,24 @@ test('global theme controls work throughout learning without opening settings', 
     await expect(page.locator('html')).toHaveClass(new RegExp(`\\b${next}\\b`));
     await page.screenshot({ path: `.amp/in/artifacts/global-theme-${scene}-${info.project.name}.png`, animations: 'disabled' });
   };
-  await page.goto('/preview');
+  await page.goto('/');
   await page.getByLabel('你想学什么', { exact: true }).fill('全局按钮保留学习需求草稿');
   await toggle('home');
   await expect(page.getByLabel('你想学什么', { exact: true })).toHaveValue('全局按钮保留学习需求草稿');
   await page.getByRole('button', { name: '学习空间', exact: true }).click();
   await toggle('spaces');
-  await page.getByRole('button', { name: '创建学习空间', exact: true }).click();
-  await page.getByLabel('你想学什么', { exact: true }).fill('我想学习 Rust，最后能写一个命令行工具');
-  await page.getByRole('button', { name: '开始', exact: true }).click();
-  await toggle('intake');
-  const composer = page.getByLabel('回复 Agent', { exact: true });
-  await composer.fill('熟悉 Python，写过一些自动化脚本，没接触过 C/C++');
-  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
-  await composer.press('Enter');
-  await composer.fill('每周大概 5 小时，希望两个月内完成');
-  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
-  await composer.press('Enter');
-  await expect(page.getByRole('button', { name: '确认并规划路线', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '确认并规划路线', exact: true }).click();
-  await toggle('planning');
-  await expect(page.getByRole('heading', { name: 'Rust 入门', exact: true })).toBeVisible();
+  await page.goto(`/?space=${data.spaceId}&tab=route`);
+  await expect(page.getByRole('heading', { name: '存储验收 Rust', exact: true })).toBeVisible();
   await toggle('route');
-  await page.goto('/preview?scene=unit');
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${data.unitIds[0]}`);
+  await expect(page.getByRole('heading', { name: '所有权与借用', exact: true })).toBeVisible();
   await toggle('unit');
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await toggle('fullscreen');
   await page.getByRole('button', { name: '返回学习', exact: true }).click();
-  await page.getByRole('button', { name: '开始单元测评', exact: true }).click();
-  await toggle('assessment');
-  await page.getByLabel('你的回答', { exact: true }).fill('我还不明白变量为什么不能使用');
-  await page.getByRole('button', { name: '提交测评', exact: true }).click();
-  await expect(page.getByText('这次还有需要修改的地方', { exact: true })).toBeVisible();
+  await page.goto(`/?space=${data.spaceId}&tab=result&unit=${data.unitIds[0]}&record=${data.recordId}`);
+  await expect(page.getByText('验收记录：需要更多证据', { exact: true })).toBeVisible();
   await toggle('result');
   await page.goto('/diagnostics');
   await toggle('diagnostics');

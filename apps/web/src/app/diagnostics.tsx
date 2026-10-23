@@ -29,7 +29,6 @@ export function Diagnostics() {
       <CardContent className="space-y-5 leading-relaxed">
         <p role="status" className="font-medium">{t(`diagnostics.${status}`)}</p>
         <p>{t('diagnostics.description')}</p>
-        <p><a className="underline underline-offset-4" href="/preview">{t('diagnostics.preview')}</a> · {t('diagnostics.previewNote')}</p>
         <p className="border-t pt-5 text-muted-foreground">{t('diagnostics.permissions')}</p>
       </CardContent>
     </Card>

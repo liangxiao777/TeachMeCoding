@@ -2,21 +2,21 @@ import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { expect, test } from '@playwright/test';
 
-for (const { path, theme } of [{ path: '/', theme: 'light' }, { path: '/preview', theme: 'dark' }] as const) {
-  test(`code loading respects the saved ${theme} theme, motion preference and mobile viewport (${path})`, async ({ page }) => {
+for (const theme of ['light', 'dark'] as const) {
+  test(`code loading respects the saved ${theme} theme, motion preference and mobile viewport`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.emulateMedia({ colorScheme: theme === 'light' ? 'dark' : 'light', reducedMotion: 'no-preference' });
     await page.addInitScript((selected) => localStorage.setItem('tmc-theme', selected), theme);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    await page.route(/\/(?:src\/(?:app\/workspace|fixtures\/preview)\.tsx(?:\?.*)?|assets\/(?:workspace|preview)-[^/]+\.js)$/, async (route) => {
+    await page.route(/\/(?:src\/app\/workspace\.tsx(?:\?.*)?|assets\/workspace-[^/]+\.js)$/, async (route) => {
       await gate;
       await route.continue();
     });
     const loading = page.getByRole('main', { name: '应用加载', exact: true });
     try {
-      await page.goto(path, { waitUntil: 'domcontentloaded' });
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
       await expect(loading).toBeVisible();
       await expect(loading.getByRole('status')).toHaveText('正在加载…');
       await expect(loading.getByText('TeachMeCoding', { exact: true })).toBeVisible();

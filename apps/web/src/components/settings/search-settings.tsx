@@ -91,7 +91,7 @@ export function SearchSettingsForm({ active }: { active: boolean }) {
       const next = await api<SearchSettings>('/settings/search')
       if (generation !== loginGeneration.current) return
       setSettings(next)
-      refreshCapabilities?.()
+      refreshCapabilities()
     } finally { setRefreshingAuth(false) }
   }
   const acceptLogin = async (session: LoginSession, generation: number) => {

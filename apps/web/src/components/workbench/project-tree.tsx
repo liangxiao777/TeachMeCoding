@@ -48,7 +48,7 @@ export function ProjectTree() {
 
   async function submit() {
     if (!edit || submittingRef.current) return
-    if (persistence && (!persistence.ready || persistence.busy)) {
+    if (!persistence.ready || persistence.busy) {
       setError(notice('workbench', 'project.busy'))
       return
     }
@@ -279,18 +279,16 @@ export function ProjectTree() {
         >
           <FolderPlus />
         </Button>
-        {persistence && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={t('project.refresh')}
-            title={t('project.refresh')}
-            disabled={!persistence.ready || persistence.busy || submitting}
-            onClick={persistence.refreshFiles}
-          >
-            <RefreshCw />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t('project.refresh')}
+          title={t('project.refresh')}
+          disabled={!persistence.ready || persistence.busy || submitting}
+          onClick={persistence.refreshFiles}
+        >
+          <RefreshCw />
+        </Button>
         <Button
           variant="ghost"
           size="icon-xs"

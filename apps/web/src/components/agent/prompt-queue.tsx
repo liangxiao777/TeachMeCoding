@@ -13,7 +13,7 @@ export function PromptQueue({ className }: { className?: string }) {
       && (message.status === 'thinking' || message.status === 'streaming'))
     return (owner.queuedPrompts ?? []).map((prompt) => ({ prompt, paused }))
   }) ?? []
-  if (!persistence || !prompts.length) return null
+  if (!prompts.length) return null
   const paused = prompts.every((item) => item.paused)
   return <section aria-label={t('queue.region')} className={cn('shrink-0 px-3 pt-3', className)}>
     <div className="mb-1 text-xs text-muted-foreground" role="status">{t(paused ? 'queue.pausedStatus' : 'queue.status', { count: prompts.length })}</div>

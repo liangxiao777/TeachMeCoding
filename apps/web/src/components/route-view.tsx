@@ -290,9 +290,9 @@ export function RouteView() {
   useEffect(() => () => { latest.current = null }, [])
   useEffect(() => setSendError(null), [session?.id, session?.messages.length])
 
-  const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
-  const adjusting = persistence?.routeAdjustmentRun?.state === 'pending' || persistence?.routeAdjustmentRun?.state === 'running'
-  const busy = sending || adjusting || !!persistence && (persistence.busy || !persistence.ready || !!pendingDecision(persistence)) || capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
+  const proposal = persistence.proposals.findLast((proposal) => proposal.state === 'pending')
+  const adjusting = persistence.routeAdjustmentRun?.state === 'pending' || persistence.routeAdjustmentRun?.state === 'running'
+  const busy = sending || adjusting || persistence.busy || !persistence.ready || !!pendingDecision(persistence) || capabilities.agent && !!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
   const submitSuggestion = async () => {
     if (!suggestion.trim() || proposal || busy || sendingRef.current) return
     const submittedSessionId = session?.id
@@ -329,7 +329,7 @@ export function RouteView() {
             {req?.rows.some((row) => row.answer.trim()) && <p className="max-w-2xl text-pretty text-lg leading-relaxed text-muted-foreground">{req.rows.find((row) => row.answer.trim())?.answer}</p>}
           </div>
 
-          {!proposal && (persistence && units.length === 0 ? (
+          {!proposal && (units.length === 0 ? (
             <Card>
               <CardHeader>
                 <CardTitle>{t('route.noPath')}</CardTitle>
@@ -448,7 +448,7 @@ export function RouteView() {
                       }}
                     />
                     <PromptInputFooter>
-                      <span className="text-xs font-normal">{adjusting ? t('route.adjusting') : busy ? persistence ? t('route.storageBusy') : t('route.replying') : capabilities.agent ? t('route.sendHint') : t('route.saveHint')}</span>
+                      <span className="text-xs font-normal">{adjusting ? t('route.adjusting') : busy ? t('route.storageBusy') : capabilities.agent ? t('route.sendHint') : t('route.saveHint')}</span>
                       <PromptInputSubmit className="ml-auto" disabled={busy || !suggestion.trim()} aria-label={capabilities.agent ? t('route.sendSuggestion') : t('route.saveSuggestion')} />
                     </PromptInputFooter>
                 </PromptInput>

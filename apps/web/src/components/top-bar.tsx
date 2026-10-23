@@ -50,7 +50,7 @@ import { cn } from '@/lib/utils'
 
 function SpaceSwitcher() {
   const { t } = useTranslation('learning')
-  const { state, openSpace, goHome, goSpaces, persistence } = useApp()
+  const { state, openSpace, goHome, goSpaces } = useApp()
   const space = useSpace()
   return (
     <DropdownMenu>
@@ -69,7 +69,7 @@ function SpaceSwitcher() {
                 <span className="flex flex-col">
                   <span className="font-medium">{s.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {u ? t('topBar.studying', { title: u.title }) : !persistence || s.view === 'onboarding' || s.view === 'planning' ? t('topBar.confirming') : t('topBar.noUnit')}
+                    {u ? t('topBar.studying', { title: u.title }) : s.view === 'onboarding' || s.view === 'planning' ? t('topBar.confirming') : t('topBar.noUnit')}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -98,8 +98,8 @@ export function TopBar() {
   const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
   const { open: lessonOpen, setOpen: setLessonOpen } = useLessonDrawer()
   const unit = findUnit(space, space.currentUnitId)
-  const proposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
-  const awaitingDecision = !!persistence && !!pendingDecision(persistence)
+  const proposal = persistence.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
+  const awaitingDecision = !!pendingDecision(persistence)
   const onRoute = space.view === 'route'
   const hasDraft = space.draft && space.draft.unitId === unit?.id
   const canAssess = capabilities.assessment || !!(unit && assessment(unit))
@@ -264,7 +264,7 @@ export function TopBar() {
               </TooltipTrigger>
               <TooltipContent>{capabilities.terminal ? t('topBar.ideHint') : t('topBar.ideUnavailableHint')}</TooltipContent>
             </Tooltip>
-            <Button onClick={startAssessment} disabled={!canAssess || persistence?.busy || awaitingDecision} className="ml-1.5">
+            <Button onClick={startAssessment} disabled={!canAssess || persistence.busy || awaitingDecision} className="ml-1.5">
               <ClipboardCheck data-icon="inline-start" />
               {!canAssess ? t('topBar.assessmentUnavailable') : hasDraft ? t('topBar.continueAssessment') : t('topBar.startAssessment')}
             </Button>

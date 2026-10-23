@@ -10,7 +10,6 @@ export function RunContext({ runId }: { runId?: string }) {
   const { t } = useTranslation('workbench')
   const { persistence } = useApp()
   const space = useSpace()
-  if (!persistence) return null
   const context = runId ? persistence.runContexts[runId]?.context : undefined
   const status = context?.phase === 'compacting' ? t('context.compacting')
     : context?.phase === 'compacted' ? t('context.compacted')

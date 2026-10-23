@@ -52,20 +52,20 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 - **资料库**：上传任意格式的参考资料，Agent 按需读取。
 - **联网能力**：14 种可选的搜索服务（含无需 API Key 的 DuckDuckGo）和内置的网页抓取。
 - **MCP 与 Skills**：在设置中添加 MCP 服务器，从 [skills.sh](https://skills.sh) 浏览和安装 Skills。
-- **English 与简体中文界面**，亮色与暗色主题，以及不调用模型的演示模式 `/preview`。
+- **English 与简体中文界面**，以及亮色与暗色主题。
 
 <table>
   <tr>
-    <td><img src="docs/images/home.png" alt="首页：输入学习目标" /></td>
-    <td><img src="docs/images/ide-fullscreen.png" alt="全屏 IDE、终端与 Agent" /></td>
+    <td><img src="docs/images/lesson.png" alt="单元页：Agent 正在生成课件，显示执行进度与工具调用" /></td>
+    <td><img src="docs/images/ide-fullscreen.png" alt="全屏 IDE：编辑 Python 练习文件并在本机终端运行" /></td>
   </tr>
   <tr>
-    <td align="center">首页</td>
-    <td align="center">全屏 IDE</td>
+    <td align="center">课件生成</td>
+    <td align="center">全屏 IDE 与本机终端</td>
   </tr>
 </table>
 
-<sub>截图来自 `/preview` 演示数据。</sub>
+<sub>截图来自本机实际运行的学习空间。</sub>
 
 ## 项目状态
 
@@ -106,8 +106,6 @@ pnpm start
 4. 逐个单元阅读课件，在 IDE 和终端中练习，随时向 Agent 提问。
 5. 完成测评，根据反馈继续学习。
 
-不配置模型也可以访问 `/preview` 体验界面。演示数据只保存在浏览器内存中，不调用模型、不写文件、不执行命令。
-
 ## 配置
 
 - **启动参数**（数据目录、端口、监听地址等）通过环境变量或项目根目录的 `.env` 设置，参考 [`.env.example`](.env.example)。
@@ -121,7 +119,7 @@ pnpm start
 
 - [配置](docs/configuration.md)：启动参数、模型、数据目录与备份、局域网访问、搜索、网页抓取、MCP、Skills
 - [架构](docs/architecture.md)：组成部分、Agent 场景与工具、提案与 YOLO 模式、运行生命周期、本机执行边界
-- [开发指南](docs/development.md)：开发环境、项目结构、测试与视觉回归
+- [开发指南](docs/development.md)：开发环境、项目结构与测试
 - [界面翻译](docs/translating.md)：翻译约定与检查
 - [参与贡献](CONTRIBUTING.md)：问题反馈与 Pull Request 流程
 - [安全策略](SECURITY.md)：安全模型与漏洞报告

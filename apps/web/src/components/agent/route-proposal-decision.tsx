@@ -18,7 +18,6 @@ export function RouteProposalDecision({ proposal }: { proposal: Proposal }) {
   const [feedback, setFeedback] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const sending = useRef(false)
-  if (!persistence) return null
   const busy = submitting || persistence.busy || !persistence.ready
   const stale = proposal.baseRevision !== persistence.routeRevision || proposal.requirementRevision !== persistence.requirementRevision || !persistence.requirementConfirmed
   const summary = routeDiffSummary(diffRoute(space.stages.length ? { note: space.routeNote, stages: space.stages } : null, proposal.content))

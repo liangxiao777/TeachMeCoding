@@ -193,7 +193,7 @@ export function ResearchCard({ researchRef }: { researchRef: ResearchRef }) {
   const dirty = editing && !!dossier && content !== dossier.content
   useUnsavedWarning(dirty || saving)
   const load = async () => {
-    if (!persistence || loading) return
+    if (loading) return
     const ref = researchRef
     setLoading(true); setError(null)
     try {
@@ -217,7 +217,7 @@ export function ResearchCard({ researchRef }: { researchRef: ResearchRef }) {
     cancelEditing(); setFullscreen(false)
   }
   const save = async () => {
-    if (!persistence || !dossier || savingRef.current || !dirty || !content.trim()) return
+    if (!dossier || savingRef.current || !dirty || !content.trim()) return
     savingRef.current = true; setSaving(true); setSaveError(null); setSavedMessage(null)
     try {
       const document = await persistence.saveResearch({ id: dossier.id, revision: dossier.revision }, content)
@@ -227,7 +227,7 @@ export function ResearchCard({ researchRef }: { researchRef: ResearchRef }) {
     finally { savingRef.current = false; setSaving(false) }
   }
   const download = async () => {
-    if (!persistence || exporting) return
+    if (exporting) return
     setExporting(true); setExportError(null)
     try { await persistence.exportResearch(researchRef) }
     catch (cause) { setExportError(cause instanceof Error ? cause : notice('learning', 'research.exportFailed')) }

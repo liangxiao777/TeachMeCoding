@@ -1,7 +1,7 @@
 'use client'
 
 import { Check, CircleDashed, CircleDot, RotateCcw, SkipForward } from 'lucide-react'
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentDisplayPart } from '@teach-me-coding/contracts'
 import { defaultComponents } from 'streamdown'
@@ -90,22 +90,15 @@ export function Generating({
   steps: string[]
   note?: string
   className?: string
-  /** Omit only for the simulated preview; real work advances on durable events. */
-  parts?: AgentDisplayPart[]
+  /** Progress advances only on durable run events. */
+  parts: AgentDisplayPart[]
   context?: ReactNode
 }) {
   const { t } = useTranslation('learning')
-  const [simulated, setActive] = useState(0)
-  const tool = parts?.findLast((p) => p.type === 'tool')
+  const tool = parts.findLast((p) => p.type === 'tool')
   const submitting = tool?.name.startsWith('submit_')
-  const recordedStep = parts === undefined ? undefined : submitting && tool?.status === 'done' ? 3
+  const active = submitting && tool?.status === 'done' ? 3
     : submitting && tool?.status === 'running' ? 2 : tool ? 1 : 0
-  const active = recordedStep ?? simulated
-  useEffect(() => {
-    if (recordedStep !== undefined) return
-    const t = setInterval(() => setActive((a) => Math.min(a + 1, steps.length - 1)), 750)
-    return () => clearInterval(t)
-  }, [steps.length, recordedStep])
   return (
     <div role="status" aria-live="polite" className={cn('flex flex-col gap-5', className)}>
       <div className="flex items-center gap-3">
@@ -124,7 +117,7 @@ export function Generating({
         ))}
         </ChainOfThoughtContent>
       </ChainOfThought>
-      {parts !== undefined && <RunContent parts={parts} streaming />}
+      <RunContent parts={parts} streaming />
       {note && <p className="text-sm leading-relaxed text-muted-foreground">{note}</p>}
     </div>
   )

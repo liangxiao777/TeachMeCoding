@@ -9,9 +9,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
-import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
-import { CodeEditor, TermOutput } from '@/components/workbench/ide-panel'
+import { CodeEditor } from '@/components/workbench/ide-panel'
 import { findUnit } from '@/app/selectors'
 import { pendingDecision } from '@/app/lesson-proposals'
 import { useApp, useSpace } from '@/app/context'
@@ -55,28 +54,12 @@ export function AssessmentView() {
     </div>
   )
   const spec = getAssessment(unit)
-  const canRun = !!spec && !spec.stale && capabilities.assessment && capabilities.terminal && (!persistence || !!spec.execution)
-  const execution = persistence?.execution
+  const canRun = !!spec && !spec.stale && capabilities.assessment && capabilities.terminal && !!spec.execution
+  const execution = persistence.execution
   const executing = !!execution && ['pending', 'running'].includes(execution.state)
-  const storageBusy = !!persistence && (!persistence.ready || persistence.busy || pendingDecision(persistence))
-  const task = persistence?.tasks.filter((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind)).at(-1)
+  const storageBusy = !persistence.ready || persistence.busy || pendingDecision(persistence)
+  const task = persistence.tasks.filter((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind)).at(-1)
   const activeTask = task && ['pending', 'running'].includes(task.state)
-
-  if (!persistence && draft.state === 'evaluating' && spec && capabilities.assessment) {
-    return (
-      <div className="flex flex-1 items-center justify-center p-8">
-        <Card className="w-full max-w-md shadow-lg">
-          <CardContent>
-            <Generating
-              title={t('form.evaluating')}
-              steps={[t('form.readAnswer'), t('form.runCode'), t('form.compareGoals'), t('form.prepareFeedback')]}
-              note={t('form.evaluationNote')}
-            />
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -109,7 +92,7 @@ export function AssessmentView() {
           )}
         </div>
 
-        {persistence && capabilities.assessment && (
+        {capabilities.assessment && (
           <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3 text-sm" role="status">
             <span className="flex-1">{activeTask ? task.kind === 'evaluation'
               ? spec?.execution ? t('form.runningSubmission') : t('form.staticSubmission') : t('form.generatingQuestions')
@@ -124,13 +107,13 @@ export function AssessmentView() {
         {draft.state === 'generating' && capabilities.assessment ? (
           <Card>
             <CardContent>
-              <Generating title={t('form.generationTitle')} steps={persistence ? [t('form.analyzeLesson'), t('form.generate'), t('form.validate'), t('form.save')] : [t('form.reviewGoals'), t('form.reviewConversation'), t('form.generatePreview')]}
-                parts={persistence ? persistence.taskParts[task?.id ?? ''] ?? [] : undefined} />
+              <Generating title={t('form.generationTitle')} steps={[t('form.analyzeLesson'), t('form.generate'), t('form.validate'), t('form.save')]}
+                parts={persistence.taskParts[task?.id ?? ''] ?? []} />
             </CardContent>
           </Card>
         ) : (
           <>
-            {persistence && task?.kind === 'evaluation' && <RunContent parts={persistence.taskParts[task.id]} streaming={activeTask} />}
+            {task?.kind === 'evaluation' && <RunContent parts={persistence.taskParts[task.id]} streaming={activeTask} />}
             <Card>
               {spec ? <QuestionHeader n={1} title={spec.q1.title} prompt={spec.q1.prompt} /> : (
                 <CardHeader>
@@ -169,7 +152,7 @@ export function AssessmentView() {
                 <CardHeader><CardTitle>{t('form.codeDraft')}</CardTitle></CardHeader>
               )}
               <CardContent>
-                {persistence && spec?.execution && <div className="mb-4 space-y-2 text-xs">
+                {spec?.execution && <div className="mb-4 space-y-2 text-xs">
                   <p>{t('form.permissions')}</p>
                   <details><summary className="cursor-pointer">{t('form.commands')}</summary>
                     {codeCommands(spec.execution).map((command, i) => <pre key={i} className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-muted p-2">{t('form.expectedStdout', { command, expected: spec.execution!.cases[i]!.expected })}</pre>)}
@@ -178,18 +161,18 @@ export function AssessmentView() {
                 {spec?.q2Kind === 'reasoning' ? <Textarea aria-label={t('form.reasoningAnswer')} rows={6} value={draft.q2} onChange={(e) => updateDraft({ q2: e.target.value })} /> : <div className="dark flex flex-col overflow-hidden rounded-lg border bg-ide text-ide-foreground">
                   <div className="flex items-center justify-between border-b py-1.5 pr-1.5 pl-3">
                     <span className="font-mono text-xs text-muted-foreground">{spec?.q2.file ?? t('form.codeDraft')}</span>
-                    {persistence && spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>{t('form.loadStarter')}</Button>}
-                    <Button size="xs" disabled={!canRun || draft.q2Running || executing || storageBusy || !!activeTask} onClick={runDraft}>
-                      {canRun && draft.q2Running ? <Spinner data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+                    {spec?.q2.starter && !draft.q2 && <Button size="xs" variant="outline" onClick={() => updateDraft({ q2: spec.q2.starter })}>{t('form.loadStarter')}</Button>}
+                    <Button size="xs" disabled={!canRun || executing || storageBusy || !!activeTask} onClick={runDraft}>
+                      <Play data-icon="inline-start" />
                       {t('controls.run')}
                     </Button>
                   </div>
                   <CodeEditor className="h-64" label={spec ? t('form.editCode', { file: spec.q2.file }) : t('form.codeDraft')} filename={spec?.q2.file} language={spec?.execution?.language ?? (space.kind === 'pytorch' ? 'python' : 'rust')} value={draft.q2} onChange={(v) => updateDraft({ q2: v })} />
                   <div className="min-h-16 border-t px-3 py-2 font-mono text-xs leading-5" aria-live="polite">
-                    {draft.q2Output ? <TermOutput lines={draft.q2Output} /> : <p className="text-muted-foreground">{execution ? t('form.executionBelow') : canRun ? t('form.outputHint') : t('form.runUnavailable')}</p>}
+                    <p className="text-muted-foreground">{execution ? t('form.executionBelow') : canRun ? t('form.outputHint') : t('form.runUnavailable')}</p>
                   </div>
                 </div>}
-                {persistence && execution && <div className="mt-4 space-y-2">
+                {execution && <div className="mt-4 space-y-2">
                   {execution.code !== draft.q2 && <p role="status" className="text-xs text-muted-foreground">{t('form.olderCode')}</p>}
                   {execution.specRevision !== spec?.revision && <p role="status" className="text-xs text-muted-foreground">{t('form.olderSpec', { revision: execution.specRevision })}</p>}
                   <ExecutionResult execution={execution} />
@@ -201,19 +184,17 @@ export function AssessmentView() {
             <div className="sticky bottom-0 -mx-8 flex items-center justify-between gap-4 border-t bg-background/85 px-8 py-4 backdrop-blur">
               <p className="text-sm text-muted-foreground">
                 {capabilities.assessment && spec ? t('form.submitHint') : t('form.evaluationUnavailable')}
-                {persistence && <span role="status" className="ml-2">{persistence.assessmentDirty ? t('controls.unsaved') : t('controls.saved')}</span>}
+                <span role="status" className="ml-2">{persistence.assessmentDirty ? t('controls.unsaved') : t('controls.saved')}</span>
               </p>
-              {persistence && (
-                <Button
-                  size="lg"
-                  variant="outline"
-                  disabled={!persistence.ready || persistence.busy || !persistence.assessmentDirty}
-                  onClick={persistence.saveAssessment}
-                >
-                  <Save data-icon="inline-start" />
-                  {t('controls.saveDraft')}
-                </Button>
-              )}
+              <Button
+                size="lg"
+                variant="outline"
+                disabled={!persistence.ready || persistence.busy || !persistence.assessmentDirty}
+                onClick={persistence.saveAssessment}
+              >
+                <Save data-icon="inline-start" />
+                {t('controls.saveDraft')}
+              </Button>
               <Button size="lg" onClick={submitAssessment} disabled={!spec || spec.stale || !capabilities.assessment || storageBusy || executing || !!activeTask || !draft.q1.trim()}>
                 <Send data-icon="inline-start" />
                 {t('controls.submit')}

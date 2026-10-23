@@ -9,7 +9,6 @@ export function YoloSwitch({ sessionId }: { sessionId?: string }) {
   const { session, persistence } = useApp()
   const space = useSpace()
   const id = useId()
-  if (!persistence) return null
   const target = sessionId ? space.sessions.find((candidate) => candidate.id === sessionId) : session
   const enabled = target?.settings?.yolo ?? false
   return <label htmlFor={id} title={t('yolo.hint')} className={cn(

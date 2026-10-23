@@ -1,6 +1,6 @@
 # 开发指南
 
-本文介绍如何搭建开发环境、运行测试和维护视觉基线。提交流程和约定见 [CONTRIBUTING.md](../CONTRIBUTING.md)，内部设计见[架构](architecture.md)。
+本文介绍如何搭建开发环境和运行测试。提交流程和约定见 [CONTRIBUTING.md](../CONTRIBUTING.md)，内部设计见[架构](architecture.md)。
 
 ## 环境要求
 
@@ -39,7 +39,6 @@ apps/
     src/runtime/     PTY 终端、Bash、命令执行
     src/storage/     数据目录、SQLite 与会话存储
   web/               React + Vite 前端
-    src/fixtures/    /preview 演示数据
     src/i18n/        界面翻译资源
 packages/
   contracts/         前后端共享的 schema 与类型
@@ -57,23 +56,9 @@ patches/             pnpm 依赖补丁
 | `pnpm check` | 类型检查，包括测试和脚本 |
 | `pnpm check:i18n` | 检查翻译资源，见[界面翻译](translating.md) |
 | `pnpm test` | 单元与集成测试（需先 build） |
-| `pnpm test:browser` | Playwright 浏览器测试与截图回归 |
+| `pnpm test:browser` | Playwright 浏览器测试 |
 | `pnpm test:native` | SQLite 与 PTY 原生依赖检查 |
 | `pnpm test:provider` | 真实模型冒烟测试，**会产生费用** |
-
-## 演示模式
-
-访问 `/preview` 进入演示模式。页面和组件与正式入口相同，但数据来自 `apps/web/src/fixtures` 的内存夹具：不调用模型、不写文件、不执行命令，刷新即重置。页面底部会标注当前处于演示状态。
-
-可以用查询参数直接打开特定场景：
-
-| 参数 | 效果 |
-| --- | --- |
-| `?scene=spaces` | 包含两个学习空间的空间列表 |
-| `?scene=route` | Rust 学习路线 |
-| `?scene=unit` | Rust 学习单元 |
-| `&fault=reply` | 下一次模拟回复失败 |
-| `&fault=lesson` | 下一次模拟课件生成失败 |
 
 ## 测试
 
@@ -102,18 +87,6 @@ pnpm test:browser --workers=1
 ```sh
 pnpm exec playwright test -c tests/agents.config.ts --workers=1
 ```
-
-### 视觉回归
-
-截图基线位于 `tests/browser/__screenshots__/darwin`，固定为 1440×1000、浅色主题、减少动画和固定日期。基线只在 macOS arm64 和本机 Chrome 上生成；浏览器或系统字体的变化也会导致差异，需要人工判断是否为真实回归。
-
-有意修改界面后更新基线：
-
-```sh
-pnpm test:browser tests/browser/visual.spec.ts --project=production --update-snapshots
-```
-
-更新后逐张打开新截图确认效果，再运行不带 `--update-snapshots` 的完整测试。不要用更新基线来掩盖失败。
 
 ### 原生依赖
 

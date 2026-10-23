@@ -24,7 +24,7 @@ function StartInput({ autoFocus }: { autoFocus?: boolean }) {
   const { t } = useTranslation('home')
   const { createSpace, persistence } = useApp()
   const [text, setText] = useState('')
-  const busy = !!persistence && (persistence.busy || !persistence.ready)
+  const busy = persistence.busy || !persistence.ready
   const start = (value: string) => {
     if (!value.trim() || busy) return
     createSpace(value)
@@ -143,13 +143,13 @@ function SpaceCard({ space }: { space: Space }) {
 
 export function SpaceList() {
   const { t } = useTranslation('home')
-  const { state, goHome, goSpaces, persistence } = useApp()
+  const { state, goHome, goSpaces } = useApp()
   const spaces = state.spaces
   const onHome = state.globalView === 'home'
   return (
     <div className={cn('min-h-dvh', onHome && 'startup-page relative isolate')}>
       <header className={cn('sticky top-0 z-10 border-b bg-background/80 backdrop-blur', onHome && 'startup-header')}>
-        <div className={cn('mx-auto flex h-14 max-w-6xl items-center justify-between px-6', persistence && 'max-sm:px-4')}>
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6 max-sm:px-4">
           <Brand onClick={goHome} />
           <div className="startup-actions flex items-center gap-2">
             <LibraryButton />

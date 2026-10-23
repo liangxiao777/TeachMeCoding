@@ -16,7 +16,6 @@ import { QuestionRoundCard, ResearchCard } from '@/components/intake-panel'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation'
 import { Message, MessageContent } from '@/components/ai-elements/message'
 import { PromptInput, PromptInputFooter, PromptInputSubmit, PromptInputTextarea } from '@/components/ai-elements/prompt-input'
-import { Shimmer } from '@/components/ai-elements/shimmer'
 import { Generating, isComposing } from '@/components/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,16 +34,14 @@ function RequirementCard() {
   const { t } = useTranslation('learning')
   const space = useSpace()
   const { updateRequirement, confirmRequirement, setView, capabilities, persistence } = useApp()
-  const [previewEditing, setEditing] = useState(false)
-  const [previewDraft, setPreviewDraft] = useState<RequirementDraft | null>(null)
-  const draft = persistence ? persistence.requirementDraft : previewDraft
-  const setDraft = persistence ? persistence.setRequirementDraft : setPreviewDraft
-  const editing = persistence ? draft !== null : previewEditing
+  const draft = persistence.requirementDraft
+  const setDraft = persistence.setRequirementDraft
+  const editing = draft !== null
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<NoticeValue>(null)
   const savingRef = useRef(false)
   const req = space.requirement
-  const busy = saving || !!persistence && (persistence.busy || !persistence.ready || !!pendingDecision(persistence))
+  const busy = saving || persistence.busy || !persistence.ready || !!pendingDecision(persistence)
   const validRows = !draft || draft.rows.every((row) => row.question.trim())
 
   const save = async () => {
@@ -58,7 +55,6 @@ function RequirementCard() {
         setSaveError(notice('learning', 'requirement.saveFailed'))
         return
       }
-      setEditing(false)
     } catch (error) {
       setSaveError(error instanceof Error ? error : notice('learning', 'requirement.saveFailed'))
     } finally {
@@ -67,7 +63,7 @@ function RequirementCard() {
     }
   }
 
-  if ((!space.onboarding.summaryReady && !persistence) || !req) {
+  if (!req) {
     return (
       <Card className="border bg-card shadow-[0_2px_6px_#00000006,0_16px_40px_#0000000a] ring-0">
         <CardHeader>
@@ -84,9 +80,9 @@ function RequirementCard() {
     )
   }
 
-  const current: RequirementDraft = editing && draft ? draft : { ...req, intake: persistence?.intake }
+  const current: RequirementDraft = editing && draft ? draft : { ...req, intake: persistence.intake }
   const awaitingSummary = !req.rows.some((row) => row.answer.trim())
-  const readinessIssues = persistence && !persistence.readiness?.ready
+  const readinessIssues = !persistence.readiness?.ready
     ? persistence.readiness?.issues.filter((issue) => issue.code !== 'REQUIREMENT_EMPTY' || !editing && current.rows.length > 0)
       ?? [notice('learning', 'requirement.loadingReadiness')]
     : []
@@ -103,7 +99,7 @@ function RequirementCard() {
         <CardAction>
         {editing ? (
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditing(false); setDraft(null); setSaveError(null) }}>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setDraft(null); setSaveError(null) }}>
               {t('controls.cancel')}
             </Button>
             <Button
@@ -120,9 +116,8 @@ function RequirementCard() {
             size="sm"
             disabled={busy}
             onClick={() => {
-              setDraft({ ...req, rows: req.rows.length ? structuredClone(req.rows) : [{ question: '', answer: '' }], intake: persistence?.intake })
+              setDraft({ ...req, rows: req.rows.length ? structuredClone(req.rows) : [{ question: '', answer: '' }], intake: persistence.intake })
               setSaveError(null)
-              setEditing(true)
             }}
           >
             <Pencil data-icon="inline-start" />
@@ -164,11 +159,11 @@ function RequirementCard() {
           {readinessIssues.map((reason, index) => <p key={index} className="whitespace-pre-wrap break-words">{formatNotice(reason)}</p>)}
         </div>}
         <Button size="lg" aria-describedby={readinessIssues.length > 0 ? 'req-readiness' : undefined}
-          disabled={editing || busy || awaitingSummary || persistence?.requirementConfirmed || !!persistence && !persistence.readiness?.ready} onClick={confirmRequirement}>
+          disabled={editing || busy || awaitingSummary || persistence.requirementConfirmed || !persistence.readiness?.ready} onClick={confirmRequirement}>
           <Check data-icon="inline-start" />
-          {persistence?.requirementConfirmed ? t('requirement.confirmed') : capabilities.agent ? t('requirement.confirmAndPlan') : t('requirement.confirm')}
+          {persistence.requirementConfirmed ? t('requirement.confirmed') : capabilities.agent ? t('requirement.confirmAndPlan') : t('requirement.confirm')}
         </Button>
-        {persistence?.requirementConfirmed && (
+        {persistence.requirementConfirmed && (
           <Button variant="outline" size="lg" disabled={editing || busy} onClick={() => setView(!space.stages.length && persistence.planning.run ? 'planning' : 'route')}>
             {!space.stages.length && persistence.planning.run ? t('requirement.viewPlanning') : t('requirement.viewPath')}
           </Button>
@@ -181,28 +176,21 @@ function RequirementCard() {
 function Chat() {
   const { t } = useTranslation('learning')
   const space = useSpace()
-  const { onboardSend, sendMessage, stopReply, session, setComposerText, capabilities, persistence } = useApp()
-  const [previewText, setPreviewText] = useState('')
+  const { sendMessage, stopReply, session, setComposerText, capabilities, persistence } = useApp()
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<NoticeValue>(null)
   const sendingRef = useRef(false)
-  const text = persistence ? session?.composerText ?? '' : previewText
-  const setText = persistence ? setComposerText : setPreviewText
+  const text = session?.composerText ?? ''
   const { messages } = space.onboarding
-  const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
-  const lessonProposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending')
+  const proposal = persistence.proposals.findLast((proposal) => proposal.state === 'pending')
+  const lessonProposal = persistence.lessonProposals.findLast((proposal) => proposal.state === 'pending')
   const replying = capabilities.agent && space.onboarding.agentTyping
-  const busy = !!proposal || !!lessonProposal || !persistence && replying || sending || !!persistence && (persistence.busy || !persistence.ready)
+  const busy = !!proposal || !!lessonProposal || sending || persistence.busy || !persistence.ready
 
   useEffect(() => setSendError(null), [session?.id, messages.length])
 
   const send = async (value: string, fromComposer = false) => {
     if (!value.trim() || busy || sendingRef.current) return
-    if (!persistence) {
-      onboardSend(value)
-      setPreviewText('')
-      return
-    }
     sendingRef.current = true
     setSending(true)
     setSendError(null)
@@ -218,11 +206,11 @@ function Chat() {
   }
   return (
     <div className="flex h-[70dvh] min-h-[28rem] min-w-0 flex-1 flex-col lg:h-auto lg:min-h-0">
-      {persistence && <div className="flex h-12 shrink-0 items-center border-b px-4 sm:px-6"><SessionMenu /></div>}
+      <div className="flex h-12 shrink-0 items-center border-b px-4 sm:px-6"><SessionMenu /></div>
       <Conversation key={session?.id ?? space.id} className="min-h-0" initial="instant" resize="instant" aria-label={t('onboarding.conversation')}>
         <ConversationContent className="gap-6 px-4 py-8 sm:px-6"
           scrollClassName="[scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {(!persistence || messages.length === 0) && <Message from="assistant">
+          {messages.length === 0 && <Message from="assistant">
             <MessageContent>
               {capabilities.agent ? t('onboarding.greeting') : t('onboarding.unavailableGreeting')}
             </MessageContent>
@@ -233,16 +221,11 @@ function Chat() {
             ) : (
               <div key={m.id} className="min-w-0 space-y-3">
                 <AgentMessage msg={{ ...m, createdAt: 0 }} />
-                {persistence?.questions.filter((round) => round.runId === m.id && (round.state !== 'pending' || m.status === 'done')).map((round) => (
+                {persistence.questions.filter((round) => round.runId === m.id && (round.state !== 'pending' || m.status === 'done')).map((round) => (
                   <QuestionRoundCard key={round.id} round={round} disabled={busy || !capabilities.agent} onAnswer={persistence.answerQuestions} />
                 ))}
               </div>
             ),
-          )}
-          {!persistence && replying && (
-            <div role="status" className="text-sm text-muted-foreground">
-              <Shimmer>{t('onboarding.waiting')}</Shimmer>
-            </div>
           )}
         </ConversationContent>
         <ConversationScrollButton className="left-auto right-0 translate-x-0 sm:right-2" aria-label={t('onboarding.latest')} />
@@ -259,7 +242,7 @@ function Chat() {
               rows={2}
               autoFocus
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => setComposerText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
                   e.preventDefault()
@@ -275,9 +258,9 @@ function Chat() {
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 <Kbd>Enter</Kbd>{capabilities.agent ? t('onboarding.sendShortcut') : t('onboarding.saveShortcut')}<Kbd>Shift</Kbd>+<Kbd>Enter</Kbd>{t('onboarding.newline')}
               </span>
-              {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
-              <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status="ready"
-                disabled={!text.trim() || busy} aria-label={persistence && replying ? t('queue.enqueue', { ns: 'workbench' }) : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
+              {replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
+              <PromptInputSubmit className={replying ? undefined : 'ml-auto'} status="ready"
+                disabled={!text.trim() || busy} aria-label={replying ? t('queue.enqueue', { ns: 'workbench' }) : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
             </PromptInputFooter>
         </PromptInput>
         {!!sendError && <p role="alert" className="text-xs text-destructive">{formatNotice(sendError)}</p>}
@@ -290,9 +273,9 @@ export function Onboarding() {
   const { t } = useTranslation('learning')
   const space = useSpace()
   const { goSpaces, renameSpace, setView, retryReply, stopReply, capabilities, persistence } = useApp()
-  const planning = persistence?.planning
-  const planningStopped = planning?.run && ['failed', 'interrupted'].includes(planning.run.state)
-  const planningParts = space.sessions.flatMap((s) => s.messages).find((m) => m.id === planning?.run?.id)?.parts ?? []
+  const planning = persistence.planning
+  const planningStopped = planning.run && ['failed', 'interrupted'].includes(planning.run.state)
+  const planningParts = space.sessions.flatMap((s) => s.messages).find((m) => m.id === planning.run?.id)?.parts ?? []
 
   if (space.view === 'planning') {
     return (
@@ -300,28 +283,28 @@ export function Onboarding() {
         <div className="fixed top-3 right-3 z-10 flex items-center gap-2"><LibraryButton /><ThemeToggle /></div>
         <Card className="w-full max-w-xl shadow-lg">
           <CardContent>
-            {planningStopped || persistence && (!capabilities.agent || persistence.error) ? (
+            {planningStopped || !capabilities.agent || persistence.error ? (
               <div className="flex flex-col gap-3">
-                <h1 className="text-base font-semibold">{planning?.run?.state === 'interrupted' ? t('onboarding.planningStopped') : t('onboarding.planningIncomplete')}</h1>
-                <p role="alert" className="text-sm text-muted-foreground">{formatNotice(planning?.error || persistence?.error) || t('onboarding.planningFallback')}</p>
+                <h1 className="text-base font-semibold">{planning.run?.state === 'interrupted' ? t('onboarding.planningStopped') : t('onboarding.planningIncomplete')}</h1>
+                <p role="alert" className="text-sm text-muted-foreground">{formatNotice(planning.error || persistence.error) || t('onboarding.planningFallback')}</p>
                 <RunContent parts={planningParts} />
               </div>
             ) : <Generating
               title={t('onboarding.planningTitle', { name: space.name })}
-              steps={persistence ? [t('onboarding.analyzeRequirements'), t('onboarding.generatePath'), t('onboarding.validatePath'), t('onboarding.savePath')] : [t('onboarding.analyzeBackground'), t('onboarding.splitStages'), t('onboarding.arrangeUnits'), t('onboarding.prepareNotes')]}
+              steps={[t('onboarding.analyzeRequirements'), t('onboarding.generatePath'), t('onboarding.validatePath'), t('onboarding.savePath')]}
               note={t('onboarding.planningNote')}
-              parts={persistence ? planningParts : undefined}
-              context={<RunContext runId={planning?.run?.id} />}
+              parts={planningParts}
+              context={<RunContext runId={planning.run?.id} />}
             />}
-            {persistence && <div className="mt-6 flex flex-wrap gap-2">
-              {planning?.run && ['failed', 'interrupted'].includes(planning.run.state) ? (
+            <div className="mt-6 flex flex-wrap gap-2">
+              {planning.run && ['failed', 'interrupted'].includes(planning.run.state) ? (
                 <Button disabled={persistence.busy || !capabilities.agent} onClick={() => retryReply(planning.run!.id)}>{t('onboarding.retryPlanning')}</Button>
-              ) : planning?.run && ['pending', 'running'].includes(planning.run.state) ? (
+              ) : planning.run && ['pending', 'running'].includes(planning.run.state) ? (
                 <Button variant="outline" disabled={persistence.busy} onClick={stopReply}>{t('onboarding.stopPlanning')}</Button>
               ) : null}
               <Button variant="ghost" onClick={goSpaces}>{t('controls.allSpaces')}</Button>
-              {(!planning?.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>{t('onboarding.editRequirements')}</Button>}
-            </div>}
+              {(!planning.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>{t('onboarding.editRequirements')}</Button>}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -344,7 +327,7 @@ export function Onboarding() {
             id="space-name"
             value={space.name}
             onChange={(e) => renameSpace(e.target.value)}
-            onBlur={persistence?.saveName}
+            onBlur={persistence.saveName}
             className="min-w-0 flex-1 border-transparent bg-transparent font-semibold shadow-none hover:border-input sm:w-64 sm:flex-none dark:bg-transparent"
           />
           <Badge variant="outline" className="ml-auto hidden gap-1.5 lg:inline-flex">

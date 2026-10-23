@@ -113,7 +113,6 @@ function Command({ command }: { command: string }) {
 export function LocalAction({ proposal: p }: { proposal: ActionProposal }) {
   const { t } = useTranslation('workbench')
   const { persistence } = useApp()
-  if (!persistence) return null
   const file = p.action.kind === 'file', title = file ? t('action.fileTitle') : t('action.commandTitle')
   const Icon = file ? FileCode2 : SquareTerminal
   const status = p.state === 'failed' && p.result ? {

@@ -21,7 +21,6 @@ export function LessonProposalDecision({ proposal }: { proposal: LessonProposal 
   const [feedback, setFeedback] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const sending = useRef(false)
-  if (!persistence) return null
   const unit = findUnit(space, proposal.unitId)
   const previewVisible = !!unit && space.view === 'unit' && space.currentUnitId === proposal.unitId && (!space.ideFullscreen || lessonOpen)
   const busy = submitting || persistence.busy || !persistence.ready

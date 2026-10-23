@@ -90,7 +90,7 @@ function SpaceBody() {
 export function AppShell() {
   const { t } = useTranslation()
   const { current, persistence } = useApp()
-  const [libraryOpen, setLibraryOpen] = useState(() => !!persistence && location.pathname === '/library')
+  const [libraryOpen, setLibraryOpen] = useState(() => location.pathname === '/library')
   const libraryTrigger = useRef<HTMLElement | null>(null)
   const libraryScroll = useRef({ x: 0, y: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -112,7 +112,6 @@ export function AppShell() {
     }
   }
   useEffect(() => {
-    if (!persistence) return
     const navigate = () => {
       const open = location.pathname === '/library'
       setLibraryOpen(open)
@@ -123,7 +122,7 @@ export function AppShell() {
     }
     window.addEventListener('popstate', navigate)
     return () => window.removeEventListener('popstate', navigate)
-  }, [!!persistence])
+  }, [])
   const openSettings = () => {
     settingsTrigger.current = document.activeElement as HTMLElement | null
     learningScroll.current = { x: window.scrollX, y: window.scrollY }
@@ -144,15 +143,15 @@ export function AppShell() {
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: uiMotion.content, ease: uiMotion.ease }}>
       <TooltipProvider delay={300}>
-        <SettingsNavigation value={persistence ? openSettings : null}>
-        <LibraryNavigation value={persistence ? openLibrary : null}>
+        <SettingsNavigation value={openSettings}>
+        <LibraryNavigation value={openLibrary}>
           <div className="min-h-dvh" style={uiMotionVariables}>
             <div inert={settingsOpen || libraryOpen} aria-hidden={settingsOpen || libraryOpen}>
               <Activity mode={libraryOpen ? 'hidden' : 'visible'}>
                 {/* Settings hide the surface without destroying editor/terminal Effects. */}
-                <div className="app-layout" data-fixture={!persistence || undefined} style={{ display: settingsCovered && settingsOpen ? 'none' : undefined }}>
+                <div className="app-layout" style={{ display: settingsCovered && settingsOpen ? 'none' : undefined }}>
                   {current ? <LessonDrawerProvider key={current.id}><SpaceBody /></LessonDrawerProvider> : <SpaceList />}
-                  {persistence && (persistence.error || persistence.busy || !persistence.ready) && (
+                  {(persistence.error || persistence.busy || !persistence.ready) && (
                     <div className="fixed inset-x-3 bottom-8 z-50 mx-auto max-w-xl rounded-lg border bg-background p-3 shadow-sm">
                       {persistence.error ? (
                         <div role="alert" className="flex items-center gap-3 text-sm text-destructive">
@@ -163,11 +162,6 @@ export function AppShell() {
                         <p role="status" className="text-xs text-muted-foreground">{t('status.saving')}</p>
                       )}
                     </div>
-                  )}
-                  {!persistence && (
-                    <footer className="flex h-6 items-center border-t bg-muted px-3 text-[10px] text-muted-foreground">
-                      <a href="/diagnostics" data-testid="fixture-notice">{t('fixture')}</a>
-                    </footer>
                   )}
                 </div>
               </Activity>

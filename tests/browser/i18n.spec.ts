@@ -180,35 +180,6 @@ test('MCP connection failures follow the current language, including reload', as
   await expect(server).toHaveCount(0);
 });
 
-test('preview terminal diagnostics and existing quotes retranslate without changing source text', async ({ page, context }, info) => {
-  await page.goto('/preview?scene=unit');
-  await page.getByRole('button', { name: 'IDE and terminal', exact: true }).click();
-  const command = page.getByRole('textbox', { name: 'Terminal command', exact: true });
-  await command.fill('cd /missing-i18n'); await command.press('Enter');
-  const terminal = page.getByRole('log', { name: /^(Terminal output|终端输出)$/, exact: true });
-  await shot(page, info, 'preview-error-en');
-  await expect(terminal).toContainText('Directory not found: /missing-i18n');
-  await command.fill('help'); await command.press('Enter');
-  await expect(terminal).toContainText('Simulated terminal:');
-  await page.getByRole('button', { name: 'Quote terminal output', exact: true }).click();
-  const composer = page.getByRole('complementary', { name: 'Agent', exact: true }).locator('form');
-  await expect(composer).toContainText('Terminal output');
-  const quoted = await composer.locator('p').innerText();
-  // The isolated preview has no settings capability. A real settings tab updates
-  // the shared preference without reloading its in-memory terminal or quote.
-  const preferences = await context.newPage();
-  await preferences.goto('/'); await settings(preferences);
-  await chooseLanguage(preferences, '简体中文');
-  await expect(terminal).toContainText('目录不存在：/missing-i18n');
-  await expect(composer).toContainText('终端输出');
-  expect(await composer.locator('p').innerText()).toBe(quoted);
-  await chooseLanguage(preferences, 'English');
-  await expect(terminal).toContainText('Directory not found: /missing-i18n');
-  await expect(composer).toContainText('Terminal output');
-  await shot(page, info, 'preview-notices-en');
-  await preferences.close();
-});
-
 test('persisted run failures, action receipts and default titles retranslate without changing content or rerunning commands', async ({ page }, info) => {
   const data = seedWorkspaces(seed(info).root, { learning: '持久提示验收', other: '原文对照' });
   const db = openDatabase(join(data.root, 'app.db')), learning = new Learning(db), projects = new Projects(data.root);

@@ -8,22 +8,21 @@ type Action = () => void
 type EntryResult = NoticeValue | null | Promise<NoticeValue | null>
 export type RequirementDraft = Requirement & { intake?: IntakeMetadata | null }
 
-/** Data and actions consumed by the original UI, independent of storage or demo scripts. */
+/** Data and actions consumed by the UI, backed by the persistent local service. */
 export interface AppModel {
   state: Pick<AppState, 'spaces' | 'currentSpaceId' | 'globalView'>
   current: Space | null
   session?: Session
   localTerminal?: LocalTerminal
   capabilities: { agent: boolean; terminal: boolean; assessment: boolean }
-  /** Re-read server capabilities after model settings change. Absent in the isolated preview. */
-  refreshCapabilities?: () => void
+  /** Re-read server capabilities after model settings change. */
+  refreshCapabilities: () => void
   lesson: (unit: Unit) => Lesson | null
   assessment: (unit: Unit) => AssessmentSpec | null
   goHome: Action
   goSpaces: Action
   openSpace: (id: string) => void
   createSpace: (goal: string) => void
-  onboardSend: (text: string) => void
   updateRequirement: (value: Partial<RequirementDraft>) => void | Promise<boolean>
   renameSpace: (name: string) => void
   confirmRequirement: Action
@@ -36,7 +35,6 @@ export interface AppModel {
   sendMessage: (text?: string) => boolean | Promise<boolean>
   stopReply: Action
   retryReply: (id: string) => void
-  applyRouteAction: (id: string) => void
   newSession: Action
   switchSession: (id: string) => void
   toggleAgent: (open?: boolean) => void
@@ -54,7 +52,6 @@ export interface AppModel {
   updateFile: (id: string, content: string) => void
   bringToIde: (code: string, name?: string) => void
   connectEnv: Action
-  terminalCommand: (command: string) => void
   startAssessment: Action
   updateDraft: (patch: Partial<AssessmentDraft>) => void
   runDraft: Action
@@ -63,8 +60,8 @@ export interface AppModel {
   viewRecord: (id: string) => void
   goNextUnit: Action
   backToStudy: Action
-  /** Real storage state and operations. Absent in the isolated preview. */
-  persistence?: {
+  /** Storage state and operations. */
+  persistence: {
     ready: boolean
     busy: boolean
     error: NoticeValue

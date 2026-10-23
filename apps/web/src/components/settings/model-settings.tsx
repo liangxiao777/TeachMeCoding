@@ -161,7 +161,7 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
         updateLogin(state)
         if (state.state !== 'running') {
           stopPoll()
-          if (state.state === 'succeeded') { void refresh(); refreshCapabilities?.() }
+          if (state.state === 'succeeded') { void refresh(); refreshCapabilities() }
         }
       } catch { if (loginRef.current?.id === id) stopPoll() }
     }, 800)
@@ -223,7 +223,7 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
     try {
       const next = await api<ModelSettings>('/settings/model', { provider, model, thinkingLevel: level })
       setSettings(next)
-      refreshCapabilities?.()
+      refreshCapabilities()
     } catch (error) {
       setSaveError(error instanceof Error ? error : notice('settings', 'errors.saveModel'))
     } finally { setSaving(false) }
@@ -261,7 +261,7 @@ export function ModelSettingsForm({ active }: { active: boolean }) {
     finally { setAnswering(false) }
   }
   const logout = async () => {
-    try { setSettings(await api<ModelSettings>(`/settings/providers/${provider}/logout`, {})); refreshCapabilities?.() }
+    try { setSettings(await api<ModelSettings>(`/settings/providers/${provider}/logout`, {})); refreshCapabilities() }
     catch (error) { setSaveError(error instanceof Error ? error : notice('settings', 'errors.clearCredentials')) }
   }
 

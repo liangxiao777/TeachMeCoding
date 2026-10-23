@@ -11,7 +11,6 @@ import {
   Lightbulb,
   Plus,
   RotateCcw,
-  Route,
   Sparkles,
   Square,
   SquareTerminal,
@@ -37,7 +36,6 @@ import { LessonProposalDecision } from './lesson-proposal-decision'
 import { LocalAction } from './local-action'
 import { pendingDecision } from '@/app/lesson-proposals'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -92,12 +90,12 @@ function QuoteCard({ quote, onRemove, compact }: { quote: Quote; onRemove?: () =
 
 export function AgentMessage({ msg }: { msg: Message }) {
   const { t } = useTranslation('workbench')
-  const { retryReply, applyRouteAction, bringToIde, capabilities, persistence } = useApp()
+  const { retryReply, bringToIde, capabilities, persistence } = useApp()
   const space = useSpace()
   const lang = space.kind === 'pytorch' ? 'python' : 'rust'
-  const awaitingDecision = persistence && pendingDecision(persistence)
+  const awaitingDecision = pendingDecision(persistence)
 
-  const receipt = receiptProposal(msg, persistence?.actions ?? [])
+  const receipt = receiptProposal(msg, persistence.actions)
   const text = receipt ? localizedActionReceipt(receipt) : msg.notice
     ? formatNotice(notice('common', 'notices.autoApproval', { error: msg.notice })) : msg.text
 
@@ -127,7 +125,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
           </div>
         </Alert>
       )}
-      {persistence?.conclusions.filter((c) => c.runId === msg.id).map((c) => (
+      {persistence.conclusions.filter((c) => c.runId === msg.id).map((c) => (
         <Card key={c.id} size="sm" className="ring-primary/30">
           <CardHeader><CardTitle className="text-sm">{t('agent.conclusion', { status: c.valid ? c.adopted ? t('agent.adopted') : t('agent.pendingAdoption') : t('agent.sourceChanged') })}</CardTitle>
             <CardDescription>{c.text}</CardDescription></CardHeader>
@@ -136,7 +134,7 @@ export function AgentMessage({ msg }: { msg: Message }) {
           </Button></CardFooter>
         </Card>
       ))}
-      {persistence?.proposals.filter((proposal) => proposal.runId === msg.id).map((proposal) => (
+      {persistence.proposals.filter((proposal) => proposal.runId === msg.id).map((proposal) => (
         <Card key={proposal.id} size="sm" data-testid="route-decision-history">
           <CardHeader>
             <CardTitle className="text-sm">{t('agent.routeProposal', { status: t(`agent.proposalStatus.${proposal.state}`) })}</CardTitle>
@@ -145,39 +143,16 @@ export function AgentMessage({ msg }: { msg: Message }) {
           {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">{t('agent.feedback')}</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
         </Card>
       ))}
-      {persistence?.lessonProposals.filter((proposal) => proposal.source.kind === 'run' && proposal.source.id === msg.id).map((proposal) => (
+      {persistence.lessonProposals.filter((proposal) => proposal.source.kind === 'run' && proposal.source.id === msg.id).map((proposal) => (
         <Card key={proposal.id} size="sm" data-testid="lesson-decision-history">
           <CardHeader><CardTitle className="text-sm">{t('agent.lessonProposal', { status: t(`agent.proposalStatus.${proposal.state}`) })}</CardTitle>
             <CardDescription className="whitespace-pre-wrap break-words">{proposal.content.title} · {proposal.note}</CardDescription></CardHeader>
           {proposal.feedback && <CardContent className="text-xs leading-relaxed"><p className="font-medium">{t('agent.feedback')}</p><p className="mt-1 whitespace-pre-wrap break-words">{proposal.feedback}</p></CardContent>}
         </Card>
       ))}
-      {persistence?.actions.filter((p) => p.runId === msg.id).map((p) => (
+      {persistence.actions.filter((p) => p.runId === msg.id).map((p) => (
         <LocalAction key={p.id} proposal={p} />
       ))}
-      {!persistence && msg.action && msg.status === 'done' && (
-        <Card size="sm" className="ring-primary/30">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Route className="size-4 text-primary" aria-hidden />
-              {msg.action.kind === 'skip-basics' ? t('agent.skipBasicsTitle') : t('agent.projectFirstTitle')}
-            </CardTitle>
-            <CardDescription className="text-xs leading-relaxed">{msg.action.kind === 'skip-basics' ? t('agent.skipBasicsText') : t('agent.projectFirstText')}</CardDescription>
-          </CardHeader>
-          <CardFooter>
-            {msg.action.applied ? (
-              <Badge variant="secondary" className="text-primary">
-                <Check data-icon="inline-start" />
-                {t('agent.routeUpdated')}
-              </Badge>
-            ) : (
-              <Button size="sm" onClick={() => applyRouteAction(msg.id)}>
-                {t('agent.confirmRoute')}
-              </Button>
-            )}
-          </CardFooter>
-        </Card>
-      )}
       </MessageContent>
     </ChatMessage>
   )
@@ -188,7 +163,7 @@ export function SessionMenu() {
   const space = useSpace()
   const { session: active, switchSession, newSession, persistence } = useApp()
   const sessions = scopedSessions(space)
-  const busy = !!persistence && !persistence.ready
+  const busy = !persistence.ready
   return (
     <DropdownMenu>
       <DropdownMenuTrigger aria-label={t('agent.switchSession')} render={<Button variant="ghost" size="sm" className="max-w-full min-w-0" />}>
@@ -233,9 +208,9 @@ function Composer() {
   const text = session?.composerText ?? ''
   const quote = session?.composerQuote
   const replying = capabilities.agent && (!!session?.messages.some((m) => m.status === 'thinking' || m.status === 'streaming')
-    || sessionScope(space) === 'route' && !!persistence?.routeAdjustmentRun)
-  const busy = !persistence && replying || sending || !!persistence && (persistence.busy || !persistence.ready
-    || sessionScope(space) === 'route' && !!persistence.routeAdjustmentRun && persistence.routeAdjustmentRun.sessionId !== session?.id)
+    || sessionScope(space) === 'route' && !!persistence.routeAdjustmentRun)
+  const busy = sending || persistence.busy || !persistence.ready
+    || sessionScope(space) === 'route' && !!persistence.routeAdjustmentRun && persistence.routeAdjustmentRun.sessionId !== session?.id
   const canSend = !busy && (text.trim() || quote)
 
   useEffect(() => {
@@ -278,7 +253,7 @@ function Composer() {
             ref={ref}
             rows={3}
             value={text}
-            disabled={!!persistence && !session}
+            disabled={!session}
             onChange={(e) => setComposerText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !isComposing(e)) {
@@ -291,11 +266,11 @@ function Composer() {
           />
           <PromptInputFooter>
             <YoloSwitch />
-            {sessionScope(space) === 'route' && persistence?.routeAdjustmentRun && <span className="text-xs text-muted-foreground">{t('agent.adjusting')}</span>}
+            {sessionScope(space) === 'route' && persistence.routeAdjustmentRun && <span className="text-xs text-muted-foreground">{t('agent.adjusting')}</span>}
             <RunContext runId={session?.messages.findLast((m) => m.role === 'agent')?.runId ?? session?.messages.findLast((m) => m.role === 'agent')?.id} />
-            {persistence && replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
-            <PromptInputSubmit className={persistence && replying ? undefined : 'ml-auto'} status={!persistence && replying ? 'streaming' : 'ready'} onStop={stopReply}
-              disabled={!(!persistence && replying) && !canSend} aria-label={persistence && replying ? t('queue.enqueue') : replying ? t('controls.stop') : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
+            {replying && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto" onClick={stopReply} aria-label={t('controls.stop')}><Square /></Button>}
+            <PromptInputSubmit className={replying ? undefined : 'ml-auto'} status="ready"
+              disabled={!canSend} aria-label={replying ? t('queue.enqueue') : capabilities.agent ? t('controls.send') : t('controls.saveQuestion')} />
           </PromptInputFooter>
       </PromptInput>
       {!!sendError && <p role="alert" className="mt-2 text-xs text-destructive">{formatNotice(sendError)}</p>}
@@ -307,7 +282,7 @@ function EmptyChat() {
   const { t } = useTranslation('workbench')
   const space = useSpace()
   const { setComposerText, capabilities, persistence } = useApp()
-  const awaitingDecision = persistence && pendingDecision(persistence)
+  const awaitingDecision = pendingDecision(persistence)
   const unit = findUnit(space, sessionUnitId(space))
   const prompts =
     space.view === 'route'
@@ -346,8 +321,8 @@ export function AgentPanel() {
   const { t } = useTranslation('workbench')
   const space = useSpace()
   const { session, newSession, toggleAgent, capabilities, persistence } = useApp()
-  const proposal = persistence?.proposals.findLast((proposal) => proposal.state === 'pending')
-  const lessonProposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending')
+  const proposal = persistence.proposals.findLast((proposal) => proposal.state === 'pending')
+  const lessonProposal = persistence.lessonProposals.findLast((proposal) => proposal.state === 'pending')
   const isPresent = useIsPresent()
   const reducedMotion = useReducedMotion()
 
@@ -366,7 +341,7 @@ export function AgentPanel() {
         <div className="min-w-0 flex-1">
           <SessionMenu />
         </div>
-        <Button variant="ghost" size="icon-sm" disabled={persistence?.busy} onClick={newSession} aria-label={t('agent.newSession')}>
+        <Button variant="ghost" size="icon-sm" disabled={persistence.busy} onClick={newSession} aria-label={t('agent.newSession')}>
           <Plus />
         </Button>
         <Button variant="ghost" size="icon-sm" disabled={!!proposal || !!lessonProposal} onClick={() => {

@@ -121,7 +121,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   const drafts = Object.fromEntries(units.map((unit) => {
     const task = saved.tasks.find((t) => t.unitId === unit.id && ['assessment', 'evaluation'].includes(t.kind) && ['pending', 'running'].includes(t.state))
     return [unit.id, { ...answers(unit.draft), unitId: unit.id, state: task?.kind === 'assessment' ? 'generating' as const : task?.kind === 'evaluation' ? 'evaluating' as const : 'ready' as const,
-      q2Output: null, q2Running: false, attempt: unit.nextAttempt ?? Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]
+      attempt: unit.nextAttempt ?? Math.max(0, ...unit.records.map((record) => record.attempt)) + 1 }]
   }))
   const stages = saved.route.content?.stages.map((stage) => ({ ...stage, units: stage.units.map((unit) => {
     return { ...unit, ...unitState(details[unit.id]!, saved, executionGroups.flat()) }
@@ -140,7 +140,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
       // Older successful runs may have left an explicit proposal; keep it reachable.
       view: saved.route.content || latestPlan(saved)?.state === 'succeeded' ? 'route' : latestPlan(saved) ? 'planning' : 'onboarding', sessions: sessions.map(uiSession), activeSessionIds: selectedSessions,
       ...projectEntries(tree), expandedDirectoryIds: [], selectedEntryId: null, openFileIds: [], activeFileId: null,
-      terminal: [], terminalDirectoryId: null, running: false, env: 'disconnected', envLabel: '',
+      env: 'disconnected', envLabel: '',
       ideOpen: false, ideFullscreen: false, explorerOpen: true, agentOpen: true, draft: null, records, viewingRecordId: null,
       completed: units.length > 0 && units.every((unit) => unit.status === 'passed' || unit.status === 'skipped'),
       lastActive: Math.max(saved.createdAt, ...sessions.flatMap((s) => s.messages.map((m) => m.createdAt)), ...records.map((r) => r.createdAt)),
@@ -148,7 +148,7 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   }
 }
 
-/** Persistent operations for the existing component model. No rendering or demo runtime. */
+/** Persistent operations for the component model. No rendering. */
 export function usePersistentModel(): AppModel {
   const { t } = useTranslation(['common', 'assessment', 'workbench'])
   const cache = useRef<Record<string, StoredSpace>>({})
@@ -736,7 +736,6 @@ export function usePersistentModel(): AppModel {
     })
     return result ? null : errorRef.current
   }
-  const unavailable = () => { setError(notice('common', 'errors.unavailable')) }
   const generateLesson = (space: string, unit: string) => {
     const revision = cache.current[space]!.units[unit]?.lesson?.revision ?? 0
     const owner = activeSession(cache.current[space]!.ui)
@@ -832,7 +831,6 @@ export function usePersistentModel(): AppModel {
       // if it finished before the response arrived so its business result refreshes.
       for (const work of saved.runs) watchRun(saved.id, work)
     }) },
-    onboardSend: (text) => { void sendMessage(text) },
     updateRequirement: (patch) => saveRequirement({ ...current!.requirement!, ...patch }, false),
     renameSpace: (name) => { if (current) changeUi(current.id, (s) => ({ ...s, name })) },
     confirmRequirement: () => { if (!current?.requirement || !selected || !inputAllowed(true)) return
@@ -895,7 +893,6 @@ export function usePersistentModel(): AppModel {
         watchRun(space, submission.run)
       })
     },
-    applyRouteAction: unavailable,
     newSession: () => { if (!current) return; const space = current.id, key = sessionKey(current)
       void run(`new-session:${space}:${key}`, async () => {
         const saved = await api<SessionDetail>(`/spaces/${space}/sessions`, { scope: sessionScope(current), unitId: sessionUnitId(current) })
@@ -953,7 +950,6 @@ export function usePersistentModel(): AppModel {
       void createEntry(name, 'file', null, code)
     },
     connectEnv: () => { void localTerminal?.connect() },
-    terminalCommand: (command) => { void localTerminal?.input(`${command}\r`) },
     startAssessment: () => { if (!recordUnit || !current) return
       if (!navigate('assessment', recordUnit)) return
       if (capabilities.assessment && !pendingDecision(cache.current[current.id]!.saved) && needsAssessment(current.id, recordUnit)

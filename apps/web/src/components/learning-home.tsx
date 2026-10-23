@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { StartupField, useStartupField } from '@/components/startup-field';
 import { useTranslation } from 'react-i18next';
 
-/** Shared entry composition; the preview and real app supply their own goal actions. */
+/** Shared entry composition; the caller supplies its own goal actions. */
 export function LearningHome({ children }: { children: ReactNode }) {
   const { t } = useTranslation('home');
   const { field, moveLight, resetLight } = useStartupField();

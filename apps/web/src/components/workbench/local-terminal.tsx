@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { useApp } from '@/app/context'
 import '@xterm/xterm/css/xterm.css'
 
-/** Real transport in the original IDE panel; preview keeps its isolated runner. */
+/** Local terminal transport rendered inside the IDE panel. */
 export function LocalTerminalView() {
   const { t } = useTranslation('workbench')
   const { localTerminal: client, setQuote } = useApp()

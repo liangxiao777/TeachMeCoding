@@ -29,7 +29,7 @@ export function LeftRail() {
   const space = useSpace()
   const { viewRecord, lesson: getLesson, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
-  const reviewing = persistence?.lessonProposals.some((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
+  const reviewing = persistence.lessonProposals.some((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
   const lesson = unit && unit.contentState === 'ready' ? getLesson(unit) : null
   const content = lesson?.content, blocks = content === undefined ? lesson?.blocks : undefined
   const headings = useMemo(() => content !== undefined ? lessonHeadings(content)
@@ -61,7 +61,7 @@ export function LeftRail() {
                 ))}
               </ul>
             ) : (
-              <RailEmpty>{persistence ? t('rail.noContents') : t('rail.generatingContents')}</RailEmpty>
+              <RailEmpty>{t('rail.noContents')}</RailEmpty>
             )}
           </details>
 

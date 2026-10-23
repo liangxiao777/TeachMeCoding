@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  ArrowUpRight,
   Check,
   CircleCheck,
   Copy,
@@ -84,7 +83,7 @@ function CodeBlock({ block, readOnly = false }: { block: Extract<LessonBlock, { 
             {copied ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}
             {copied ? t('controls.copied') : t('controls.copy')}
           </Button>
-          <Button size="xs" disabled={readOnly || (persistence && (!persistence.ready || persistence.busy))} onClick={() => { if (!readOnly) bringToIde(block.code, block.file) }}>
+          <Button size="xs" disabled={readOnly || !persistence.ready || persistence.busy} onClick={() => { if (!readOnly) bringToIde(block.code, block.file) }}>
             <SquareTerminal data-icon="inline-start" />
             {t('controls.bringToIde')}
           </Button>
@@ -108,7 +107,7 @@ function Practice({ question, children, onAsk, readOnly = false }: { question: s
     <section aria-label={t('lesson.practice')} className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-5">
       <header className="flex items-center justify-between gap-3">
         <p className="flex items-center gap-2 text-sm font-medium"><Target className="size-4 text-primary" aria-hidden />{t('lesson.practice')}</p>
-        <Button variant="outline" size="xs" disabled={readOnly || !question.trim() || (persistence && (!persistence.ready || persistence.busy))}
+        <Button variant="outline" size="xs" disabled={readOnly || !question.trim() || !persistence.ready || persistence.busy}
           onClick={() => { if (readOnly) return; setQuote({ source: 'lesson', label: t('common:quotes.practice', { title: unit?.title ?? t('common:quotes.lessonFallback') }), caption: { kind: 'practice', name: unit?.title ?? '' }, text: question }); onAsk?.() }}>
           <MessageSquareQuote data-icon="inline-start" />{t('controls.ask')}
         </Button>
@@ -206,47 +205,6 @@ function LessonProposalPreview({ proposal, inDrawer }: { proposal: LessonProposa
   </div>
 }
 
-function MoveDiagram() {
-  const { t } = useTranslation('preview')
-  const Cell = ({ name, valid }: { name: string; valid: boolean }) => (
-    <div
-      className={
-        valid
-          ? 'flex items-center justify-between rounded-md border-2 border-primary bg-primary/5 px-3 py-2'
-          : 'flex items-center justify-between rounded-md border-2 border-dashed border-input px-3 py-2 text-muted-foreground line-through'
-      }
-    >
-      <span className="font-mono text-sm">{name}</span>
-      <span className="font-mono text-xs">{valid ? t('moveDiagram.valid') : t('moveDiagram.invalid')}</span>
-    </div>
-  )
-  return (
-    <figure className="flex flex-col gap-3 rounded-lg border bg-card p-5">
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">{t('moveDiagram.stack', { statement: 'let s2 = s1;' })}</p>
-          <Cell name="s1" valid={false} />
-          <Cell name="s2" valid />
-        </div>
-        <ArrowUpRight className="size-5 rotate-45 text-primary" aria-hidden />
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-medium text-muted-foreground">{t('moveDiagram.heap')}</p>
-          <div className="flex gap-1 font-mono text-sm">
-            {'hello'.split('').map((c, i) => (
-              <span key={i} className="flex size-9 items-center justify-center rounded border bg-muted">
-                {c}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      <figcaption className="text-xs leading-relaxed text-muted-foreground">
-        {t('moveDiagram.caption')}
-      </figcaption>
-    </figure>
-  )
-}
-
 function Block({ block }: { block: LessonBlock }) {
   switch (block.type) {
     case 'markdown':
@@ -296,8 +254,6 @@ function Block({ block }: { block: LessonBlock }) {
           ))}
         </ItemGroup>
       )
-    case 'diagram-move':
-      return <MoveDiagram />
   }
 }
 
@@ -306,7 +262,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
   const space = useSpace()
   const { setQuote, retryGeneration, setView, viewRecord, lesson: getLesson, capabilities, persistence } = useApp()
   const unit = findUnit(space, space.currentUnitId)
-  const proposal = persistence?.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
+  const proposal = persistence.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [pop, setPop] = useState<{ x: number; y: number; text: string } | null>(null)
   const memKey = `${space.id}:${unit?.id}${inDrawer ? ':drawer' : ''}`
@@ -418,9 +374,9 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
           <Generating
             className="py-6"
             title={t('lesson.generating')}
-            steps={persistence ? [t('lesson.analyzeUnit'), t('lesson.generateContent'), t('lesson.organizeContent'), t('lesson.save')] : [t('lesson.reviewGoals'), t('lesson.reviewHistory'), t('lesson.organizeExamples'), t('lesson.preparePractice')]}
-            parts={persistence ? persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? [] : undefined}
-            context={<RunContext runId={persistence?.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id} />}
+            steps={[t('lesson.analyzeUnit'), t('lesson.generateContent'), t('lesson.organizeContent'), t('lesson.save')]}
+            parts={persistence.taskParts[persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id ?? ''] ?? []}
+            context={<RunContext runId={persistence.tasks.findLast((t) => t.unitId === unit.id && t.kind === 'lesson')?.id} />}
             note={t('lesson.generationNote')}
           />
         )}
@@ -439,7 +395,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent className="flex-row justify-center">
-              <Button disabled={!capabilities.agent || !!persistence?.busy || !!persistence && !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>
+              <Button disabled={!capabilities.agent || persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>
                 <RotateCcw data-icon="inline-start" />
                 {t('controls.regenerate')}
               </Button>
@@ -457,7 +413,7 @@ export function LessonReader({ inDrawer = false, onAsk }: { inDrawer?: boolean; 
               <EmptyDescription>{t('lesson.unavailableHint')}</EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              {persistence && capabilities.agent && <Button disabled={persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>{t('lesson.generate')}</Button>}
+              {capabilities.agent && <Button disabled={persistence.busy || !!pendingDecision(persistence)} onClick={() => retryGeneration(unit.id)}>{t('lesson.generate')}</Button>}
               <Button variant="outline" onClick={() => setView('route')}>{t('lesson.backToPath')}</Button>
             </EmptyContent>
           </Empty>

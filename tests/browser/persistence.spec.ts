@@ -114,7 +114,6 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await page.goto(url);
   await expect(page.getByText('独立保存的需求问题', { exact: true })).toHaveCount(1);
   await expect(visible(page, '回复 Agent')).toHaveValue('');
-  await expect(page.getByTestId('fixture-notice')).toHaveCount(0);
 });
 
 test('a delayed requirement response preserves sessions created while saving', async ({ page }, info) => {
@@ -535,14 +534,13 @@ test('autosave preserves reverted text across pending writes, closed tabs, renam
   await expect(renamed).toHaveText('// original 17', { useInnerText: true });
 });
 
-test('unavailable business API displays a retryable failure, never demo spaces', async ({ page }, info) => {
+test('unavailable business API displays a retryable failure without stale spaces', async ({ page }, info) => {
   await page.route('**/api/spaces', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '测试服务暂时不可用' }) }));
   await page.goto('/');
   await expect(page.getByRole('alert')).toContainText('测试服务暂时不可用');
   await visible(page, '你想学什么').fill('服务恢复前不能创建空间');
   await expect(page.getByRole('button', { name: '开始', exact: true })).toBeDisabled();
   await expect(spaceCard(page, '存储验收 Rust')).toHaveCount(0);
-  await expect(page.getByTestId('fixture-notice')).toHaveCount(0);
   await shot(page, info, 'load-error');
   await page.unroute('**/api/spaces');
   await page.getByRole('button', { name: '重试', exact: true }).click();

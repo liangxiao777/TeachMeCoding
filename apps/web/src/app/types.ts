@@ -35,13 +35,6 @@ export interface Quote {
   provenance?: import('@teach-me-coding/contracts').Quote['provenance']
 }
 
-export type RouteActionKind = 'skip-basics' | 'project-first'
-
-export interface RouteAction {
-  kind: RouteActionKind
-  applied: boolean
-}
-
 export type MessageStatus = 'thinking' | 'streaming' | 'done' | 'stopped' | 'error'
 
 export interface Message {
@@ -59,7 +52,6 @@ export interface Message {
   notice?: import('@teach-me-coding/contracts').BusinessErrorResponse
   sequence?: number
   inAssessment?: boolean
-  action?: RouteAction
   createdAt: number
 }
 
@@ -90,14 +82,6 @@ export interface ProjectDirectory {
   parentId: string | null
 }
 
-export interface TermLine {
-  id: string
-  runId: string
-  kind: 'cmd' | 'out' | 'err' | 'info'
-  text: string
-  notice?: import('@/i18n/notice').UiNotice
-}
-
 export type EnvStatus = 'disconnected' | 'connecting' | 'connected' | 'lost'
 
 export interface AssessmentDraft {
@@ -105,8 +89,6 @@ export interface AssessmentDraft {
   state: 'generating' | 'ready' | 'evaluating'
   q1: string
   q2: string
-  q2Output: TermLine[] | null
-  q2Running: boolean
   attempt: number
 }
 
@@ -167,9 +149,6 @@ export interface Space {
   selectedEntryId: string | null
   openFileIds: string[]
   activeFileId: string | null
-  terminal: TermLine[]
-  terminalDirectoryId: string | null
-  running: boolean
   env: EnvStatus
   envLabel: string
   ideOpen: boolean
@@ -183,17 +162,10 @@ export interface Space {
   lastActive: number
 }
 
-export interface Controls {
-  failNextReply: boolean
-  failNextGeneration: boolean
-  assessmentOverride: 'auto' | 'pass' | 'needs_work'
-}
-
 export interface AppState {
   spaces: Space[]
   currentSpaceId: string | null
   globalView: 'home' | 'spaces'
-  controls: Controls
 }
 
 export type LessonBlock =
@@ -204,7 +176,6 @@ export type LessonBlock =
   | { type: 'code'; file: string; language: string; code: string; caption?: string }
   | { type: 'callout'; title: string; text: string }
   | { type: 'practice'; items: string[] }
-  | { type: 'diagram-move' }
 
 export interface Lesson {
   title?: string

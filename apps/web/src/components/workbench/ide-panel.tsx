@@ -8,7 +8,6 @@ import { usePanelRef } from 'react-resizable-panels'
 import { CodeEditor, type EditorPosition } from '@/components/code-editor'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { entryPath } from '@/app/selectors'
-import { isComposing } from '@/components/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -17,63 +16,9 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useApp, useSpace } from '@/app/context'
 import { cn } from '@/lib/utils'
-import type { TermLine } from '@/app/types'
 import { LocalTerminalView } from './local-terminal'
 
 export { CodeEditor } from '@/components/code-editor'
-
-export function TermOutput({ lines, onAsk }: { lines: TermLine[]; onAsk?: (text: string) => void }) {
-  const { t } = useTranslation('workbench')
-  const groups: [TermLine, ...TermLine[]][] = []
-  for (const l of lines) {
-    const last = groups[groups.length - 1]
-    if (last && last[0].runId === l.runId) last.push(l)
-    else groups.push([l])
-  }
-  return (
-    <>
-      {groups.map((g) => {
-        const errs = g.filter((l) => l.kind === 'err')
-        return (
-          <div key={g[0].id} className="flex flex-col">
-            {g.map((l) => (
-              <div
-                key={l.id}
-                className={cn(
-                  'whitespace-pre-wrap break-words',
-                  l.kind === 'cmd' && 'text-ide-foreground',
-                  l.kind === 'out' && 'text-ide-foreground/85',
-                  l.kind === 'err' && 'text-[oklch(0.78_0.13_30)]',
-                  l.kind === 'info' && 'text-ide-foreground/45',
-                )}
-              >
-                {l.kind === 'cmd' ? (
-                  <>
-                    <span className="text-ide-foreground/60">$ </span>
-                    {l.text}
-                  </>
-                ) : (
-                  l.notice ? formatNotice(l.notice) : l.text
-                )}
-              </div>
-            ))}
-            {onAsk && errs.length > 0 && (
-              <Button
-                variant="secondary"
-                size="xs"
-                className="my-1.5 w-fit font-sans"
-                onClick={() => onAsk(errs.map((l) => l.notice ? formatNotice(l.notice) : l.text).join('\n'))}
-              >
-                <MessageSquareQuote data-icon="inline-start" />
-                {t('ide.askError')}
-              </Button>
-            )}
-          </div>
-        )
-      })}
-    </>
-  )
-}
 
 function EnvChip() {
   const { t } = useTranslation('workbench')
@@ -116,7 +61,6 @@ export function IdePanel() {
     updateFile,
     toggleIde,
     setQuote,
-    terminalCommand,
     createFile,
     setIdeFullscreen,
     connectEnv,
@@ -125,13 +69,6 @@ export function IdePanel() {
     localTerminal,
   } = useApp()
   const [selected, setSelected] = useState('')
-  const [terminalSelection, setTerminalSelection] = useState('')
-  const [cmd, setCmd] = useState('')
-  const history = useRef<string[]>([])
-  const historyIndex = useRef(0)
-  const draft = useRef('')
-  const termInput = useRef<HTMLInputElement>(null)
-  const termEnd = useRef<HTMLDivElement>(null)
   const activeTab = useRef<HTMLButtonElement>(null)
   const file = space.files.find((f) => f.id === space.activeFileId)
   const positions = useRef(new Map<string, EditorPosition>())
@@ -151,10 +88,6 @@ export function IdePanel() {
   useEffect(() => {
     activeTab.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [space.activeFileId, space.ideFullscreen, space.agentOpen])
-
-  useEffect(() => {
-    termEnd.current?.scrollIntoView({ block: 'end' })
-  }, [space.terminal, space.running])
 
   const askCode = () => {
     if (!file) return
@@ -218,7 +151,7 @@ export function IdePanel() {
             })}
         </div>
         {!space.ideFullscreen && <EnvChip />}
-        {persistence && file && (
+        {file && (
           <span role="status" title={formatNotice(persistence.fileSaveError) || undefined} className="shrink-0 text-[10px] text-muted-foreground">
             {persistence.fileSaveError ? t('ide.saveFailed') : persistence.fileDirty ? t('ide.saving') : t('ide.saved')}
           </span>
@@ -279,7 +212,7 @@ export function IdePanel() {
               label={t('ide.editFile', { name: file.name })}
               filename={file.name}
               value={file.content}
-              disabled={persistence?.fileRenaming}
+              disabled={persistence.fileRenaming}
               position={positions.current.get(file.id)}
               onChange={(v) => updateFile(file.id, v)}
               onSelectText={setSelected}
@@ -297,7 +230,7 @@ export function IdePanel() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={persistence && (!persistence.ready || persistence.busy)}
+                  disabled={!persistence.ready || persistence.busy}
                   onClick={() => createFile(space.kind === 'pytorch' ? 'scratch.py' : 'scratch.rs')}
                 >
                   <Plus data-icon="inline-start" />
@@ -316,46 +249,19 @@ export function IdePanel() {
           maxSize="65%"
           className="flex min-h-0 min-w-0 flex-col"
         >
+          {/* A terminal client exists only once the local service reports terminal support. */}
           {localTerminal ? (space.ideOpen ? <LocalTerminalView /> : null) : <>
           <div className="flex h-9 shrink-0 items-center justify-between border-b pr-1.5 pl-3">
             <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <TerminalSquare className="size-3.5" aria-hidden />
               {t('ide.terminal')}
-              <span className="font-normal opacity-60">{!capabilities.terminal ? t('ide.notConnected') : persistence ? '' : t('ide.prototype')}</span>
+              <span className="font-normal opacity-60">{t('ide.notConnected')}</span>
             </span>
             <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={t('ide.quoteTerminal')}
-                title={t('ide.quoteHint')}
-                disabled={!space.terminal.length}
-                onClick={() =>
-                  setQuote({
-                    source: 'terminal',
-                    label: t('ide.terminalOutput'),
-                    caption: { kind: 'terminal' },
-                    text:
-                      terminalSelection ||
-                      space.terminal
-                        .filter((l) => l.runId === space.terminal.at(-1)?.runId)
-                        .map((l) => l.notice ? formatNotice(l.notice) : l.text)
-                        .join('\n'),
-                  })
-                }
-              >
+              <Button variant="ghost" size="icon-xs" aria-label={t('ide.quoteTerminal')} title={t('ide.quoteHint')} disabled>
                 <MessageSquareQuote />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                disabled={!capabilities.terminal}
-                onClick={() => {
-                  terminalCommand('clear')
-                  setTerminalSelection('')
-                }}
-                aria-label={t('ide.clearTerminal')}
-              >
+              <Button variant="ghost" size="icon-xs" disabled aria-label={t('ide.clearTerminal')}>
                 <Trash2 />
               </Button>
             </div>
@@ -363,78 +269,20 @@ export function IdePanel() {
           <div
             aria-label={t('ide.terminalContent')}
             className="min-h-0 flex-1 cursor-text overflow-y-auto px-3 py-2 font-mono text-[13px] leading-5"
-            onMouseUp={() => setTerminalSelection(window.getSelection()?.toString() ?? '')}
-            onClick={() => {
-              if (!window.getSelection()?.toString()) termInput.current?.focus()
-            }}
           >
-            <div role="log" aria-label={t('ide.terminalOutput')}>
-              <TermOutput lines={space.terminal} />
-            </div>
-            {!capabilities.terminal && (
-              <p role="status" className="mb-3 text-muted-foreground">{t('ide.unavailableHint')}</p>
-            )}
-            {!space.running && (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  const command = cmd.trim()
-                  if (!capabilities.terminal || !command) return
-                  if (history.current.at(-1) !== command) history.current.push(command)
-                  historyIndex.current = history.current.length
-                  draft.current = ''
-                  setTerminalSelection('')
-                  terminalCommand(command)
-                  setCmd('')
-                }}
-                className="flex items-center gap-2"
-              >
-                <span className="shrink-0 text-ide-foreground/60" aria-hidden>
-                  {entryPath(space, space.terminalDirectoryId)
-                    ? `/${entryPath(space, space.terminalDirectoryId)} $`
-                    : '$'}
-                </span>
-                <input
-                  ref={termInput}
-                  aria-label={t('ide.terminalCommand')}
-                  disabled={!capabilities.terminal}
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  spellCheck={false}
-                  value={cmd}
-                  onChange={(e) => {
-                    setCmd(e.target.value)
-                    historyIndex.current = history.current.length
-                    draft.current = e.target.value
-                  }}
-                  onKeyDown={(e) => {
-                    if (!capabilities.terminal) return
-                    if (isComposing(e)) {
-                      if (e.key === 'Enter') e.preventDefault()
-                      return
-                    }
-                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                      e.preventDefault()
-                      const next = Math.max(
-                        0,
-                        Math.min(history.current.length, historyIndex.current + (e.key === 'ArrowUp' ? -1 : 1)),
-                      )
-                      historyIndex.current = next
-                      const value = history.current[next] ?? draft.current
-                      setCmd(value)
-                      requestAnimationFrame(() => termInput.current?.setSelectionRange(value.length, value.length))
-                    }
-                    if (e.ctrlKey && e.key.toLowerCase() === 'l') {
-                      e.preventDefault()
-                      terminalCommand('clear')
-                      setTerminalSelection('')
-                    }
-                  }}
-                  className="h-5 min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-inherit caret-ide-foreground outline-none"
-                />
-              </form>
-            )}
-            <div ref={termEnd} />
+            <div role="log" aria-label={t('ide.terminalOutput')} />
+            <p role="status" className="mb-3 text-muted-foreground">{t('ide.unavailableHint')}</p>
+            <form className="flex items-center gap-2">
+              <span className="shrink-0 text-ide-foreground/60" aria-hidden>$</span>
+              <input
+                aria-label={t('ide.terminalCommand')}
+                disabled
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                className="h-5 min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-inherit caret-ide-foreground outline-none"
+              />
+            </form>
           </div>
           </>}
         </ResizablePanel>
