@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="LICENSE"><img alt="License Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" /></a>
   <img alt="Node 24.15" src="https://img.shields.io/badge/node-24.15-339933?logo=node.js&logoColor=white" />
   <img alt="pnpm 11.1" src="https://img.shields.io/badge/pnpm-11.1-F69220?logo=pnpm&logoColor=white" />
   <img alt="平台 macOS arm64" src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey?logo=apple" />
@@ -138,4 +139,6 @@ pnpm start
 
 ## 许可证
 
-尚未选择开源许可证。在仓库添加 `LICENSE` 文件之前，代码保留所有权利。
+本项目基于 [Apache License 2.0](LICENSE) 开源。
+
+Copyright 2026 lxiao（[@liangxiao777](https://github.com/liangxiao777)）

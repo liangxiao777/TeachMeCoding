@@ -42,3 +42,7 @@ pnpm check:i18n                 # 涉及界面文案时
 ```
 
 不要提交 `.env`、数据目录中的文件或 `agent-debug/` 中的调试快照。
+
+## 许可
+
+提交到本仓库的贡献，按 [Apache License 2.0](LICENSE) 授权，与项目本身的许可证一致。

@@ -1,6 +1,7 @@
 {
   "name": "teach-me-coding",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.1.0",
   "engines": { "node": ">=24.15.0 <25", "pnpm": "11.1.0" },
