@@ -150,12 +150,13 @@ test('assessment history preserves authored feedback without guessing Chinese te
 
 test('each case uses original source, quoted args stay data, and temporary directories are removed', async () => {
   const arg = "a'; touch injected; printf 'b";
-  const f = fixture({ language: 'javascript', cases: [{ args: [arg], expected: arg }, { args: ['second'], expected: 'second' }] });
+  const f = fixture({ language: 'javascript', cases: [{ args: [arg], expected: arg }, { args: ['second'], expected: 'second' },
+    { args: ['/literal-not-a-path'], expected: '/literal-not-a-path' }, { args: ['C:\\课程 空格\\file.txt'], expected: 'C:\\课程 空格\\file.txt' }] });
   try {
     const code = `console.log(process.argv[2]); console.error(process.cwd()); require('node:fs').writeFileSync('answer.js', 'throw new Error("modified")');`;
     const e = f.executions.create(f.space, f.unit, { specRevision: 1, code });
     const completed = await f.executions.run(f.space, e.id);
-    assert.deepEqual(completed.results.map((r) => r.matches), [true, true]);
+    assert.deepEqual(completed.results.map((r) => r.matches), [true, true, true, true]);
     for (const r of completed.results) { assert.ok(r.result.stderr?.includes('tmc-code-')); assert.equal(existsSync(r.result.stderr!.trim()), false); }
     assert.notEqual(completed.results[0]!.result.stderr, completed.results[1]!.result.stderr);
     assert.deepEqual(await f.executions.run(f.space, e.id), completed);
@@ -174,14 +175,15 @@ test('limits apply across cases and setup failure leaves explicit failed evidenc
     assert.deepEqual(result.results.map((r) => r.result.status), ['succeeded', 'output-limit']);
     assert.equal(readFileSync(marker, 'utf8'), 'X');
     assert.equal(result.state, 'failed');
-    const original = process.env.TMPDIR;
+    const temporaryKey = process.platform === 'win32' ? 'TEMP' : 'TMPDIR';
+    const original = process.env[temporaryKey];
     try {
-      process.env.TMPDIR = join(f.root, 'absent');
+      process.env[temporaryKey] = join(f.root, 'absent');
       const missing = f.executions.create(f.space, f.unit, { specRevision: 1, code });
       const failed = await f.executions.run(f.space, missing.id);
       assert.equal(failed.state, 'failed'); assert.deepEqual(failed.error, { code: 'CODE_EXECUTION_FAILED' });
       assert.equal(failed.results.length, 0); assert.equal(readFileSync(marker, 'utf8'), 'X');
-    } finally { if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original; }
+    } finally { if (original === undefined) delete process.env[temporaryKey]; else process.env[temporaryKey] = original; }
   } finally { await f.close(); }
 });
 

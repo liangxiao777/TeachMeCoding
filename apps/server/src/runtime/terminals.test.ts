@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { stripVTControlCharacters } from 'node:util';
 import { WebSocket } from 'ws';
 import type { TerminalEvent } from '@teach-me-coding/contracts';
 import { Terminals } from './terminals.js';
@@ -27,7 +28,7 @@ test('protected PTY restores one process, resizes, exits, rejects stale input an
     const socket = new WebSocket(`ws://127.0.0.1:${port}/api/terminal/socket?space=test-space`, ['tmc-terminal', `tmc-token.${access.token}`], { origin: `http://127.0.0.1:${port}` });
     const events: TerminalEvent[] = [];
     socket.on('message', (raw) => events.push(JSON.parse(raw.toString()))); clients.push(socket);
-    return { socket, events, output: () => events.map((e) => e.type === 'data' ? e.data : e.type === 'snapshot' ? e.output : '').join('') };
+    return { socket, events, output: () => stripVTControlCharacters(events.map((e) => e.type === 'data' ? e.data : e.type === 'snapshot' ? e.output : '').join('')) };
   };
   const denied = new WebSocket(`ws://127.0.0.1:${port}/api/terminal/socket?space=test-space`, ['tmc-terminal'], { origin: `http://127.0.0.1:${port}` });
   denied.on('error', () => {});
@@ -44,7 +45,8 @@ test('protected PTY restores one process, resizes, exits, rejects stale input an
   const id = snapshot.id;
   const send = (socket: WebSocket, type: string, rest = {}) => socket.send(JSON.stringify({ type, id, ...rest }));
   send(first.socket, 'resize', { cols: 103, rows: 37 });
-  send(first.socket, 'input', { data: `printf 'PID=%s\\n' $$; stty size; printenv TMC_SYNTHETIC_SECRET; printf 'SECRET_STATUS=%s\\n' $?; pwd\r` });
+  // Git Bash's $$ is an MSYS PID, not a native PID usable by process.kill.
+  send(first.socket, 'input', { data: `node -e 'console.log("PID="+process.ppid); console.log(process.stdout.rows+" "+process.stdout.columns)'; printenv TMC_SYNTHETIC_SECRET; printf 'SECRET_STATUS=%s\\n' $?; pwd\r` });
   await until(() => /SECRET_STATUS=1\r?\n/.test(first.output()));
   assert.match(first.output(), /37 103/);
   assert.ok(!first.output().includes('must-not-reach-pty'));
@@ -66,7 +68,8 @@ test('protected PTY restores one process, resizes, exits, rejects stale input an
   await until(() => restored.events.some((e) => e.type === 'error'));
   const current = restored.events.find((e) => e.type === 'snapshot' && e.id !== id)!;
   if (current.type !== 'snapshot') return;
-  restored.socket.send(JSON.stringify({ type: 'input', id: current.id, data: "sleep 99 & echo $! > background.pid; sleep 98 & echo $! > foreground.pid; wait\r" }));
+  restored.socket.send(JSON.stringify({ type: 'input', id: current.id,
+    data: `node -e 'require("node:fs").writeFileSync("background.pid", String(process.pid)); setInterval(()=>{},1000)' & node -e 'require("node:fs").writeFileSync("foreground.pid", String(process.pid)); setInterval(()=>{},1000)'\r` }));
   let pids: number[] = [];
   await until(() => { try { pids = ['background.pid', 'foreground.pid'].map((p) => Number(readFileSync(join(root, p), 'utf8'))); return pids.every(Boolean); } catch { return false; } });
   await terminals.close();

@@ -3,8 +3,8 @@ import { spawn, type IPty } from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import type { TerminalEvent } from '@teach-me-coding/contracts';
-import { terminalEnvironment } from './terminal-env.js';
-import { descendants, stopProcesses } from './processes.js';
+import { bashShell } from './shell.js';
+import { stopProcessTree } from './processes.js';
 
 const messageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('input'), id: z.string(), data: z.string().max(65536) }).strict(),
@@ -31,9 +31,10 @@ export class Terminals {
   private start(space: string): Session {
     if (this.closing) throw new Error('SERVICE_CLOSING');
     // Do not source user shell startup files, which can reintroduce credentials.
-    const pty = spawn('/bin/bash', ['--noprofile', '--norc', '-i'], {
+    const shell = bashShell();
+    const pty = spawn(shell.file, [...shell.args, '-i'], {
       name: 'xterm-256color', cwd: this.directory(space), cols: 80, rows: 24,
-      env: { ...terminalEnvironment(process.env), PS1: '$ ', HISTFILE: '/dev/null', BASH_SILENCE_DEPRECATION_WARNING: '1',
+      env: { ...shell.env, PS1: '$ ', HISTFILE: '/dev/null', BASH_SILENCE_DEPRECATION_WARNING: '1',
         PROMPT_COMMAND: `trap 'for job in $(jobs -pr); do kill -KILL -- -"$job" 2>/dev/null; done' EXIT; unset PROMPT_COMMAND` },
     });
     let resolve!: () => void;
@@ -85,8 +86,9 @@ export class Terminals {
   private stop(session: Session) {
     if (session.exit || session.stopping) return;
     session.stopping = true;
-    const done = stopProcesses(descendants(session.pty.pid)).then(() => session.done);
-    this.cleanups.add(done); void done.finally(() => this.cleanups.delete(done));
+    const done = stopProcessTree(session.pty.pid).then(() => session.done);
+    this.cleanups.add(done);
+    void done.then(() => this.cleanups.delete(done), () => this.cleanups.delete(done));
   }
   async close() {
     this.closing = true;

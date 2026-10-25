@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { AuthCheck, AuthResult, CredentialStore, Models } from '@earendil-works/pi-ai';
 import type { WebSearchResult } from '@teach-me-coding/contracts';
+import { descendants, stopProcesses } from '../runtime/processes.js';
 
 export interface CodexAuthSource {
   checkAuth(signal?: AbortSignal): Promise<AuthCheck | undefined>;
@@ -235,6 +236,23 @@ class Rpc {
 
   async close() {
     this.closing = true;
+    if (process.platform === 'win32') {
+      // Snapshot before closing stdin: codex.js can exit before its native
+      // child, which may still own the private workspace or inherited pipes.
+      const pids = this.child.pid ? descendants(this.child.pid) : [];
+      this.child.stdin.end();
+      await stopProcesses(pids);
+      await this.exited;
+      this.frame = ''; this.pending.clear();
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (pids.every((pid) => {
+          try { process.kill(pid, 0); return false; }
+          catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+        })) return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('Codex search process tree did not exit.');
+    }
     this.child.stdin.end();
     // codex.js owns a native child. A detached POSIX group terminates both, not
     // just the JS wrapper. This is capability isolation, NOT OS-level containment.
@@ -422,12 +440,10 @@ export async function runCodexSearch(query: string, count: number, auth: CodexAu
     const command = process.execPath;
     const args = [createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js'), 'app-server', '--listen', 'stdio://',
       ...Object.entries(restrictions).flatMap(([name, value]) => ['-c', `${name}=${JSON.stringify(value)}`])];
-    // Windows lacks POSIX process groups; do not silently weaken tree cleanup.
-    if (process.platform === 'win32') throw new Error('Codex search requires POSIX process-group cleanup.');
     let child: ChildProcessWithoutNullStreams;
     try {
       child = (options.launch ?? ((executable, argv, settings) => spawn(executable, [...argv], { ...settings, stdio: 'pipe' })))(command, args,
-        { cwd, env: privateEnvironment(home, root), detached: true });
+        { cwd, env: privateEnvironment(home, root), detached: process.platform !== 'win32', windowsHide: true });
     } catch { throw new Error('Codex search process could not start.'); }
     rpc = new Rpc(child);
     rpc.onFailure = (error) => { lifetime.abort(); collector?.fail(error); };

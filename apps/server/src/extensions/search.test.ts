@@ -179,7 +179,7 @@ test('search defaults off, keeps provider-specific credentials, and writes a pri
     service.save({ provider: 'tavily', apiKey: 'synthetic-tavily-secret' });
     service.save({ enabled: false }); service.save({ provider: 'brave', apiKey: '' });
     assert.deepEqual(await service.tools(), []);
-    assert.equal(lstatSync(path).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(lstatSync(path).mode & 0o777, 0o600);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { enabled: false, provider: 'brave',
       apiKeys: { brave: 'synthetic-brave-secret', tavily: 'synthetic-tavily-secret' } });
     const reopened = new SearchService(path);

@@ -193,16 +193,24 @@ test('finite local commands report failure, absence, limits and cancellation and
     const result = await runCommand('printf "OUT:%s" "${OPENROUTER_API_KEY-unset}"; printf ERR >&2; exit 9', root, controller.signal);
     assert.equal(result.status, 'failed'); assert.equal(result.exitCode, 9); assert.match(result.output, /OUT:unset/); assert.match(result.output, /ERR/);
     assert.equal((await runCommand('tmc_missing_tool_abcdef', root, controller.signal)).status, 'unavailable');
-    const timed = await runCommand('echo $$ > parent; sleep 30 & echo $! > child; wait', root, controller.signal, { milliseconds: 200, outputBytes: 1024 });
+    writeFileSync(join(root, 'tree.cjs'), `
+const fs = require('node:fs'), { spawn } = require('node:child_process');
+fs.writeFileSync('parent', String(process.pid));
+const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+fs.writeFileSync('child', String(child.pid));
+setInterval(()=>{},1000);
+`);
+    const timed = await runCommand('node tree.cjs', root, controller.signal, { milliseconds: 1500, outputBytes: 1024 });
     assert.equal(timed.status, 'timed-out');
     for (const name of ['parent', 'child']) assert.throws(() => process.kill(Number(readFileSync(join(root, name), 'utf8')), 0), { code: 'ESRCH' });
     const full = await runCommand('while :; do printf 1234567890; done', root, controller.signal, { milliseconds: 1000, outputBytes: 31 });
     assert.equal(full.status, 'output-limit'); assert.equal(Buffer.byteLength(full.output), 31);
-    const work = runCommand('echo $$ > cancel-parent; sleep 30', root, controller.signal);
-    await new Promise((r) => setTimeout(r, 100)); controller.abort();
+    const work = runCommand(`node -e 'require("node:fs").writeFileSync("cancel-parent", String(process.pid)); setInterval(()=>{},1000)'`, root, controller.signal);
+    for (let attempt = 0; attempt < 200 && !existsSync(join(root, 'cancel-parent')); attempt++) await new Promise((r) => setTimeout(r, 20));
+    assert.ok(existsSync(join(root, 'cancel-parent'))); controller.abort();
     assert.equal((await work).status, 'cancelled');
     assert.throws(() => process.kill(Number(readFileSync(join(root, 'cancel-parent'), 'utf8')), 0), { code: 'ESRCH' });
-    const normal = await runCommand('sleep 30 & echo $! > background; echo clean', root, new AbortController().signal);
+    const normal = await runCommand(`node -e 'require("node:fs").writeFileSync("background", String(process.pid)); setInterval(()=>{},1000)' & while [ ! -f background ]; do sleep 0.02; done; echo clean`, root, new AbortController().signal);
     assert.equal(normal.status, 'succeeded');
     assert.throws(() => process.kill(Number(readFileSync(join(root, 'background'), 'utf8')), 0), { code: 'ESRCH' });
   } finally { if (previous === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = previous; rmSync(root, { recursive: true, force: true }); }

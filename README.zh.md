@@ -16,7 +16,7 @@
   <a href="LICENSE"><img alt="License Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" /></a>
   <img alt="Node 24.15" src="https://img.shields.io/badge/node-24.15-339933?logo=node.js&logoColor=white" />
   <img alt="pnpm 11.1" src="https://img.shields.io/badge/pnpm-11.1-F69220?logo=pnpm&logoColor=white" />
-  <img alt="平台 macOS arm64" src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey?logo=apple" />
+  <img alt="平台 macOS、Linux、Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" />
   <img alt="状态 alpha" src="https://img.shields.io/badge/status-alpha-orange" />
 </p>
 
@@ -76,7 +76,7 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 项目处于早期开发阶段，尚未发布正式版本，功能、接口和数据格式都可能变化。
 
-目前只在 **macOS 26 / arm64、Node 24.15.0、Google Chrome** 上验证过，Linux、Windows 和 Intel Mac 尚未验证。
+源码安装面向 **macOS、Linux（Ubuntu/Debian）以及原生 Windows 10（1809+）/ Windows 11**。已在 **macOS 26 / arm64 + Google Chrome** 验证，并在 **Docker 中的 Debian 12 / arm64** 通过安装、构建、测试及 SQLite、PTY 检查，均使用 Node 24.15.0。原生 Windows、Linux 浏览器测试和 Intel Mac 尚未验证；已提供三平台 CI 工作流。
 
 ## 快速开始
 
@@ -84,12 +84,24 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 - [Node.js](https://nodejs.org/) 24.15.0
 - [pnpm](https://pnpm.io/) 11.1.0
-- Python 3、C/C++ 编译器和 make，用于编译原生依赖。macOS 安装 Xcode Command Line Tools 即可。
-- 可选：代码测评所需的语言工具链，如 `python3`、`node`、`rustc`。
+- Git 和 Bash；Windows 需安装 [Git for Windows](https://gitforwindows.org/) 提供 Bash。Agent 命令和 IDE 终端使用 Bash，不使用 PowerShell 或 WSL。
+
+原生依赖（`better-sqlite3`、`node-pty`）在没有可用预编译二进制时需要 Python 3 和编译工具。macOS 的 `node-pty` 补丁始终从源码编译。
+
+| 系统 | 原生编译依赖 |
+| --- | --- |
+| macOS | Python 3 和 Xcode Command Line Tools（`xcode-select --install`） |
+| Linux（Ubuntu/Debian） | `sudo apt-get update && sudo apt-get install -y git bash build-essential python3` |
+| 原生 Windows 10（1809+）/ Windows 11 | `PATH` 中的 Python 3，以及 Visual Studio 2022 / Build Tools 的 **Desktop development with C++（使用 C++ 的桌面开发）**工作负载和 Windows SDK |
+
+代码测评需要的其他语言工具链（如 `rustc`）请自行安装并加入 `PATH`。Python 测评优先使用 `python3`，找不到时回退到 `python`。Agent 不会自动安装缺少的工具链。
 
 ### 安装与启动
 
+以下命令从源码运行本地 Node/Web 应用，可在 macOS/Linux shell，以及原生 Windows 的 Git Bash、PowerShell 或 cmd 中执行。**即使从 PowerShell 或 cmd 启动 pnpm，仍需安装 Git for Windows Bash**。安装工具后请重新打开终端，使更新后的 `PATH` 生效。
+
 ```sh
+npm install --global pnpm@11.1.0
 git clone https://github.com/liangxiao777/TeachMeCoding.git
 cd TeachMeCoding
 pnpm install --frozen-lockfile
@@ -101,7 +113,7 @@ pnpm start
 
 ### 配置模型
 
-打开「设置 → 模型配置」，选择 Provider、模型和登录方式。凭据只保存在本机的数据目录中（默认 `~/.teach-me-coding/`），不会返回浏览器。
+打开「设置 → 模型配置」，选择 Provider、模型和登录方式。凭据只保存在本机的数据目录中（默认 `~/.teach-me-coding/`，Windows 为 `%USERPROFILE%\.teach-me-coding\`），不会返回浏览器。
 
 ## 使用方式
 

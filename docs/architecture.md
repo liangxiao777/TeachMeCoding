@@ -87,8 +87,11 @@ Other behavior:
 
 Terminals in both the regular and fullscreen IDE use xterm connected to a real PTY, with the current space's project directory as the working directory. Each space reuses one shell. Refreshing the page or reconnecting does not replay input or terminate the shell. Terminal input waits for the editor's autosave to finish so commands use the latest file contents.
 
+The PTY launches resolved Bash. On native Windows this is Git for Windows Bash, not PowerShell or WSL.
+
 ### Agent Bash
 
+- Commands use the same resolved Bash as the IDE terminal, without loading shell startup profiles.
 - There is no default per-command timeout. The model can supply an optional `timeout`; stopping the Agent cancels the command.
 - The model sees the last 2,000 lines or 50 KiB of output. Full output is written to `bash-output/` in the data directory for further reading during the current run, then cleaned up when the run ends.
 - Raw output is capped at 32 MiB per command. Commands exceeding that limit are terminated to protect disk space.
@@ -100,9 +103,10 @@ The browser's project file API can access only application-managed project direc
 
 ### Code assessments
 
-- Coding questions include an execution plan with the language, command-line arguments, and expected standard output. Supported languages are Python, JavaScript, TypeScript, Rust, and Bash, using locally installed `python3`, `node`, `rustc`, or `/bin/bash`.
+- Coding questions include an execution plan with the language, command-line arguments, and expected standard output. Supported languages are Python, JavaScript, TypeScript, Rust, and Bash, using locally installed toolchains on `PATH`.
+- Python prefers `python3` with a `python` fallback; JavaScript and TypeScript use `node`. Rust compiles with `rustc` to an explicit `answer.exe` and runs that file on every OS. Bash uses the resolved executable (Git for Windows on Windows), not a fixed `/bin/bash` path.
 - Each run uses a code snapshot and a disposable temporary directory. The entire execution is limited to 30 seconds and 256 KiB of output.
-- A coding question passes only if all test cases complete, their output matches expectations, and the model's evaluation also passes. Missing toolchains, errors, timeouts, and cancellations never count as a pass.
+- A coding question passes only if all test cases complete, their output matches expectations, and the model's evaluation also passes. Missing toolchains, errors, timeouts, and cancellations never count as a pass. Users install missing toolchains themselves; the Agent does not automatically install them.
 - Evaluation results identify the evidence type: `execution-verified` (real execution evidence), `unverified` (a coding question without valid execution evidence), or `non-execution` (an analysis-only question).
 - Private grading criteria are stored separately from public questions. They are not sent to the browser or included in the tutor Agent's default context. This is application-level isolation: the Agent's read tools and Bash run with local permissions and can still read database files directly.
 

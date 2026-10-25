@@ -154,7 +154,7 @@
   "MCP_DISCONNECTED": "连接已断开，请重新连接。",
   "MCP_TOOLS_REFRESH_FAILED": "工具列表更新失败，请重新连接。",
   "MCP_CONNECTION_FAILED": "无法连接，请检查命令、地址和认证配置。",
-  "TERMINAL_START_FAILED": "无法启动本机终端，请检查项目目录和 /bin/bash。",
+  "TERMINAL_START_FAILED": "无法启动本机终端，请检查项目目录和 Bash 安装（Windows 需安装 Git for Windows）。",
   "TERMINAL_REQUEST_OUTDATED": "终端请求无效或已过期，请重新连接。",
   "LOGIN_FAILED": "登录失败。",
   "RUN_STOPPED": "运行已停止，不会自动重跑。",

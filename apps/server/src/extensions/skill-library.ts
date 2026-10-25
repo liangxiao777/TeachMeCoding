@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { loadSkills } from '@earendil-works/pi-coding-agent';
 import type { SkillInstallation, SkillLeaderboard, SkillLeaderboardView, SkillSearch } from '@teach-me-coding/contracts';
 import { BusinessError } from '../modules/learning.js';
-import { descendants, stopProcesses } from '../runtime/processes.js';
+import { stopProcessTree } from '../runtime/processes.js';
+import { terminalEnvironment } from '../runtime/terminal-env.js';
 
 const metadataFile = '.tmc-install.json';
 const installationSchema = z.object({
@@ -167,9 +168,11 @@ export class SkillLibrary {
     mkdirSync(home); mkdirSync(temporary);
     const gitConfig = join(project, 'git-config'); writeFileSync(gitConfig, '');
     // Public acquisition never inherits provider keys, Git helpers, SSH agent sockets or real agent homes.
+    const system = terminalEnvironment(process.env);
     const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH, LANG: process.env.LANG, SystemRoot: process.env.SystemRoot,
+      PATH: system.PATH, LANG: system.LANG, SystemRoot: system.SystemRoot, COMSPEC: system.COMSPEC, PATHEXT: system.PATHEXT,
       HOME: home, USERPROFILE: home, TMPDIR: temporary, TMP: temporary, TEMP: temporary,
+      APPDATA: join(home, 'AppData/Roaming'), LOCALAPPDATA: join(home, 'AppData/Local'),
       XDG_CONFIG_HOME: join(home, 'config'), XDG_STATE_HOME: join(home, 'state'), XDG_CACHE_HOME: join(home, 'cache'),
       DISABLE_TELEMETRY: '1', CI: '1', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0',
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gitConfig,
@@ -177,7 +180,7 @@ export class SkillLibrary {
     const child = spawn(process.execPath, args, { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const stop = () => {
       if (!child.pid) return;
-      void stopProcesses(process.platform === 'win32' ? [child.pid] : descendants(child.pid)).catch(() => child.kill('SIGKILL'));
+      void stopProcessTree(child.pid).catch(() => child.kill('SIGKILL'));
     };
     signal.addEventListener('abort', stop, { once: true });
     if (signal.aborted) stop();

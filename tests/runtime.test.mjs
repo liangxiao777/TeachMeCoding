@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { cp, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
@@ -8,18 +8,20 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { createRequire } from 'node:module';
+import { stripVTControlCharacters } from 'node:util';
+import { spawnServer, stopServer } from './server-process.mjs';
 const { WebSocket } = createRequire(new URL('../apps/server/package.json', import.meta.url))('ws');
 
 test('project startup files work from unrelated directories, agree with Vite, and never supply model credentials', { timeout: 15000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'tmc-startup-file-'));
-  const checkout = join(root, 'checkout'), cwd = join(root, 'unrelated'), data = join(root, 'configured data #31');
+  const checkout = join(root, 'checkout'), cwd = join(root, 'unrelated'), data = join(root, 'configured data #31').replaceAll('\\', '/');
   const env = { PATH: process.env.PATH, NODE_ENV: 'production', PORT: '14313', OPENROUTER_API_KEY: 'synthetic-ambient-secret' };
   let child, exited, logs = '';
   try {
     await mkdir(cwd);
     await mkdir(checkout);
     await writeFile(join(checkout, 'package.json'), '{"type":"module"}');
-    for (const path of ['apps/server/dist', 'apps/web/vite.config.ts', 'packages/contracts/dist', 'packages/contracts/package.json', 'packages/contracts/src/startup.ts']) {
+    for (const path of ['scripts/server.mjs', 'apps/server/dist', 'apps/web/vite.config.ts', 'packages/contracts/dist', 'packages/contracts/package.json', 'packages/contracts/src/startup.ts']) {
       await mkdir(dirname(join(checkout, path)), { recursive: true });
       await cp(new URL(`../${path}`, import.meta.url), join(checkout, path), { recursive: true });
     }
@@ -27,14 +29,14 @@ test('project startup files work from unrelated directories, agree with Vite, an
     for (const app of ['server', 'web']) {
       const modules = join(checkout, 'apps', app, 'node_modules');
       await mkdir(join(modules, '@teach-me-coding'), { recursive: true });
-      await symlink(join(checkout, 'packages/contracts'), join(modules, '@teach-me-coding/contracts'), 'dir');
+      await symlink(join(checkout, 'packages/contracts'), join(modules, '@teach-me-coding/contracts'), process.platform === 'win32' ? 'junction' : 'dir');
       const installed = new URL(`../apps/${app}/node_modules/`, import.meta.url);
       for (const name of await readdir(installed)) {
-        if (name !== '@teach-me-coding') await symlink(fileURLToPath(new URL(name, installed)), join(modules, name), 'dir');
+        if (name !== '@teach-me-coding') await symlink(fileURLToPath(new URL(name, installed)), join(modules, name), process.platform === 'win32' ? 'junction' : 'dir');
       }
     }
-    await symlink(fileURLToPath(new URL('../packages/contracts/node_modules', import.meta.url)), join(checkout, 'packages/contracts/node_modules'), 'dir');
-    await symlink(fileURLToPath(new URL('../apps/web/dist', import.meta.url)), join(checkout, 'apps/web/dist'), 'dir');
+    await symlink(fileURLToPath(new URL('../packages/contracts/node_modules', import.meta.url)), join(checkout, 'packages/contracts/node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    await symlink(fileURLToPath(new URL('../apps/web/dist', import.meta.url)), join(checkout, 'apps/web/dist'), process.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(join(checkout, '.env'), [
       `TMC_DATA_DIR=${JSON.stringify(data)}`, 'HOST=127.0.0.1', 'PORT=14312', 'TMC_WEB_PORT=15312',
       'TMC_PREVIEW_ORIGIN=http://127.0.0.1:15412', 'TMC_AGENT_DEBUG_SNAPSHOTS=0', 'NODE_ENV=development',
@@ -55,7 +57,7 @@ test('project startup files work from unrelated directories, agree with Vite, an
     assert.equal(web.port, 15312);
     assert.equal(web.proxy['/api'].target, 'http://127.0.0.1:14313');
     assert.ok(web.headers['Content-Security-Policy'].includes('http://127.0.0.1:15412'));
-    child = spawn(process.execPath, [join(checkout, 'apps/server/dist/index.js')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawnServer(join(checkout, 'scripts/server.mjs'), { cwd, env: { ...env, NODE_ENV: 'development' } }, ['production']);
     exited = once(child, 'exit');
     child.stdout.on('data', (chunk) => { logs += chunk; }); child.stderr.on('data', (chunk) => { logs += chunk; });
     for (let n = 0; n < 150 && !logs.includes('listening') && child.exitCode === null; n++) await new Promise((resolve) => setTimeout(resolve, 30));
@@ -77,7 +79,7 @@ test('project startup files work from unrelated directories, agree with Vite, an
     assert.equal((await fetch(`${base}/.env`)).status, 404);
     assert.ok(!logs.includes('synthetic-'));
   } finally {
-    if (child) { child.kill('SIGTERM'); await exited; }
+    if (child) { stopServer(child); await exited; }
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -121,9 +123,9 @@ for (const { hostname, previewOrigin } of [
 ]) test(`production ${hostname}${previewOrigin ? ' with preview' : ''} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: 15000 }, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'teach-me-coding-start-'));
   const syntheticSecret = 'server-only-credential-sentinel';
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url))], {
-    cwd, env: { PATH: process.env.PATH, HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret, OPENROUTER_MODEL: 'stealth/space-bunny-alpha', ...(previewOrigin ? { TMC_PREVIEW_ORIGIN: previewOrigin } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawnServer(fileURLToPath(new URL('../scripts/server.mjs', import.meta.url)), {
+    cwd, env: { HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret, OPENROUTER_MODEL: 'stealth/space-bunny-alpha', ...(previewOrigin ? { TMC_PREVIEW_ORIGIN: previewOrigin } : {}) },
+  }, ['production']);
   const exited = once(child, 'exit');
   let logs = '';
   child.stdout.on('data', (data) => { logs += data; });
@@ -218,17 +220,17 @@ for (const { hostname, previewOrigin } of [
       socket.on('error', reject);
       socket.on('message', (raw) => {
         const event = JSON.parse(raw.toString());
-        if (event.type === 'snapshot') socket.send(JSON.stringify({ type: 'input', id: event.id, data: "printf 'OWNED_PID=%s\\n' $$; printenv OPENROUTER_API_KEY; printf 'NO_KEY=%s\\n' $?\r" }));
+        if (event.type === 'snapshot') socket.send(JSON.stringify({ type: 'input', id: event.id, data: `node -e 'console.log("OWNED_PID="+process.ppid)'; printenv OPENROUTER_API_KEY; printf 'NO_KEY=%s\\n' $?\r` }));
         if (event.type === 'data') output += event.data;
-        if (/NO_KEY=1\r?\n/.test(output)) {
-          terminalPid = Number(output.match(/OWNED_PID=(\d+)/)[1]);
+        if (/NO_KEY=1\r?\n/.test(stripVTControlCharacters(output))) {
+          terminalPid = Number(stripVTControlCharacters(output).match(/OWNED_PID=(\d+)/)[1]);
           assert.ok(!output.includes(syntheticSecret)); socket.close(); resolve();
         }
       });
     });
     assert.ok(![html, await js.text(), bootstrap.body, checked.body, logs].some((value) => value.includes(syntheticSecret)));
   } finally {
-    child.kill('SIGTERM');
+    stopServer(child);
     await exited;
     if (terminalPid) assert.throws(() => process.kill(terminalPid, 0), { code: 'ESRCH' });
     await rm(cwd, { recursive: true, force: true });

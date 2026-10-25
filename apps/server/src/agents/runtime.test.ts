@@ -812,7 +812,9 @@ test('real HTTP stalls time out while continuously streaming bodies outlive the 
     const source: ModelSource = { ...syntheticSource, current: () => ({ selection: syntheticSource.current()!.selection, model }), resolve: () => model };
     const adapter = providerStream();
     const runtime = new TeachingRuntime(learning, source, {
-      httpIdleTimeoutMs: 100, retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
+      // Leave room for native dependency startup under concurrent CI load.
+      // The active body still runs for over twice this idle timeout.
+      httpIdleTimeoutMs: 500, retry: { enabled: false, maxRetries: 3, baseDelayMs: 0 },
       scenario: () => ({ tools: [], commit() { commits++; } }),
       stream: (model, context, options) => adapter(model, context, { ...options, apiKey: 'synthetic-private-key',
         onProviderStreamEvent: (...args) => { options?.onProviderStreamEvent?.(...args); streamed(); } }),
@@ -825,7 +827,7 @@ test('real HTTP stalls time out while continuously streaming bodies outlive the 
       assert.equal(requests, 1); assert.equal(commits, mode === 'active' ? 1 : 0);
       if (mode === 'active') assert.equal(learning.session(a.id, sa).messages.at(-1)?.text, Array.from({ length: 40 }, (_, i) => `${i}|`).join(''));
       const manifest = JSON.parse((db.prepare('SELECT value FROM context_manifests').get() as { value: string }).value);
-      assert.equal(manifest.modelExecution.httpIdleTimeoutMs, 100); assert.equal(manifest.modelExecution.timeoutMs, 100);
+      assert.equal(manifest.modelExecution.httpIdleTimeoutMs, 500); assert.equal(manifest.modelExecution.timeoutMs, 500);
       assert.equal(manifest.transport.httpStatus, mode === 'headers' ? null : 200);
       assert.equal(globalThis.fetch, globalFetch);
     } finally { await runtime.close(); db.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
@@ -1028,7 +1030,7 @@ for (const sample of [
 ]) test(`uploaded documents reach the teaching Agent through native tools: ${sample.name}`, async () => {
   const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), "tmc-library docs-'"));
   const library = new Library(root), outputPath = join(root, 'extracted text.txt');
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const quote = (value: string) => `'${value.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
   const filename = `课程参考 'A&B'.${sample.fixture.endsWith('.docx') ? 'docx' : 'pdf'}`;
   const runtime = new TeachingRuntime(learning, syntheticSource, { library, stream: (_model, context) => {
     const last = context.messages.filter((m) => m.role === 'toolResult').at(-1);
@@ -1042,8 +1044,8 @@ for (const sample of [
       assert.ok(file, 'The Agent must discover the uploaded document, not a pre-supplied source body.');
       const source = quote(file.path);
       const command = sample.missingParser
-        ? `/usr/bin/env PATH=${quote(join(root, 'no-parsers'))} pdftotext ${source} -`
-        : sample.fixture.endsWith('.docx') ? `python3 - ${source} > ${quote(outputPath)} <<'PY'
+        ? `PATH=${quote(join(root, 'no-parsers'))} pdftotext ${source} -`
+        : sample.fixture.endsWith('.docx') ? `"$(command -v python3 || command -v python)" -X utf8 - ${source} > ${quote(outputPath)} <<'PY'
 import sys
 from zipfile import ZipFile
 from xml.etree import ElementTree

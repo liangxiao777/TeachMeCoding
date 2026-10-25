@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:os';
 import type { BashOperations } from '@earendil-works/pi-coding-agent';
-import { descendants, groupMembers, stopProcesses } from './processes.js';
-import { terminalEnvironment } from './terminal-env.js';
+import { stopProcessTree } from './processes.js';
+import { bashShell } from './shell.js';
 
 // A disk-safety ceiling, distinct from Pi's 50 KiB model-facing display limit.
 export const bashOutputLimit = 32 * 1024 * 1024;
@@ -14,14 +14,15 @@ export const bashOperations: BashOperations = {
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647)) {
       throw new Error('Invalid timeout: use positive seconds, at most 2147483.647.');
     }
+    const shell = bashShell();
     return new Promise((resolve, reject) => {
-      const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], {
-        cwd, env: terminalEnvironment(process.env), detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+      const child = spawn(shell.file, [...shell.args, '-c', command], {
+        cwd, env: shell.env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let bytes = 0, reason: 'aborted' | 'timeout' | 'output-limit' | undefined;
       let cleanup: Promise<void> | undefined, spawnError: Error | undefined;
       const stop = () => {
-        if (child.pid && !cleanup) cleanup = stopProcesses([...new Set([...descendants(child.pid), ...groupMembers(child.pid)])]);
+        if (child.pid && !cleanup) { cleanup = stopProcessTree(child.pid); void cleanup.catch(() => {}); }
       };
       const abort = () => { reason ??= 'aborted'; stop(); };
       signal?.addEventListener('abort', abort, { once: true });
@@ -40,7 +41,7 @@ export const bashOperations: BashOperations = {
       // are intentionally left running by an Agent tool invocation.
       child.on('exit', () => {
         if (timer) clearTimeout(timer);
-        if (child.pid && !cleanup) cleanup = stopProcesses(groupMembers(child.pid));
+        if (child.pid && !cleanup) { cleanup = stopProcessTree(child.pid, true); void cleanup.catch(() => {}); }
       });
       child.on('close', (code, exitSignal) => {
         if (timer) clearTimeout(timer);

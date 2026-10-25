@@ -28,6 +28,10 @@ export class Projects {
   private path(root: string, relative: string, allowMissing = false) {
     const parts = relative.split('/');
     if (!relative || relative.length > 1000 || /[\\\x00-\x1f\x7f:]/.test(relative) || parts.some((p) => !p || p === '.' || p === '..' || p.startsWith('.tmc-write-'))) throw forbidden();
+    // Win32 aliases trailing dots/spaces and DOS device names, even with an
+    // extension. Reject them before any filesystem call, including new files.
+    if (process.platform === 'win32' && parts.some((p) => /[<>"|?*]|[. ]$/.test(p)
+      || /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(p))) throw forbidden();
     let path = root;
     for (let index = 0; index < parts.length; index++) {
       path = join(path, parts[index]!);

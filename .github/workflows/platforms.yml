@@ -1,0 +1,47 @@
+name: Native platforms
+
+on: [pull_request, push]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux document parser and native build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 poppler-utils
+      - name: macOS document parser
+        if: runner.os == 'macOS'
+        run: brew install poppler
+      - name: Windows document parser
+        if: runner.os == 'Windows'
+        run: choco install poppler --no-progress -y
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm test:native
+      - run: pnpm exec playwright install --with-deps chrome
+      - run: pnpm test:browser tests/browser/execution.spec.ts --workers=1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: execution-${{ runner.os }}
+          path: .amp/in/artifacts/
+          include-hidden-files: true
+          if-no-files-found: ignore

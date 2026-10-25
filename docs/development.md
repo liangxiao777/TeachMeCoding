@@ -8,24 +8,29 @@ This guide explains how to set up a development environment and run tests. See [
 
 - [Node.js](https://nodejs.org/) 24.15.0 (see `.node-version`)
 - [pnpm](https://pnpm.io/) 11.1.0
-- Python 3, a C/C++ compiler, and make to compile `better-sqlite3` and `node-pty`. On macOS, installing Xcode Command Line Tools is sufficient.
-- `pnpm test` also requires `python3` and `pdftotext` ([Poppler](https://poppler.freedesktop.org/)) for library document parsing tests. Missing dependencies cause test failures; the tests are not skipped automatically.
+- The [OS prerequisites in the README](../README.md#requirements): Python 3 and native compiler tools (Xcode Command Line Tools on macOS, `build-essential` on Ubuntu/Debian, Visual Studio 2022 C++ workload and Windows SDK on Windows) when native dependencies need compiling.
+- Native Windows 10 (1809+) / Windows 11 requires Git for Windows Bash for Agent commands and the IDE terminal, even if you run pnpm from PowerShell or cmd. Use native Windows Node and toolchains, not WSL. Reopen the terminal after installing tools to refresh `PATH`.
+- `pnpm test` also requires Python 3 and `rustc` for language execution tests, and `pdftotext` ([Poppler](https://poppler.freedesktop.org/)) for library document parsing tests. Install these yourself and make them available on `PATH`. Missing dependencies cause test failures; the tests are not skipped automatically.
 - Browser tests use a locally installed Google Chrome.
 
-Only macOS 26 / arm64 has been verified so far. Linux, Windows, and Intel Macs have not been verified.
+The source setup targets macOS, Linux (Ubuntu/Debian), and native Windows. macOS 26 / arm64 passes type checks, build, tests, native checks and browser execution tests. Debian 12 / arm64 in Docker passes a frozen-lockfile install, type checks, build, tests and native checks. Native Windows, Linux browser tests, and Intel Macs have not yet been verified; the included CI matrix checks all three platforms when run.
 
 ## Quick start
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm dev     # Frontend http://127.0.0.1:5173, API 127.0.0.1:4310
+pnpm dev
 ```
 
-`pnpm dev` builds `packages/contracts` first, then starts the server and Vite together. For development, we recommend using `TMC_DATA_DIR` to specify a separate data directory so you do not affect your everyday learning data:
+`pnpm dev` builds `packages/contracts` first, then starts the server and Vite together (frontend <http://127.0.0.1:5173>, API <http://127.0.0.1:4310>). The pnpm commands work from POSIX shells, PowerShell, and cmd.
 
-```sh
-TMC_DATA_DIR="$HOME/teach-me-coding-dev" pnpm dev
+For development, set `TMC_DATA_DIR` in the project-root `.env` file to keep your everyday learning data separate. This avoids shell-specific environment syntax:
+
+```dotenv
+TMC_DATA_DIR="/absolute/path/to/teach-me-coding-dev"
 ```
+
+Replace the example with a native absolute path; on Windows, use a path such as `C:/Users/me/teach-me-coding-dev`, not Git Bash's `/c/Users/...`. See [Configuration](configuration.md) for all startup options.
 
 ## Project structure
 
@@ -66,6 +71,8 @@ patches/             pnpm dependency patches
 
 All tests use temporary data directories and do not read or write your learning data. Agent responses use a deterministic test Provider rather than paid models.
 
+The CI matrix covers a frozen-lockfile install, `pnpm check`, `pnpm build`, `pnpm test`, `pnpm test:native`, and browser execution/PTY checks on macOS, Linux, and Windows. Consult the workflow results for a given commit. POSIX permission assertions run only on Unix; Windows privacy relies on account ACLs, not mode bits (see [Security](../SECURITY.md)).
+
 ### Unit and integration tests
 
 ```sh
@@ -74,6 +81,8 @@ pnpm test
 ```
 
 These cover domain rules, transactions and idempotent writes, project path boundaries, database migrations, repeated startup, and real-process recovery. Process integration tests start real servers and occupy fixed local ports defined in `tests/*.test.mjs`.
+
+On Windows, file-symlink boundary tests require Developer Mode or an elevated test terminal. Running the application itself does not require administrator access.
 
 ### Browser tests
 
@@ -109,7 +118,7 @@ pnpm automatically applies the patches in `patches/` during installation. When u
 
 | Patch | Purpose |
 | --- | --- |
-| `node-pty@1.1.0.patch` | The prebuilt macOS `spawn-helper` lacks execute permission ([microsoft/node-pty#850](https://github.com/microsoft/node-pty/issues/850)); always compile from source instead |
+| `node-pty@1.1.0.patch` | The prebuilt macOS `spawn-helper` lacks execute permission ([microsoft/node-pty#850](https://github.com/microsoft/node-pty/issues/850)); always compile from source on macOS, retaining prebuilt binaries on Linux/Windows when available |
 | `@base-ui__utils@0.2.9.patch` | Backports [mui/base-ui#4866](https://github.com/mui/base-ui/pull/4866) to fix incorrect menu `aria-expanded` state in React 19 production mode ([#4956](https://github.com/mui/base-ui/issues/4956)) |
-| `@earendil-works__pi-coding-agent@1.0.0.patch` | Allows the server to supply authentication context and Provider definitions; adds a private output directory, file permissions of 600, and propagation of write failures to the Bash tool |
+| `@earendil-works__pi-coding-agent@1.0.0.patch` | Allows the server to supply authentication context and Provider definitions; adds a private output directory, Unix file modes of `0600`, and propagation of write failures to the Bash tool |
 | `@earendil-works__pi-ai@1.0.0.patch` | Uses only the explicitly supplied environment without falling back to `process.env`, ensuring credentials come only from the data directory |

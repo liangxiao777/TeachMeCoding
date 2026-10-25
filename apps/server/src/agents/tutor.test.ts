@@ -526,8 +526,9 @@ test('OS searches validate literal patterns, grep files and directories safely, 
   const content = `${'x'.repeat(249)}🙂 needle\n  spaced line\n`;
   writeFileSync(join(directory, '[a].txt'), content);
   writeFileSync(join(directory, 'other.txt'), 'single space\n');
-  symlinkSync(directory, join(directory, 'cycle')); symlinkSync(join(directory, '[a].txt'), join(root, 'file-link'));
-  symlinkSync(directory, join(root, 'directory-link'));
+  symlinkSync(directory, join(directory, 'cycle'), process.platform === 'win32' ? 'junction' : 'dir');
+  symlinkSync(join(directory, '[a].txt'), join(root, 'file-link'));
+  symlinkSync(directory, join(root, 'directory-link'), process.platform === 'win32' ? 'junction' : 'dir');
   try {
     const ls = readTools(root).find((t) => t.name === 'ls')!;
     assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(ls.parameters)).properties), ['path', 'offset']);

@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { stripVTControlCharacters } from 'node:util';
 import Database from 'better-sqlite3';
 import { spawn } from 'node-pty';
 import { terminalEnvironment } from '../runtime/terminal-env.js';
@@ -34,6 +35,14 @@ test('terminal environment excludes credentials and Node injection settings', ()
     OPENROUTER_API_KEY: 'synthetic-secret', OTHER_PROVIDER_SECRET: 'synthetic-secret',
     NODE_OPTIONS: '--require=untrusted.js', VITE_SECRET: 'synthetic-secret',
   }), { TERM: 'xterm-256color', PATH: '/usr/bin', HOME: '/tmp/example', LANG: 'en_US.UTF-8' });
+  assert.deepEqual(terminalEnvironment({
+    Path: 'C:\\Program Files\\nodejs;C:\\Windows\\System32', SYSTEMROOT: 'C:\\Windows',
+    UserProfile: 'C:\\Users\\learner', TEMP: 'C:\\Users\\learner\\Temp', ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    NODE_OPTIONS: '--require=untrusted.js', OPENAI_API_KEY: 'synthetic-secret', BASH_ENV: 'untrusted.sh',
+  }), {
+    TERM: 'xterm-256color', PATH: 'C:\\Program Files\\nodejs;C:\\Windows\\System32',
+    SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\learner', TEMP: 'C:\\Users\\learner\\Temp', COMSPEC: 'C:\\Windows\\System32\\cmd.exe',
+  });
 });
 
 for (const terminate of [false, true]) {
@@ -51,7 +60,7 @@ for (const terminate of [false, true]) {
       ? 'console.log("READY"); setInterval(() => {}, 1000);'
       : 'console.log("READY"); process.stdin.once("data", data => { console.log(JSON.stringify({ input: data.toString().trim(), tty: process.stdout.isTTY, cwd: process.cwd(), secret: process.env.OPENROUTER_API_KEY ?? null })); process.exit(7); });';
     pty = spawn(process.execPath, ['-e', code], {
-      name: 'xterm-256color', cols: 90, rows: 30, cwd: directory,
+      name: 'xterm-256color', cols: 500, rows: 30, cwd: directory,
       env: terminalEnvironment({ ...process.env, OPENROUTER_API_KEY: 'synthetic-secret' }),
     });
     let output = '';
@@ -67,10 +76,10 @@ for (const terminate of [false, true]) {
     if (terminate) pty.kill();
     else pty.write('answer-42\r');
     const result = await exited;
-    if (terminate) assert.ok(result.signal, 'forced PTY exit must report a signal');
-    else {
+    if (terminate && process.platform !== 'win32') assert.ok(result.signal, 'POSIX forced PTY exit must report a signal');
+    if (!terminate) {
       assert.equal(result.exitCode, 7);
-      const line = output.split(/\r?\n/).find((item) => item.startsWith('{'))!;
+      const line = stripVTControlCharacters(output).split(/\r?\n/).find((item) => item.startsWith('{'))!;
       // macOS /var is a symlink to /private/var; compare the actual directory.
       assert.deepEqual(JSON.parse(line), {
         input: 'answer-42', tty: true, cwd: await realpath(directory), secret: null,

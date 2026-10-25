@@ -87,8 +87,11 @@ Node 服务（Hono）
 
 普通和全屏 IDE 中的终端是 xterm 连接的真实 PTY，工作目录为当前空间的项目目录。每个空间复用一个 shell；刷新页面或断线重连不会重放输入，也不会结束 shell。终端输入会等待编辑器自动保存完成，确保命令使用最新的文件内容。
 
+PTY 启动解析到的 Bash；在原生 Windows 上使用 Git for Windows Bash，不使用 PowerShell 或 WSL。
+
 ### Agent Bash
 
+- 命令与 IDE 终端使用相同的 Bash 解析方式，不加载 shell 启动配置。
 - 没有默认的单命令超时，模型可以传入可选的 `timeout`；停止 Agent 会取消命令。
 - 模型看到输出的最后 2,000 行或 50 KiB；完整输出写入数据目录的 `bash-output/`，供本次运行继续读取，运行结束后清理。
 - 每条命令的原始输出上限为 32 MiB，超出时终止命令，以保护磁盘。
@@ -100,9 +103,10 @@ Node 服务（Hono）
 
 ### 代码测评
 
-- 代码题带有执行方案，包括语言、命令行参数和预期的标准输出。支持 Python、JavaScript、TypeScript、Rust 和 Bash，使用本机已安装的 `python3`、`node`、`rustc` 或 `/bin/bash`。
+- 代码题带有执行方案，包括语言、命令行参数和预期的标准输出。支持 Python、JavaScript、TypeScript、Rust 和 Bash，使用本机已安装且位于 `PATH` 中的工具链。
+- Python 优先使用 `python3`，找不到时回退到 `python`；JavaScript 和 TypeScript 使用 `node`。Rust 用 `rustc` 显式编译为 `answer.exe`，并在所有系统上运行这个文件。Bash 使用解析到的可执行程序（Windows 上为 Git for Windows），不固定为 `/bin/bash`。
 - 每次运行使用代码快照和一次性临时目录，整次执行限时 30 秒、输出上限 256 KiB。
-- 代码题只有在所有用例都完成、输出与预期一致、且模型评估通过时才判定为通过。缺少工具链、报错、超时或取消时不会判定为通过。
+- 代码题只有在所有用例都完成、输出与预期一致、且模型评估通过时才判定为通过。缺少工具链、报错、超时或取消时不会判定为通过。缺少的工具链由用户自行安装，Agent 不会自动安装。
 - 评估结果标注证据类型：`execution-verified`（有真实执行证据）、`unverified`（代码题缺少有效执行证据）或 `non-execution`（纯分析题）。
 - 私有评分标准与公开题目分开存储，不会发送给浏览器，也不会进入辅导 Agent 的默认上下文。这是应用层的隔离：Agent 的读取工具和 Bash 以本机权限运行，仍能直接读取数据库文件。
 
