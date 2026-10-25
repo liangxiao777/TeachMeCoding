@@ -139,8 +139,9 @@ for (const { hostname, previewOrigin, release } of [
       assert.doesNotMatch(contents, /\/(?:node_modules|\.git|\.env|app\.db)(?:\/|\n)/);
       execFileSync('tar', ['-xzf', archive, '-C', cwd]);
       const bundle = join(cwd, directory);
-      execFileSync('pnpm', ['install', '--frozen-lockfile', '--offline'], {
-        cwd: bundle, env: { ...terminalEnvironment(process.env), CI: 'true' }, timeout: 120000, maxBuffer: 8 * 1024 * 1024,
+      const store = execFileSync('pnpm', ['store', 'path'], { cwd: root, encoding: 'utf8' }).trim();
+      execFileSync('pnpm', ['install', '--frozen-lockfile', '--offline', '--store-dir', store], {
+        cwd: bundle, env: { ...terminalEnvironment(process.env), CI: 'true' }, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024,
       });
       const context = pathToFileURL(join(bundle, 'apps/server/dist/agents/context.js')).href;
       const prompt = execFileSync(process.execPath, ['--input-type=module', '-e', `const {systemPrompt}=await import(${JSON.stringify(context)}); console.log(systemPrompt('lesson'));`], { cwd, encoding: 'utf8' });
