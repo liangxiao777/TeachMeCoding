@@ -239,6 +239,35 @@ for (const mode of ['cancel-before-ack', 'cancel-after-ack', 'ignore-interrupt',
   });
 }
 
+test('cleanup waits through transient group permission errors without accepting persistent ones', async (t) => {
+  for (const transient of [true, false]) {
+    const controller = new AbortController();
+    const f = fixture('cancel-after-ack', ({ method }) => { if (method === 'turn/start') setTimeout(() => controller.abort(), 20); });
+    const kill = process.kill;
+    let remaining = transient ? 2 : Infinity;
+    t.mock.method(process, 'kill', (pid: number, signal?: string | number) => {
+      if (pid === -f.child!.pid! && signal === 0 && remaining-- > 0) {
+        throw Object.assign(new Error('synthetic group permission error'), { code: 'EPERM' });
+      }
+      return kill(pid, signal);
+    });
+    try {
+      const search = runCodexSearch('Rust', 5, authSource(), AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]), f.options);
+      if (transient) {
+        await assert.rejects(search, { name: 'AbortError' });
+        f.assertClean();
+      } else {
+        await assert.rejects(search, /process group.*(could not be verified|did not exit)/);
+        assert.ok(f.child!.exitCode !== null || f.child!.signalCode !== null);
+        assert.equal(existsSync(f.root), true, 'unverified process groups must retain their private directories');
+      }
+    } finally {
+      t.mock.restoreAll();
+      if (f.root) await rm(f.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('deadline during startup is total; spawn errors and orphan stdio reject and clean up', async () => {
   const f = fixture('hang-initialize');
   await assert.rejects(runCodexSearch('Rust', 5, authSource(), AbortSignal.timeout(100), f.options), { name: 'TimeoutError' }); f.assertClean();

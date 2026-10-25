@@ -253,7 +253,11 @@ class Rpc {
         try { process.kill(-this.child.pid, 0); }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
-          throw new Error('Codex search process group exit could not be verified.');
+          // macOS can report EPERM for a group containing only unreaped zombies.
+          // Keep waiting for ESRCH; a persistent permission error is not success.
+          if ((error as NodeJS.ErrnoException).code !== 'EPERM') {
+            throw new Error('Codex search process group exit could not be verified.');
+          }
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
