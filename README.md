@@ -74,9 +74,9 @@ TeachMeCoding creates a separate learning space for each learning goal. The teac
 
 ## Project status
 
-This project is in early development, with no official release yet. Features, interfaces, and data formats may change.
+Version **0.1.0** is an early release. Features, interfaces, and data formats may change.
 
-Source setup supports **macOS and Linux (Ubuntu/Debian) only**; Windows is unsupported.
+Supports **macOS and Linux (Ubuntu/Debian) only**; Windows is unsupported.
 
 Local verification with Node 24.15.0 covers installation, type checks, build, tests, and SQLite/PTY checks on **macOS 26 / arm64** and in a non-root **Debian 12 / arm64 Docker** environment. macOS also has Google Chrome browser execution coverage. Linux browser checks are **x86_64-only**; Linux arm64 has backend/native verification only. Intel Macs remain unverified. See the [development guide](docs/development.md#testing) for test commands and CI coverage.
 
@@ -99,10 +99,21 @@ For coding assessments, install any additional language toolchains you need, suc
 
 ### Install and run
 
-These commands run the Node/Web application from source. Reopen your terminal after installing tools so the updated `PATH` takes effect.
+Download `teach-me-coding-0.1.0.tar.gz` and `SHA256SUMS` from [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.1.0). The same archive works on both supported platforms: it contains prebuilt server and frontend assets, but not Node.js or dependencies. Install the prerequisites above and reopen your terminal so the updated `PATH` takes effect.
 
 ```sh
 npm install --global pnpm@11.1.0
+tar -xzf teach-me-coding-0.1.0.tar.gz
+cd teach-me-coding-0.1.0
+pnpm install --frozen-lockfile
+pnpm start
+```
+
+Verify the downloaded archive with `shasum -a 256 -c SHA256SUMS` on macOS or `sha256sum -c SHA256SUMS` on Linux before extracting it.
+
+To build from source instead:
+
+```sh
 git clone https://github.com/liangxiao777/TeachMeCoding.git
 cd TeachMeCoding
 pnpm install --frozen-lockfile
@@ -110,7 +121,7 @@ pnpm build
 pnpm start
 ```
 
-Open <http://127.0.0.1:4310>. For development, use `pnpm dev` instead (frontend at <http://127.0.0.1:5173>); see the [development guide](docs/development.md).
+Open <http://127.0.0.1:4310>. For development from a source checkout, use `pnpm dev` instead (frontend at <http://127.0.0.1:5173>); see the [development guide](docs/development.md).
 
 ### Configure a model
 

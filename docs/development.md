@@ -57,6 +57,7 @@ patches/             pnpm dependency patches
 | --- | --- |
 | `pnpm dev` | Development mode with frontend hot reload |
 | `pnpm build` | Build all packages |
+| `pnpm release:pack` | Package the built application and SHA-256 checksum in `.amp/in/artifacts/release/` (build first) |
 | `pnpm start` | Production mode: a single server serves the UI and API at `http://127.0.0.1:4310` (build first) |
 | `pnpm check` | Type-check, including tests and scripts |
 | `pnpm check:i18n` | Check translation resources; see [UI translation](translating.md) |
@@ -70,6 +71,8 @@ patches/             pnpm dependency patches
 All tests use temporary data directories and do not read or write your learning data. Agent responses use a deterministic test Provider rather than paid models.
 
 The CI matrix targets only `ubuntu-latest` and `macos-latest`, covering a frozen-lockfile install, `pnpm check`, `pnpm build`, `pnpm test`, `pnpm test:native`, and browser execution/PTY checks, including POSIX permission assertions (see [Security](../SECURITY.md)).
+
+The production tests also unpack the release archive, install its dependencies from the local pnpm cache without source-tree links, and verify startup, UI assets, SQLite, teaching prompts, and a real PTY. Version tags must match the root package version; their GitHub Release is published only after both platform jobs succeed.
 
 ### Unit and integration tests
 

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { cp, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -116,14 +117,38 @@ function rawRequest(path, headers = {}, method = 'GET') {
   });
 }
 
-for (const { hostname, previewOrigin } of [
+for (const { hostname, previewOrigin, release } of [
   { hostname: '127.0.0.1' },
   { hostname: '0.0.0.0' },
   { hostname: '127.0.0.1', previewOrigin: 'http://127.0.0.1:15372' },
-]) test(`production ${hostname}${previewOrigin ? ' with preview' : ''} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: 15000 }, async () => {
+  { hostname: '127.0.0.1', release: true },
+]) test(`production ${hostname}${previewOrigin ? ' with preview' : ''}${release ? ' release archive' : ''} startup, static routing, HTTP and upgrade boundaries from an unrelated cwd`, { timeout: release ? 180000 : 15000 }, async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'teach-me-coding-start-'));
   const syntheticSecret = 'server-only-credential-sentinel';
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../scripts/server.mjs', import.meta.url)), 'production'], {
+  let entry = fileURLToPath(new URL('../scripts/server.mjs', import.meta.url));
+  if (release) {
+    try {
+      const root = fileURLToPath(new URL('../', import.meta.url));
+      const { name, version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+      const directory = `${name}-${version}`, filename = `${directory}.tar.gz`;
+      const output = join(root, '.amp/in/artifacts/release'), archive = join(output, filename);
+      execFileSync(process.execPath, [join(root, 'scripts/package-release.mjs')], { cwd: root });
+      const checksum = createHash('sha256').update(await readFile(archive)).digest('hex');
+      assert.equal(await readFile(join(output, 'SHA256SUMS'), 'utf8'), `${checksum}  ${filename}\n`);
+      const contents = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' });
+      assert.doesNotMatch(contents, /\/(?:node_modules|\.git|\.env|app\.db)(?:\/|\n)/);
+      execFileSync('tar', ['-xzf', archive, '-C', cwd]);
+      const bundle = join(cwd, directory);
+      execFileSync('pnpm', ['install', '--frozen-lockfile', '--offline'], {
+        cwd: bundle, env: { ...terminalEnvironment(process.env), CI: 'true' }, timeout: 120000, maxBuffer: 8 * 1024 * 1024,
+      });
+      const context = pathToFileURL(join(bundle, 'apps/server/dist/agents/context.js')).href;
+      const prompt = execFileSync(process.execPath, ['--input-type=module', '-e', `const {systemPrompt}=await import(${JSON.stringify(context)}); console.log(systemPrompt('lesson'));`], { cwd, encoding: 'utf8' });
+      assert.match(prompt, /<scenario>lesson<\/scenario>/);
+      entry = join(bundle, 'scripts/server.mjs');
+    } catch (error) { await rm(cwd, { recursive: true, force: true }); throw error; }
+  }
+  const child = spawn(process.execPath, [entry, 'production'], {
     cwd, env: { ...terminalEnvironment(process.env), HOST: hostname, PORT: '14310', TMC_DATA_DIR: join(cwd, 'data'), OPENROUTER_API_KEY: syntheticSecret, OPENROUTER_MODEL: 'stealth/space-bunny-alpha', ...(previewOrigin ? { TMC_PREVIEW_ORIGIN: previewOrigin } : {}) }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');

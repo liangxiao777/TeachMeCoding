@@ -31,10 +31,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
+      - run: pnpm release:pack
       - run: pnpm test
       - run: pnpm test:native
+      - run: pnpm check:i18n
       - run: pnpm exec playwright install --with-deps chrome
       - run: pnpm test:browser tests/browser/execution.spec.ts --workers=1
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: release-bundle
+          path: .amp/in/artifacts/release/
+          include-hidden-files: true
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -42,3 +51,27 @@ jobs:
           path: .amp/in/artifacts/
           include-hidden-files: true
           if-no-files-found: ignore
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download the verified release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh run download "$GITHUB_RUN_ID" --name release-bundle --dir release
+      - name: Publish GitHub Release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum --check SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" teach-me-coding-*.tar.gz SHA256SUMS \
+            --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "Release version ${GITHUB_REF_NAME#v}." --latest

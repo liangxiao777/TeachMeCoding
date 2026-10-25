@@ -57,6 +57,7 @@ patches/             pnpm 依赖补丁
 | --- | --- |
 | `pnpm dev` | 开发模式，前端热更新 |
 | `pnpm build` | 构建全部包 |
+| `pnpm release:pack` | 将已构建应用及 SHA-256 校验文件打包到 `.amp/in/artifacts/release/`（需先 build） |
 | `pnpm start` | 生产模式，单个服务在 `http://127.0.0.1:4310` 提供界面和 API（需先 build） |
 | `pnpm check` | 类型检查，包括测试和脚本 |
 | `pnpm check:i18n` | 检查翻译资源，见[界面翻译](translating.zh.md) |
@@ -70,6 +71,8 @@ patches/             pnpm 依赖补丁
 所有测试都使用临时数据目录，不读写你的学习数据；Agent 回复使用确定性的测试 Provider，不调用收费模型。
 
 CI 矩阵仅使用 `ubuntu-latest` 和 `macos-latest`，覆盖冻结锁文件安装、`pnpm check`、`pnpm build`、`pnpm test`、`pnpm test:native` 以及浏览器执行/PTY 检查，包括 POSIX 权限断言（见[安全策略](../SECURITY.zh.md)）。
+
+生产测试还会解压发布包，从本机 pnpm 缓存安装依赖，不链接源码目录，并验证启动、界面资源、SQLite、教学提示词和真实 PTY。版本标签必须与根包版本一致；仅当两个平台的检查都通过后，才发布 GitHub Release。
 
 ### 单元与集成测试
 

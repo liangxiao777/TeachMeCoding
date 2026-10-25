@@ -74,9 +74,9 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 ## 项目状态
 
-项目处于早期开发阶段，尚未发布正式版本，功能、接口和数据格式都可能变化。
+**0.1.0** 是早期版本，功能、接口和数据格式都可能变化。
 
-源码安装**仅支持 macOS 和 Linux（Ubuntu/Debian）**；不支持 Windows。
+**仅支持 macOS 和 Linux（Ubuntu/Debian）**；不支持 Windows。
 
 本地验证使用 Node 24.15.0，已在 **macOS 26 / arm64** 和非 root 的 **Debian 12 / arm64 Docker** 环境中通过安装、类型检查、构建、测试及 SQLite/PTY 检查；macOS 还通过了 Google Chrome 浏览器执行测试。Linux 浏览器检查**仅限 x86_64**，Linux arm64 仅完成后端/原生依赖验证；Intel Mac 尚未验证。测试命令和 CI 覆盖范围见[开发指南](docs/development.zh.md#测试)。
 
@@ -99,10 +99,21 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 ### 安装与启动
 
-以下命令从源码运行本地 Node/Web 应用。安装工具后请重新打开终端，使更新后的 `PATH` 生效。
+从 [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.1.0) 下载 `teach-me-coding-0.1.0.tar.gz` 和 `SHA256SUMS`。两个支持的平台使用同一个压缩包：包含已构建的服务端和前端，但不包含 Node.js 和依赖。请先安装上述环境依赖，重新打开终端，使更新后的 `PATH` 生效。
 
 ```sh
 npm install --global pnpm@11.1.0
+tar -xzf teach-me-coding-0.1.0.tar.gz
+cd teach-me-coding-0.1.0
+pnpm install --frozen-lockfile
+pnpm start
+```
+
+解压前请校验下载文件：macOS 使用 `shasum -a 256 -c SHA256SUMS`，Linux 使用 `sha256sum -c SHA256SUMS`。
+
+也可以从源码构建：
+
+```sh
 git clone https://github.com/liangxiao777/TeachMeCoding.git
 cd TeachMeCoding
 pnpm install --frozen-lockfile
@@ -110,7 +121,7 @@ pnpm build
 pnpm start
 ```
 
-打开 <http://127.0.0.1:4310>。开发时可以改用 `pnpm dev`（前端 <http://127.0.0.1:5173>），见[开发指南](docs/development.zh.md)。
+打开 <http://127.0.0.1:4310>。从源码开发时可以改用 `pnpm dev`（前端 <http://127.0.0.1:5173>），见[开发指南](docs/development.zh.md)。
 
 ### 配置模型
 
