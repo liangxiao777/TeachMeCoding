@@ -1,118 +1,120 @@
-# 架构
+# Architecture
 
-本文介绍 TeachMeCoding 的组成部分、Agent 的运行方式以及本机执行的边界，面向想了解或修改内部实现的贡献者。安全模型的摘要见 [SECURITY.md](../SECURITY.md)，配置项见[配置](configuration.md)。
+English · [简体中文](architecture.zh.md)
 
-## 概览
+This guide describes TeachMeCoding's components, how its Agents run, and the boundaries of local execution. It is intended for contributors who want to understand or modify the internals. See [SECURITY.md](../SECURITY.md) for a summary of the security model and [Configuration](configuration.md) for configuration options.
+
+## Overview
 
 ```text
-浏览器（React + Vite）
-   │  HTTP API · SSE 事件流 · 终端 WebSocket（均需请求令牌）
+Browser (React + Vite)
+   │  HTTP API · SSE event stream · terminal WebSocket (all require a request token)
    ▼
-Node 服务（Hono）
-   ├─ 学习业务     空间、需求、路线、课件、会话、测评、提案
-   ├─ Agent 运行层  Pi AgentSession，六个教学场景
-   ├─ 本机执行     PTY 终端、Agent Bash、代码测评
-   ├─ 扩展         搜索、网页抓取、MCP、Skills
-   └─ 存储         SQLite（app.db）、项目目录、资料库
+Node server (Hono)
+   ├─ Learning features  Spaces, requirements, roadmaps, lessons, conversations, assessments, proposals
+   ├─ Agent runtime      Pi AgentSession, six teaching scenarios
+   ├─ Local execution    PTY terminals, Agent Bash, code assessments
+   ├─ Extensions         Search, web fetching, MCP, Skills
+   └─ Storage            SQLite (app.db), project directories, library
 ```
 
-- **前端**（`apps/web`）：React 19、Vite、Tailwind CSS 和 Base UI。Agent 会话使用 [AI Elements](https://ai-sdk.dev/elements) 组件，编辑器使用 CodeMirror，终端使用 xterm。字体和图标随构建分发，不请求在线字体或统计服务。
-- **服务端**（`apps/server`）：单个 Node 进程，提供 API、SSE 和终端 WebSocket；生产模式下同时托管前端静态资源。
-- **协议**（`packages/contracts`）：前后端共享的 zod schema 与类型。
-- **Agent**：基于 [Pi](https://github.com/earendil-works/pi) 的 Agent Core、AI 和 Coding Agent SDK（固定 1.0.0）。模型请求走 Pi 自身的 Provider 适配，不使用 Vercel AI SDK 的协议。
+- **Frontend** (`apps/web`): React 19, Vite, Tailwind CSS, and Base UI. Agent conversations use [AI Elements](https://ai-sdk.dev/elements) components; the editor uses CodeMirror, and the terminal uses xterm. Fonts and icons ship with the build, with no requests to online font or analytics services.
+- **Server** (`apps/server`): A single Node process provides the API, SSE, and terminal WebSocket. In production, it also serves the frontend's static assets.
+- **Contracts** (`packages/contracts`): Shared zod schemas and types for the frontend and server.
+- **Agents**: Built on [Pi](https://github.com/earendil-works/pi)'s Agent Core, AI, and Coding Agent SDK (pinned to 1.0.0). Model requests use Pi's own Provider adapters, not the Vercel AI SDK protocol.
 
-设计上，模型只负责表达业务内容；内部 ID、资料关联、修订号、事务和存储都由服务端负责。工具参数中不要求模型填写这些信息。
+By design, the model is responsible only for expressing domain content. The server handles internal IDs, reference associations, revision numbers, transactions, and storage. Tool parameters do not ask the model to supply this information.
 
-## 学习流程
+## Learning flow
 
 ```text
-需求确认 ──确认──▶ 路线规划 ──▶ 单元学习（课件 · 辅导 · 练习）──▶ 测评 ──▶ 评估反馈
+Requirements clarification ──confirm──▶ Roadmap planning ──▶ Unit learning (lesson · tutoring · practice) ──▶ Assessment ──▶ Evaluation feedback
 ```
 
-单元按路线顺序解锁：第一个单元始终可进入，之后的单元在所有前序单元都有已发布课件后解锁。测评是否通过不影响解锁。已开始学习的单元保持可访问。
+Units unlock in roadmap order: the first unit is always accessible, and later units unlock once every preceding unit has a published lesson. Passing an assessment is not required to unlock units. Units where learning has already started remain accessible.
 
-## Agent 场景
+## Agent scenarios
 
-| 场景 | 触发方式 | 专属工具 | 产物 |
+| Scenario | Trigger | Scenario-specific tools | Outputs |
 | --- | --- | --- | --- |
-| `intake` | 需求确认会话 | `ask_user_question`、`write_research_document`、`submit_requirement_draft` | 澄清问题、调研文档和需求草稿。用户确认需求后自动开始路线规划 |
-| `roadmap` | 路线会话 | 首次：`submit_route`；调整：`add_route_stage`、`add_route_unit`、`update_route_stage`、`update_route_unit`、`remove_route_unit`、`remove_route_stage`、`submit_route_proposal` | 首次路线直接生效；调整生成路线提案 |
-| `tutor` | 单元会话 | `read_current_lesson`、`propose_lesson_change`、`propose_file_change`、`submit_learning_conclusion` | 课件修改提案、文件修改提案和待采纳的学习结论 |
-| `lesson` | 后台任务 | `read_learning_route`、`read_reference_lesson`、`submit_lesson` | 首份课件直接发布；重新生成时产生课件提案 |
-| `assessment` | 后台任务 | `submit_assessment` | 公开题目和私有评分标准；代码题附带执行方案 |
-| `evaluation` | 提交测评后的后台任务 | `submit_evaluation` | 绑定该次提交和执行证据的评估结果 |
+| `intake` | Requirements clarification conversation | `ask_user_question`, `write_research_document`, `submit_requirement_draft` | Clarifying questions, research documents, and a requirements draft. Roadmap planning starts automatically after the user confirms the requirements |
+| `roadmap` | Roadmap conversation | Initial plan: `submit_route`; adjustments: `add_route_stage`, `add_route_unit`, `update_route_stage`, `update_route_unit`, `remove_route_unit`, `remove_route_stage`, `submit_route_proposal` | The initial roadmap takes effect directly; adjustments produce a roadmap proposal |
+| `tutor` | Unit conversation | `read_current_lesson`, `propose_lesson_change`, `propose_file_change`, `submit_learning_conclusion` | Lesson change proposals, file change proposals, and learning conclusions awaiting adoption |
+| `lesson` | Background task | `read_learning_route`, `read_reference_lesson`, `submit_lesson` | The first lesson is published directly; regeneration produces a lesson proposal |
+| `assessment` | Background task | `submit_assessment` | Public questions and private grading criteria; coding questions include an execution plan |
+| `evaluation` | Background task after an assessment submission | `submit_evaluation` | Evaluation results tied to that submission and its execution evidence |
 
-所有场景还会获得以下通用工具：
+All scenarios also receive these shared tools:
 
-- `read`、`ls`、`find`、`grep`：以当前空间的项目目录为工作目录读取文件。
-- `bash`：Pi 的 Bash 工具，以资料库目录为工作目录，自主执行，不逐条确认。
-- `list_library_files`：列出资料库文件，配合读取工具按需查阅。
-- `web_fetch`：读取公开网页；启用搜索服务后另有 `web_search`。
-- 已启用的 MCP 工具，名称形如 `mcp__<server>__<tool>`。
+- `read`, `ls`, `find`, `grep`: Read files with the current space's project directory as the working directory.
+- `bash`: Pi's Bash tool, with the library directory as its working directory. Commands run autonomously, without per-command confirmation.
+- `list_library_files`: List library files for on-demand consultation with the read tools.
+- `web_fetch`: Read public web pages; `web_search` is also available when a search service is enabled.
+- Enabled MCP tools, named in the form `mcp__<server>__<tool>`.
 
-已启用的 Skills 不是工具，而是以目录形式列入系统提示，由模型用 `read` 读取。工具名冲突时运行直接失败，不会互相覆盖。
+Enabled Skills are not tools. Instead, they are listed as a catalog in the system prompt, and the model loads their contents with `read`. A tool name conflict causes the run to fail immediately rather than allowing tools to overwrite one another.
 
-## 提案与确认
+## Proposals and confirmation
 
-路线调整、课件重写、文件修改和学习结论都先作为提案保存，用户确认后才生效：
+Roadmap adjustments, lesson rewrites, file changes, and learning conclusions are saved as proposals first and take effect only after user confirmation:
 
-- 空间内有待处理的路线或课件提案时，暂停接收新的 Agent 输入，直到用户应用或拒绝。拒绝时可以附上反馈，服务端会在原会话中带着反馈继续一轮。
-- 应用提案前会重新校验需求、路线和课件版本。来源已经变化的提案无法应用。
-- 已开始学习的单元不能在路线调整中被删除，也不能修改学习目标。
-- 文件修改提案在 30 分钟后失效。确认时要求编辑器的自动保存已完成，并校验文件版本。
+- While a space has a pending roadmap or lesson proposal, new Agent input is paused until the user applies or rejects it. Rejection can include feedback; the server then continues for another turn in the original conversation with that feedback.
+- Requirements, roadmap, and lesson versions are revalidated before a proposal is applied. A proposal cannot be applied if its source has changed.
+- A roadmap adjustment cannot remove a unit where learning has already started or change that unit's learning goals.
+- File change proposals expire after 30 minutes. Confirmation requires the editor's autosave to finish and the file version to be validated.
 
-**YOLO 模式**按会话开启。开启后，该会话中正常完成的运行所产生的提案会被自动接受；开启时已有的待处理提案也会立即被接受。在需求确认会话中，需求就绪后会自动确认并开始规划路线。YOLO 不会替用户回答澄清问题，也不跳过版本、归属和写入校验。
+**YOLO mode** is enabled per conversation. When enabled, proposals produced by normally completed runs in that conversation are accepted automatically; any proposals already pending when it is enabled are also accepted immediately. In a requirements clarification conversation, requirements are automatically confirmed when ready, and roadmap planning begins. YOLO does not answer clarifying questions on the user's behalf or bypass version, ownership, or write validation.
 
-## 运行生命周期
+## Run lifecycle
 
-每条会话消息启动一次运行（run），课件、出题和评估以后台任务（task）运行。两者共享同一套运行层：
+Each conversation message starts a run; lesson generation, question generation, and evaluation run as background tasks. Both share the same runtime:
 
-1. **固定上下文**：运行开始时固定所依据的需求、路线和课件版本，作为教学上下文注入。系统指令和应用控制的上下文使用 XML 资源编写。
-2. **执行**：使用 Pi `AgentSession`，工具按顺序执行。工具出错时，错误作为结果返回模型，由模型修正参数、换方法或说明限制；单次工具错误不会使整轮失败。
-3. **提交**：场景工具只暂存产物。运行正常结束后，服务端在一个数据库事务中校验版本并发布产物；取消、输出截断、版本过期或缺少必需产物时不保存任何成果。
-4. **会话历史**：成功运行后，Pi 会话的新增条目作为检查点保存在 SQLite 中，同一会话的下一次运行从检查点恢复。Pi 的自动上下文压缩默认开启，界面会显示上下文用量和压缩状态。新会话只自动带入同空间已确认的需求、有效测评和用户采纳的学习结论。
+1. **Pin context**: At the start of a run, the relevant requirements, roadmap, and lesson versions are pinned and injected as teaching context. System instructions and application-controlled context are authored as XML resources.
+2. **Execute**: A Pi `AgentSession` executes tools sequentially. If a tool fails, the error is returned to the model as a result so it can correct the parameters, try another approach, or explain the limitation. A single tool error does not fail the whole turn.
+3. **Commit**: Scenario tools only stage outputs. After a run ends normally, the server validates versions and publishes the outputs in a single database transaction. No outputs are saved if the run is cancelled, output is truncated, versions are stale, or required outputs are missing.
+4. **Conversation history**: After a successful run, new entries from the Pi session are saved as a checkpoint in SQLite. The next run in the same conversation resumes from that checkpoint. Pi's automatic context compaction is enabled by default; the UI displays context usage and compaction status. New conversations automatically include only confirmed requirements, valid assessments, and user-adopted learning conclusions from the same space.
 
-其他行为：
+Other behavior:
 
-- **消息排队**：运行进行中发送的新消息会加入当前运行的队列，按顺序逐条处理；开始处理前可以撤回。运行失败或被停止时，队列暂停。
-- **事件流**：推理、正文、工具状态和公开的工具参数按顺序保存为事件。SSE 断开后按事件游标恢复，不会重新发起模型请求。
-- **模型调用**：服务端不设置 token 预算、总时长或调用次数上限。单次模型请求默认 300 秒超时；支持自定义 fetch 的 HTTP 适配器另有 300 秒的空闲超时。瞬时错误最多自动重试 3 次（退避 2、4、8 秒），鉴权、额度和上下文溢出错误不重试。
-- **停止与重启**：主动停止会取消模型请求和正在执行的命令，但不会回滚已产生的副作用。服务重启时，未完成的运行标记为中断，不会自动重放。
+- **Message queueing**: New messages sent during a run enter that run's queue and are processed one at a time in order. They can be withdrawn before processing starts. The queue pauses if the run fails or is stopped.
+- **Event stream**: Reasoning, response text, tool status, and public tool parameters are saved as ordered events. After an SSE disconnection, streaming resumes from the event cursor without making another model request.
+- **Model calls**: The server imposes no token budget, overall duration limit, or call count limit. Individual model requests time out after 300 seconds by default. HTTP adapters that support a custom fetch also have a 300-second idle timeout. Transient errors are retried automatically up to 3 times, with backoffs of 2, 4, and 8 seconds. Authentication, quota, and context overflow errors are not retried.
+- **Stopping and restarting**: Stopping a run cancels model requests and executing commands, but does not roll back side effects that have already occurred. On server restart, unfinished runs are marked as interrupted and are not replayed automatically.
 
-## 本机执行
+## Local execution
 
-### 终端
+### Terminals
 
-普通和全屏 IDE 中的终端是 xterm 连接的真实 PTY，工作目录为当前空间的项目目录。每个空间复用一个 shell；刷新页面或断线重连不会重放输入，也不会结束 shell。终端输入会等待编辑器自动保存完成，确保命令使用最新的文件内容。
+Terminals in both the regular and fullscreen IDE use xterm connected to a real PTY, with the current space's project directory as the working directory. Each space reuses one shell. Refreshing the page or reconnecting does not replay input or terminate the shell. Terminal input waits for the editor's autosave to finish so commands use the latest file contents.
 
 ### Agent Bash
 
-- 没有默认的单命令超时，模型可以传入可选的 `timeout`；停止 Agent 会取消命令。
-- 模型看到输出的最后 2,000 行或 50 KiB；完整输出写入数据目录的 `bash-output/`，供本次运行继续读取，运行结束后清理。
-- 每条命令的原始输出上限为 32 MiB，超出时终止命令，以保护磁盘。
-- 子进程只继承白名单中的环境变量。
+- There is no default per-command timeout. The model can supply an optional `timeout`; stopping the Agent cancels the command.
+- The model sees the last 2,000 lines or 50 KiB of output. Full output is written to `bash-output/` in the data directory for further reading during the current run, then cleaned up when the run ends.
+- Raw output is capped at 32 MiB per command. Commands exceeding that limit are terminated to protect disk space.
+- Child processes inherit only allowlisted environment variables.
 
-### 项目文件
+### Project files
 
-浏览器的项目文件 API 只能访问应用管理的项目目录，支持读取、创建、重命名和保存，不支持删除。单个文件最大 1 MB 的 UTF-8 文本；路径穿越、符号链接、硬链接和非普通文件会被拒绝。编辑器在每次输入后自动保存，遇到版本冲突时以当前编辑内容为准重试。
+The browser's project file API can access only application-managed project directories. It supports reading, creating, renaming, and saving, but not deletion. Each file must be UTF-8 text no larger than 1 MB. Path traversal, symbolic links, hard links, and non-regular files are rejected. The editor autosaves after each input and retries version conflicts using the current editor contents.
 
-### 代码测评
+### Code assessments
 
-- 代码题带有执行方案，包括语言、命令行参数和预期的标准输出。支持 Python、JavaScript、TypeScript、Rust 和 Bash，使用本机已安装的 `python3`、`node`、`rustc` 或 `/bin/bash`。
-- 每次运行使用代码快照和一次性临时目录，整次执行限时 30 秒、输出上限 256 KiB。
-- 代码题只有在所有用例都完成、输出与预期一致、且模型评估通过时才判定为通过。缺少工具链、报错、超时或取消时不会判定为通过。
-- 评估结果标注证据类型：`execution-verified`（有真实执行证据）、`unverified`（代码题缺少有效执行证据）或 `non-execution`（纯分析题）。
-- 私有评分标准与公开题目分开存储，不会发送给浏览器，也不会进入辅导 Agent 的默认上下文。这是应用层的隔离：Agent 的读取工具和 Bash 以本机权限运行，仍能直接读取数据库文件。
+- Coding questions include an execution plan with the language, command-line arguments, and expected standard output. Supported languages are Python, JavaScript, TypeScript, Rust, and Bash, using locally installed `python3`, `node`, `rustc`, or `/bin/bash`.
+- Each run uses a code snapshot and a disposable temporary directory. The entire execution is limited to 30 seconds and 256 KiB of output.
+- A coding question passes only if all test cases complete, their output matches expectations, and the model's evaluation also passes. Missing toolchains, errors, timeouts, and cancellations never count as a pass.
+- Evaluation results identify the evidence type: `execution-verified` (real execution evidence), `unverified` (a coding question without valid execution evidence), or `non-execution` (an analysis-only question).
+- Private grading criteria are stored separately from public questions. They are not sent to the browser or included in the tutor Agent's default context. This is application-level isolation: the Agent's read tools and Bash run with local permissions and can still read database files directly.
 
-## 数据留存
+## Data retention
 
-- 保存的内容：用户消息和引用、可展示的模型回复、业务产物、提案的修改前后内容、确认结果，以及测评提交和执行证据。
-- 自动读取的工具结果正文只在本次运行中使用。持久化时只保留调用关系和内容 hash，不额外复制源码或网页内容。
-- 每次模型请求都会记录一份清单：来源版本、hash、工具列表、实际用量和传输诊断。清单不保存 Provider 的原始错误正文或凭据。
+- Saved content includes user messages and quotes, displayable model responses, domain outputs, proposals' before-and-after contents, confirmation results, assessment submissions, and execution evidence.
+- The bodies of automatically read tool results are used only during the current run. Persistence retains only call relationships and content hashes, without making additional copies of source code or web content.
+- Each model request records a manifest with source versions, hashes, the tool list, actual usage, and transport diagnostics. The manifest does not retain raw Provider error bodies or credentials.
 
-## 本地接口访问控制
+## Local API access control
 
-- 服务默认只监听 `127.0.0.1`，Host 和 Origin 必须在白名单内；不开放 CORS，不信任转发头。
-- 页面启动时通过 `GET /api/access` 获取请求令牌，之后所有 `/api` 请求都要带 `X-TMC-Token` 头。令牌在每次启动时随机生成，只保存在页面内存中，不写入文件、日志或 URL。
-- 终端 WebSocket（`/api/terminal/socket`）通过子协议 `tmc-terminal` 和 `tmc-token.<令牌>` 传递令牌，不接受查询参数。
-- 这些措施用于防止外部网页滥用本地接口，不是登录系统，也不能防御拥有本机权限的进程。
+- The server listens only on `127.0.0.1` by default. Host and Origin must be allowlisted; CORS is not enabled, and forwarded headers are not trusted.
+- On startup, the page obtains a request token through `GET /api/access`. All subsequent `/api` requests must include the `X-TMC-Token` header. The token is randomly generated on each server start and kept only in page memory, never in files, logs, or URLs.
+- The terminal WebSocket (`/api/terminal/socket`) passes the token through the `tmc-terminal` and `tmc-token.<token>` subprotocols. Query parameters are not accepted.
+- These measures prevent external web pages from abusing the local API. They are not a login system and do not defend against processes with local permissions.

@@ -1,48 +1,50 @@
-# 参与贡献
+# Contributing
 
-感谢你愿意改进 TeachMeCoding。本文说明如何反馈问题和提交改动。
+English · [简体中文](CONTRIBUTING.zh.md)
 
-## 反馈问题
+Thank you for helping improve TeachMeCoding. This guide explains how to report issues and submit changes.
 
-- **Bug 和建议**：在 [Issues](https://github.com/liangxiao777/TeachMeCoding/issues) 中提交。报告 Bug 时请写明操作系统、Node 版本、复现步骤，以及预期和实际的结果。附带日志前请先删除 API Key、令牌和私人路径。
-- **安全漏洞**：不要公开提交 issue，请按 [SECURITY.md](SECURITY.md) 私下报告。
+## Reporting issues
 
-## 提交改动之前
+- **Bugs and suggestions**: open an [issue](https://github.com/liangxiao777/TeachMeCoding/issues). For bugs, include your operating system, Node version, steps to reproduce, and the expected and actual results. Remove API keys, tokens, and private paths before attaching logs.
+- **Security vulnerabilities**: do not open a public issue. Report them privately as described in [SECURITY.md](SECURITY.md).
 
-- 修复 Bug 和小范围的文档改动可以直接提交 Pull Request。
-- 新功能、较大的重构或会改变数据格式的改动，请先开 issue 说明要解决的问题和大致方案，避免做完之后方向不合适。
-- 阅读 [AGENTS.md](AGENTS.md) 中的设计约定。它同时约束人和 AI 编码助手，核心是：
-  - 每个约束都要有实际用途，保持简单有效。
-  - 模型只表达业务内容；内部 ID、修订号、事务和存储由服务端负责。
-  - 内容质量靠工具说明和提示词引导，不用固定清单或格式检查代替判断。
-  - 新增界面文案、按钮或设置入口前，先确认它对完成任务确有必要。
+## Before making changes
 
-开发环境、测试和项目结构见[开发指南](docs/development.md)。
+- You can submit a pull request directly for bug fixes and small documentation changes.
+- For new features, large refactors, or changes to data formats, first open an issue describing the problem and your proposed approach so that the work does not go in the wrong direction.
+- Read the design conventions in [AGENTS.md](AGENTS.md). They apply to both people and AI coding assistants:
+  - Keep things simple and effective; every constraint must serve a practical purpose.
+  - The model expresses business content only; the server owns internal IDs, revisions, transactions, and storage.
+  - Guide content quality through tool descriptions and prompts, not fixed checklists or formatting checks in place of judgment.
+  - Confirm that new UI copy, buttons, or settings entry points are necessary for completing the task before adding them.
 
-## Pull Request
+See the [development guide](docs/development.md) for the development environment, tests, and project structure.
 
-1. 从最新的 `main` 新建分支，命名为 `<type>/<short-description>`，例如 `fix/terminal-reconnect`。
-2. 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)：`<type>(<scope>): <description>`。scope 使用真实的模块名，description 用英文动词短语描述实际改动，例如 `fix(projects): reject symlink traversal`。不要使用 `update`、`finish implementation` 这类不说明内容的描述。
-3. 每个 PR 只做一件事，无关的修改另开 PR。
-4. 行为变更需要附带测试，测试行为而不是实现细节。
-5. 涉及界面的改动：
-   - 附上修改前后的截图。
-   - 新增或修改文案时，同时更新 `en` 和 `zh-CN` 的翻译资源，见[界面翻译](docs/translating.md)。
-6. 新增依赖时使用精确版本号，并在 PR 中说明为什么需要它。
-7. 在 PR 描述中说明改了什么、为什么改，以及如何验证。
+## Pull requests
 
-提交前请确认以下检查通过：
+1. Create a branch from the latest `main`, named `<type>/<short-description>`, for example `fix/terminal-reconnect`.
+2. Follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`. Use an actual module name for the scope and an English verb phrase describing the change, for example `fix(projects): reject symlink traversal`. Avoid vague descriptions such as `update` or `finish implementation`.
+3. Keep each PR focused on one thing. Submit unrelated changes in separate PRs.
+4. Include tests for behavior changes. Test behavior, not implementation details.
+5. For UI changes:
+   - Include before-and-after screenshots.
+   - When adding or changing copy, update both the `en` and `zh-CN` translation resources. See [UI translation](docs/translating.md).
+6. Pin new dependencies to exact versions and explain why they are needed in the PR.
+7. Describe what changed, why, and how you verified it in the PR description.
+
+Before submitting, make sure these checks pass:
 
 ```sh
 pnpm check
 pnpm build
 pnpm test
-pnpm test:browser --workers=1   # 涉及界面或交互时
-pnpm check:i18n                 # 涉及界面文案时
+pnpm test:browser --workers=1   # For UI or interaction changes
+pnpm check:i18n                 # For UI copy changes
 ```
 
-不要提交 `.env`、数据目录中的文件或 `agent-debug/` 中的调试快照。
+Do not commit `.env`, files from the data directory, or debug snapshots from `agent-debug/`.
 
-## 许可
+## License
 
-提交到本仓库的贡献，按 [Apache License 2.0](LICENSE) 授权，与项目本身的许可证一致。
+Contributions to this repository are licensed under the [Apache License 2.0](LICENSE), the same license as the project.

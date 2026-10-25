@@ -1,89 +1,93 @@
 <p align="center">
-  <img src="apps/web/public/icon.svg" width="80" alt="TeachMeCoding 标志" />
+  <img src="apps/web/public/icon.svg" width="80" alt="TeachMeCoding logo" />
 </p>
 
 <h1 align="center">TeachMeCoding</h1>
 
 <p align="center">
-  本地运行的 AI 编程教学应用：从学习目标出发，生成路线和课件，在真实项目里练习，并用真实执行结果测评。
+  English · <a href="README.zh.md">简体中文</a>
+</p>
+
+<p align="center">
+  An AI coding tutor that runs locally: turn learning goals into a roadmap and lessons, practice in real projects, and get assessed using real execution results.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" /></a>
   <img alt="Node 24.15" src="https://img.shields.io/badge/node-24.15-339933?logo=node.js&logoColor=white" />
   <img alt="pnpm 11.1" src="https://img.shields.io/badge/pnpm-11.1-F69220?logo=pnpm&logoColor=white" />
-  <img alt="平台 macOS arm64" src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey?logo=apple" />
-  <img alt="状态 alpha" src="https://img.shields.io/badge/status-alpha-orange" />
+  <img alt="Platform macOS arm64" src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey?logo=apple" />
+  <img alt="Status alpha" src="https://img.shields.io/badge/status-alpha-orange" />
 </p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#文档">文档</a> ·
-  <a href="CONTRIBUTING.md">参与贡献</a> ·
-  <a href="SECURITY.md">安全</a>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="SECURITY.md">Security</a>
 </p>
 
-![TeachMeCoding 学习路线与 Agent 对话](docs/images/route-agent.png)
+![TeachMeCoding learning roadmap and agent conversation](docs/images/route-agent-en.png)
 
-TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent 先和你澄清需求，再规划学习路线、编写课件；你在内置 IDE 和本机终端中动手练习，代码题在本机真实运行后再由模型评估。所有数据保存在本机的 SQLite 和项目目录中，整个应用只需一个 Node 进程。
+TeachMeCoding creates a separate learning space for each learning goal. The teaching agent clarifies your needs, plans a learning roadmap, and writes lessons. You practice in the built-in IDE and local terminal, and coding submissions run on your machine before the model evaluates the results. All data is stored locally in SQLite and project directories, and the entire application runs in a single Node process.
 
 > [!WARNING]
-> Agent 以运行服务的系统账号权限读取文件、执行 Bash 和访问网络，**不是沙箱**。请只在你信任模型、工具和资料的环境中运行，详见 [SECURITY.md](SECURITY.md)。
+> The agent can read files, run Bash commands, and access the network with the permissions of the system account running the server. It is **not a sandbox**. Run it only in an environment where you trust the model, tools, and reference materials. See [SECURITY.md](SECURITY.md).
 
-## 目录
+## Contents
 
-- [功能特性](#功能特性)
-- [项目状态](#项目状态)
-- [快速开始](#快速开始)
-- [使用方式](#使用方式)
-- [配置](#配置)
-- [文档](#文档)
-- [参与贡献](#参与贡献)
-- [致谢](#致谢)
-- [许可证](#许可证)
+- [Features](#features)
+- [Project status](#project-status)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
 
-## 功能特性
+## Features
 
-- **完整学习流程**：澄清需求 → 规划路线 → 学习课件与编程练习 → 测评与反馈。
-- **可调整的学习路线**：按阶段和单元组织，单元在前序课件完成后依次解锁。
-- **真实项目与终端**：每个学习空间对应磁盘上的项目目录；编辑器输入即自动保存，终端是真实的 shell。
-- **基于执行证据的测评**：代码题在本机运行并比对输出，支持 Python、JavaScript、TypeScript、Rust 和 Bash。
-- **改动先确认再生效**：路线调整、课件重写、文件修改和学习结论都以提案呈现；也可以按会话开启 YOLO 模式自动接受。
-- **多模型 Provider**：基于 [Pi](https://github.com/earendil-works/pi) 接入多家 Provider，支持 API Key 与 OAuth 登录，并显示上下文用量。
-- **资料库**：上传任意格式的参考资料，Agent 按需读取。
-- **联网能力**：14 种可选的搜索服务（含无需 API Key 的 DuckDuckGo）和内置的网页抓取。
-- **MCP 与 Skills**：在设置中添加 MCP 服务器，从 [skills.sh](https://skills.sh) 浏览和安装 Skills。
-- **English 与简体中文界面**，以及亮色与暗色主题。
+- **A complete learning workflow**: clarify your needs → plan a roadmap → study lessons and practice coding → receive assessments and feedback.
+- **An adaptable learning roadmap**: organized into stages and units, with units unlocking in order once lessons for preceding units are ready.
+- **Real projects and terminals**: each learning space has a project directory on disk. The editor saves as you type, and the terminal is a real shell.
+- **Assessments backed by execution evidence**: coding submissions run locally and their output is checked, with support for Python, JavaScript, TypeScript, Rust, and Bash.
+- **Approve changes before they take effect**: roadmap adjustments, lesson rewrites, file edits, and learning conclusions are presented as proposals. You can also enable YOLO mode per conversation to accept them automatically.
+- **Multiple model providers**: connect through [Pi](https://github.com/earendil-works/pi), with API key or OAuth sign-in and visible context usage.
+- **Reference library**: upload reference materials in any format for the agent to read as needed.
+- **Web access**: 14 optional search services (including DuckDuckGo, which requires no API key), plus built-in web fetching.
+- **MCP and Skills**: add MCP servers in Settings, and browse and install Skills from [skills.sh](https://skills.sh).
+- **English and Simplified Chinese interfaces**, with light and dark themes.
 
 <table>
   <tr>
-    <td><img src="docs/images/lesson.png" alt="单元页：Agent 正在生成课件，显示执行进度与工具调用" /></td>
-    <td><img src="docs/images/ide-fullscreen.png" alt="全屏 IDE：编辑 Python 练习文件并在本机终端运行" /></td>
+    <td><img src="docs/images/lesson-en.png" alt="Unit page showing a saved lesson in the demo learning space" /></td>
+    <td><img src="docs/images/ide-fullscreen-en.png" alt="Full-screen IDE with a code editor and local terminal" /></td>
   </tr>
   <tr>
-    <td align="center">课件生成</td>
-    <td align="center">全屏 IDE 与本机终端</td>
+    <td align="center">Lessons and coding practice</td>
+    <td align="center">Full-screen IDE and local terminal</td>
   </tr>
 </table>
 
-<sub>截图来自本机实际运行的学习空间。</sub>
+<sub>Screenshots show an isolated, locally running demo learning space with English demo content, not a live model run.</sub>
 
-## 项目状态
+## Project status
 
-项目处于早期开发阶段，尚未发布正式版本，功能、接口和数据格式都可能变化。
+This project is in early development, with no official release yet. Features, interfaces, and data formats may change.
 
-目前只在 **macOS 26 / arm64、Node 24.15.0、Google Chrome** 上验证过，Linux、Windows 和 Intel Mac 尚未验证。
+Currently tested only on **macOS 26 / arm64, Node 24.15.0, and Google Chrome**. Linux, Windows, and Intel Macs have not been verified.
 
-## 快速开始
+## Quick start
 
-### 环境要求
+### Requirements
 
 - [Node.js](https://nodejs.org/) 24.15.0
 - [pnpm](https://pnpm.io/) 11.1.0
-- Python 3、C/C++ 编译器和 make，用于编译原生依赖。macOS 安装 Xcode Command Line Tools 即可。
-- 可选：代码测评所需的语言工具链，如 `python3`、`node`、`rustc`。
+- Python 3, a C/C++ compiler, and make to build native dependencies. On macOS, the Xcode Command Line Tools are sufficient.
+- Optional: language toolchains for coding assessments, such as `python3`, `node`, and `rustc`.
 
-### 安装与启动
+### Install and run
 
 ```sh
 git clone https://github.com/liangxiao777/TeachMeCoding.git
@@ -93,52 +97,52 @@ pnpm build
 pnpm start
 ```
 
-打开 <http://127.0.0.1:4310>。开发时可以改用 `pnpm dev`（前端 <http://127.0.0.1:5173>），见[开发指南](docs/development.md)。
+Open <http://127.0.0.1:4310>. For development, use `pnpm dev` instead (frontend at <http://127.0.0.1:5173>); see the [development guide](docs/development.md).
 
-### 配置模型
+### Configure a model
 
-打开「设置 → 模型配置」，选择 Provider、模型和登录方式。凭据只保存在本机的数据目录中（默认 `~/.teach-me-coding/`），不会返回浏览器。
+Open **Settings → Model configuration** and choose a provider, model, and sign-in method. Credentials are stored only in the local data directory (default: `~/.teach-me-coding/`) and are never sent back to the browser.
 
-## 使用方式
+## Usage
 
-1. 在首页描述你想学的内容，例如「我想学习 Rust，最后能写一个命令行工具」。
-2. 回答 Agent 关于背景、目标和时间安排的问题，确认需求摘要。
-3. 查看生成的学习路线，需要时让 Agent 调整。
-4. 逐个单元阅读课件，在 IDE 和终端中练习，随时向 Agent 提问。
-5. 完成测评，根据反馈继续学习。
+1. Describe what you want to learn on the home page, for example: “I want to learn Rust and build a command-line tool.”
+2. Answer the agent's questions about your background, goals, and schedule, then confirm the requirements summary.
+3. Review the generated learning roadmap and ask the agent to adjust it if needed.
+4. Work through each unit's lessons, practice in the IDE and terminal, and ask the agent questions whenever you need help.
+5. Complete the assessments and use the feedback to guide your next steps.
 
-## 配置
+## Configuration
 
-- **启动参数**（数据目录、端口、监听地址等）通过环境变量或项目根目录的 `.env` 设置，参考 [`.env.example`](.env.example)。
-- **模型、搜索、MCP 和 Skills** 在应用的「设置」页面管理。
+- **Startup options** (data directory, port, listen address, and more) are set through environment variables or a `.env` file in the project root. See [`.env.example`](.env.example).
+- **Models, search, MCP, and Skills** are managed in the application's **Settings** page.
 
-默认只监听 `127.0.0.1`。设置 `HOST=0.0.0.0` 可以在局域网中访问，但**没有登录鉴权**，只应在可信网络中使用。
+By default, the server listens only on `127.0.0.1`. Set `HOST=0.0.0.0` to allow access over your local network, but **there is no login authentication**. Use this only on a trusted network.
 
-全部选项、数据目录结构和备份方法见[配置文档](docs/configuration.md)。
+See the [configuration guide](docs/configuration.md) for all options, the data directory layout, and backup instructions.
 
-## 文档
+## Documentation
 
-- [配置](docs/configuration.md)：启动参数、模型、数据目录与备份、局域网访问、搜索、网页抓取、MCP、Skills
-- [架构](docs/architecture.md)：组成部分、Agent 场景与工具、提案与 YOLO 模式、运行生命周期、本机执行边界
-- [开发指南](docs/development.md)：开发环境、项目结构与测试
-- [界面翻译](docs/translating.md)：翻译约定与检查
-- [参与贡献](CONTRIBUTING.md)：问题反馈与 Pull Request 流程
-- [安全策略](SECURITY.md)：安全模型与漏洞报告
+- [Configuration](docs/configuration.md): startup options, models, data directory and backups, local network access, search, web fetching, MCP, and Skills
+- [Architecture](docs/architecture.md): components, agent scenarios and tools, proposals and YOLO mode, run lifecycle, and local execution boundaries
+- [Development guide](docs/development.md): development environment, project structure, and tests
+- [UI translation](docs/translating.md): translation conventions and checks
+- [Contributing](CONTRIBUTING.md): issue reporting and the pull request process
+- [Security policy](SECURITY.md): security model and vulnerability reporting
 
-## 参与贡献
+## Contributing
 
-欢迎通过 [Issues](https://github.com/liangxiao777/TeachMeCoding/issues) 反馈问题或提出建议。提交 Pull Request 前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Bug reports and suggestions are welcome through [Issues](https://github.com/liangxiao777/TeachMeCoding/issues). Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request.
 
-## 致谢
+## Acknowledgments
 
-- [Pi](https://github.com/earendil-works/pi)：Agent 核心、模型接入、MCP 客户端与 Skills 加载
-- [AI Elements](https://ai-sdk.dev/elements) 与 [shadcn/ui](https://ui.shadcn.com/)：会话与输入组件
-- [OpenClaw](https://github.com/openclaw/openclaw)：搜索与网页抓取工具的参考实现
-- [Skills CLI](https://github.com/vercel-labs/skills) 与 [skills.sh](https://skills.sh)
-- [xterm.js](https://xtermjs.org/)、[node-pty](https://github.com/microsoft/node-pty)、[better-sqlite3](https://github.com/WiseLibs/better-sqlite3)、[Hono](https://hono.dev/)、[CodeMirror](https://codemirror.net/)
+- [Pi](https://github.com/earendil-works/pi): agent core, model integration, MCP client, and Skills loading
+- [AI Elements](https://ai-sdk.dev/elements) and [shadcn/ui](https://ui.shadcn.com/): conversation and input components
+- [OpenClaw](https://github.com/openclaw/openclaw): reference implementation for search and web fetching tools
+- [Skills CLI](https://github.com/vercel-labs/skills) and [skills.sh](https://skills.sh)
+- [xterm.js](https://xtermjs.org/), [node-pty](https://github.com/microsoft/node-pty), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [Hono](https://hono.dev/), [CodeMirror](https://codemirror.net/)
 
-## 许可证
+## License
 
-本项目基于 [Apache License 2.0](LICENSE) 开源。
+This project is open source under the [Apache License 2.0](LICENSE).
 
-Copyright 2026 lxiao（[@liangxiao777](https://github.com/liangxiao777)）
+Copyright 2026 lxiao ([@liangxiao777](https://github.com/liangxiao777))

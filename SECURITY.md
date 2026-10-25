@@ -1,28 +1,30 @@
-# 安全策略
+# Security policy
 
-## 支持的版本
+English · [简体中文](SECURITY.zh.md)
 
-项目尚未发布正式版本，安全修复只针对 `main` 分支。
+## Supported versions
 
-## 报告漏洞
+The project has not yet had an official release. Security fixes target only the `main` branch.
 
-请不要在公开 issue 中披露漏洞细节。请在仓库的 Security 页面点击「Report a vulnerability」私下提交，说明影响范围、复现步骤和受影响的提交。
+## Reporting a vulnerability
 
-## 安全模型
+Do not disclose vulnerability details in public issues. On the repository's Security page, click **Report a vulnerability** to submit a private report. Include the scope of the impact, steps to reproduce, and affected commits.
 
-TeachMeCoding 是本地单用户应用。AI Agent 以运行服务的系统账号权限读取文件、执行命令和访问网络，因此请只在你信任模型、工具和资料的环境中使用。以下行为是设计上的取舍，不视为漏洞：
+## Security model
 
-- **不是沙箱。** Agent 的 `bash` 和 `read`/`ls`/`find`/`grep`、本机终端、确认后的文件修改和代码测评都使用服务账号的权限。项目目录、资料库目录和工作目录都不是权限边界，Agent 可能读取凭据等私人文件并发送给模型 Provider。
-- **Agent Bash 默认自主执行**，不逐条确认命令。停止 Agent 会取消命令，但无法撤销已产生的副作用。
-- **YOLO 模式**开启后，会自动接受该会话中的路线调整、课件修改、文件修改和学习结论。
-- **启用的 MCP 工具可被 Agent 直接调用**，不经过逐次确认。只添加你信任的服务器。
-- **网络模式（`HOST=0.0.0.0`）没有登录鉴权和用户隔离。** 能连接端口的人可以读写学习数据、调用模型、使用 Agent 和本机终端。只在可信网络中使用，不要暴露到公网。
+TeachMeCoding is a local, single-user application. The AI Agent reads files, executes commands, and accesses the network with the permissions of the system account running the server. Use it only in an environment where you trust the model, tools, and reference materials. The following behaviors are intentional design trade-offs and are not considered vulnerabilities:
 
-应用提供的保护：
+- **This is not a sandbox.** The Agent's `bash` and `read`/`ls`/`find`/`grep` tools, the local terminal, approved file modifications, and coding assessments all use the server account's permissions. Project directories, the reference library directory, and working directories are not permission boundaries. The Agent may read private files such as credentials and send them to the model provider.
+- **Agent Bash runs autonomously by default**, without confirming each command. Stopping the Agent cancels commands but cannot undo side effects that have already occurred.
+- **YOLO mode**, once enabled, automatically accepts roadmap adjustments, lesson changes, file modifications, and learning conclusions in that conversation.
+- **Enabled MCP tools can be called directly by the Agent**, without per-call confirmation. Add only servers you trust.
+- **Network mode (`HOST=0.0.0.0`) has no login authentication or user isolation.** Anyone who can connect to the ports can read and write learning data, call models, and use the Agent and local terminal. Use it only on trusted networks; do not expose it to the public internet.
 
-- 请求令牌、Host/Origin 白名单和 Fetch Metadata 检查，用于阻止外部网页滥用本地接口。它们不是登录系统，也不能防御拥有本机权限的进程。
-- 模型、搜索和 MCP 凭据只通过设置页保存在数据目录中（文件权限 600），不会返回浏览器；应用不从 `.env`、环境变量或其他应用的登录文件读取凭据。不要把密钥放进 `VITE_*` 变量、URL 或命令参数。
-- Agent 子进程只继承白名单中的环境变量；网页抓取拒绝本机和内网地址。
-- `TMC_AGENT_DEBUG_SNAPSHOTS=1` 会把完整模型请求写入数据目录的 `agent-debug/`，其中可能包含源码、路径和私有评分标准。不要提交或公开这些文件。
+Protections provided by the application:
 
-各项机制的细节见[架构](docs/architecture.md)和[配置](docs/configuration.md)。
+- Request tokens, Host/Origin allowlists, and Fetch Metadata checks are used to prevent external web pages from abusing local interfaces. They are not a login system and cannot defend against processes with local permissions.
+- Model, search, and MCP credentials are saved only through the Settings page in the data directory (file permissions 600) and are not sent back to the browser. The application does not read credentials from `.env`, environment variables, or other applications' sign-in files. Do not put secrets in `VITE_*` variables, URLs, or command arguments.
+- Agent subprocesses inherit only allowlisted environment variables; web fetching rejects local and private-network addresses.
+- `TMC_AGENT_DEBUG_SNAPSHOTS=1` writes complete model requests to `agent-debug/` in the data directory. These may contain source code, paths, and private grading rubrics. Do not commit or make these files public.
+
+See [Architecture](docs/architecture.md) and [Configuration](docs/configuration.md) for details of these mechanisms.

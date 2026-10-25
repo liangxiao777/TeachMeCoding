@@ -1,11 +1,13 @@
-# 开发约定
+# Development conventions
 
-## 工具设计原则
+English · [简体中文](AGENTS.zh.md)
 
-- 简单有效，每个约束都要有实际用途。
-- 模型负责表达业务内容；宿主负责内部 ID、资料关联、修订号、事务和存储。
-- 内容要求主要通过工具说明与提示词引导，不用固定清单、来源 ID、逐字符摘录或排版检查代替内容判断。
+## Tool design principles
 
-## 界面设计契约
+- Keep tools simple and effective. Every constraint must serve a practical purpose.
+- The model expresses business content; the host owns internal IDs, reference associations, revision numbers, transactions, and storage.
+- Guide content primarily through tool descriptions and prompts. Do not replace content judgment with fixed checklists, source IDs, character-by-character quotations, or formatting checks.
 
-- 添加页面说明文案、按钮或设置入口前，必须先确认其对用户完成任务确有必要；以极简为默认，避免重复解释、冗余操作和吵闹拥挤的界面。
+## UI design contract
+
+- Before adding explanatory page copy, buttons, or settings entry points, confirm that they are necessary for the user to complete the task. Default to minimalism; avoid repeated explanations, redundant actions, and noisy, crowded interfaces.

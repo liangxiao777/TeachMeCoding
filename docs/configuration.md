@@ -1,125 +1,127 @@
-# 配置
+# Configuration
 
-TeachMeCoding 的配置分为两类：
+English · [简体中文](configuration.zh.md)
 
-- **启动参数**：端口、监听地址、数据目录等，通过环境变量或项目根目录的 `.env` 设置，修改后需重启。
-- **应用设置**：模型、搜索、MCP 和 Skills，在应用的「设置」页面管理，保存在数据目录中，对之后开始的 Agent 运行生效。
+TeachMeCoding has two types of configuration:
 
-凭据只能通过设置页保存。应用不会从 `.env`、环境变量或其他应用的登录文件读取凭据。
+- **Startup options**: ports, listen address, data directory, and more. Set these through environment variables or a `.env` file in the project root. Changes require a restart.
+- **Application settings**: models, search, MCP, and Skills. Manage these on the application's **Settings** page. They are saved in the data directory and apply to Agent runs started afterward.
 
-## 启动参数
+Credentials can only be saved through the Settings page. The application does not read credentials from `.env`, environment variables, or other applications' sign-in files.
 
-优先级为 **启动环境 > 根目录 `.env` > 默认值**。可以把 [`.env.example`](../.env.example) 复制为 `.env` 再按需修改；如果已有 `.env`，请手动合并。
+## Startup options
 
-| 变量 | 默认值 | 说明 |
+Precedence is **startup environment > root `.env` > defaults**. Copy [`.env.example`](../.env.example) to `.env` and adjust it as needed. If you already have a `.env` file, merge the settings manually.
+
+| Variable | Default | Description |
 | --- | --- | --- |
-| `TMC_DATA_DIR` | `~/.teach-me-coding/` | 数据目录，必须是绝对路径 |
-| `HOST` | `127.0.0.1` | 监听地址，可选 `127.0.0.1` 或 `0.0.0.0`，见[局域网访问](#局域网访问) |
-| `PORT` | `4310` | API 端口；生产模式下同时提供界面 |
-| `TMC_WEB_PORT` | `5173` | 开发模式的前端端口 |
-| `TMC_PREVIEW_ORIGIN` | 未设置 | 允许嵌入的编辑器预览来源，见[编辑器内置预览](#编辑器内置预览) |
-| `TMC_AGENT_DEBUG_SNAPSHOTS` | `0` | 设为 `1` 时把完整模型请求写入数据目录的 `agent-debug/` |
+| `TMC_DATA_DIR` | `~/.teach-me-coding/` | Data directory; must be an absolute path |
+| `HOST` | `127.0.0.1` | Listen address: either `127.0.0.1` or `0.0.0.0`; see [Local network access](#local-network-access) |
+| `PORT` | `4310` | API port; also serves the interface in production mode |
+| `TMC_WEB_PORT` | `5173` | Frontend port in development mode |
+| `TMC_PREVIEW_ORIGIN` | Not set | Editor preview origin allowed to embed the interface; see [Embedded editor previews](#embedded-editor-previews) |
+| `TMC_AGENT_DEBUG_SNAPSHOTS` | `0` | Set to `1` to write complete model requests to `agent-debug/` in the data directory |
 
-- 只读取上表六项，其他键会被忽略，也不会注入进程环境。
-- `.env` 中的值按字面量读取，不展开 `~`、`${VAR}` 或命令。路径含空格时加引号，例如 `TMC_DATA_DIR="/Users/me/TMC Data"`。
-- 显式设置的空值同样生效；端口、数据目录和预览来源为空时服务会拒绝启动。
-- 运行模式由启动命令决定：`pnpm dev` 是开发模式，`pnpm start` 是生产模式。
-- `.env` 相对代码位置定位，因此可以从任意目录运行 `node /path/to/apps/server/dist/index.js`。
+- Only the six entries in the table above are read. Other keys are ignored and are not injected into the process environment.
+- Values in `.env` are read literally; `~`, `${VAR}`, and commands are not expanded. Quote paths containing spaces, for example, `TMC_DATA_DIR="/Users/me/TMC Data"`.
+- Explicitly set empty values also take effect; the server refuses to start if a port, the data directory, or the preview origin is empty.
+- The startup command determines the mode: `pnpm dev` uses development mode, and `pnpm start` uses production mode.
+- `.env` is located relative to the code, so you can run `node /path/to/apps/server/dist/index.js` from any directory.
 
 > [!CAUTION]
-> 调试快照可能包含源码、文件路径和私有评分标准。不要提交或公开 `agent-debug/` 中的文件。关闭快照不会删除已有文件，请在停止服务后手动清理。
+> Debug snapshots may contain source code, file paths, and private grading rubrics. Do not commit or make files in `agent-debug/` public. Disabling snapshots does not delete existing files; stop the server before cleaning them up manually.
 
-## 模型
+## Models
 
-在「设置 → 模型配置」中选择 Provider、模型、推理强度和登录方式（API Key 或 OAuth）。
+In **Settings → Model configuration**, choose a provider, model, reasoning effort, and sign-in method (API Key or OAuth).
 
-- 新的选择用于之后开始的运行，进行中的运行继续使用原来的模型。
-- 凭据保存在数据目录的 `credentials.json`（权限 600），不会返回浏览器。
-- 不支持依赖外部云身份文件的认证方式：暂不提供 Amazon Bedrock；Google Vertex AI 只支持保存的 API Key，不读取 Google ADC 或 service account 文件。
-- 未配置模型时仍可浏览已有数据和使用终端，设置页会提示缺少哪项配置。
+- New selections apply to runs started afterward; ongoing runs continue using their original model.
+- Credentials are saved in `credentials.json` in the data directory (permissions 600) and are not sent back to the browser.
+- Authentication methods that depend on external cloud identity files are not supported: Amazon Bedrock is not currently available; Google Vertex AI supports only saved API Keys and does not read Google ADC or service account files.
+- Without a configured model, you can still browse existing data and use the terminal. The Settings page indicates which configuration is missing.
 
-## 数据目录
+## Data directory
 
-| 路径 | 内容 |
+| Path | Contents |
 | --- | --- |
-| `app.db` | SQLite 数据库：空间、需求、路线、课件、会话、测评与 Agent 运行记录 |
-| `projects/<space-id>/` | 每个学习空间的项目文件，以磁盘内容为准 |
-| `library/` | 资料库中上传的原始文件 |
-| `skills/` | 通过应用安装的 Skills |
-| `credentials.json`、`search.json`、`mcp.json` | 模型凭据、搜索配置和 MCP 配置（权限 600） |
-| `bash-output/` | Agent Bash 的临时输出，运行结束或重启时清理 |
-| `agent-debug/` | 仅在开启调试快照时生成 |
-| `app.lock` | 实例锁 |
+| `app.db` | SQLite database: learning spaces, requirements, roadmaps, lessons, conversations, assessments, and Agent run records |
+| `projects/<space-id>/` | Project files for each learning space; the contents on disk are authoritative |
+| `library/` | Original files uploaded to the reference library |
+| `skills/` | Skills installed through the application |
+| `credentials.json`, `search.json`, `mcp.json` | Model credentials, search configuration, and MCP configuration (permissions 600) |
+| `bash-output/` | Temporary Agent Bash output, cleaned up when the run ends or the server restarts |
+| `agent-debug/` | Created only when debug snapshots are enabled |
+| `app.lock` | Instance lock |
 
-- 一个数据目录同一时间只能被一个实例使用，开发和生产实例也不能共用。不要通过删除 `app.lock` 启动第二个实例；需要并行运行时，为另一个实例设置不同的 `TMC_DATA_DIR`。
-- 空目录首次启动时自动初始化，升级后按版本迁移数据库。迁移失败、数据库版本高于当前程序或数据库无法打开时，服务会退出并提示，不会删除数据重建。
-- 服务重启时，未完成的 Agent 运行、命令和代码执行会标记为中断，不会自动重放。
+- Only one instance can use a data directory at a time, including development and production instances. Do not delete `app.lock` to start a second instance; to run instances in parallel, set a different `TMC_DATA_DIR` for the other instance.
+- An empty directory is initialized automatically on first startup, and the database is migrated by version after upgrades. If migration fails, the database version is newer than the current application, or the database cannot be opened, the server exits with an error message. It does not delete and recreate the data.
+- When the server restarts, unfinished Agent runs, commands, and code executions are marked as interrupted and are not replayed automatically.
 
-### 备份与恢复
+### Backup and restore
 
-1. 正常停止服务。
-2. 复制整个数据目录，包括 SQLite 可能生成的 `-wal`、`-shm` 文件。
-3. 恢复时，停止服务后把 `TMC_DATA_DIR` 指向备份副本，或用备份替换原目录。
+1. Shut down the server normally.
+2. Copy the entire data directory, including any `-wal` and `-shm` files SQLite may have created.
+3. To restore, stop the server, then point `TMC_DATA_DIR` to the backup copy or replace the original directory with the backup.
 
-不要在服务运行时只复制 `app.db`，也不要直接修改数据库文件。
+Do not copy only `app.db` while the server is running, and do not edit the database files directly.
 
-## 局域网访问
+## Local network access
 
-默认只监听 `127.0.0.1`。要让同一可信网络中的其他设备访问，设置 `HOST=0.0.0.0`：
+By default, the server listens only on `127.0.0.1`. To allow access from other devices on the same trusted network, set `HOST=0.0.0.0`:
 
 ```sh
-HOST=0.0.0.0 pnpm start   # 需先 pnpm build；访问 http://<本机 IPv4>:4310
-HOST=0.0.0.0 pnpm dev     # 访问 http://<本机 IPv4>:5173
+HOST=0.0.0.0 pnpm start   # Run pnpm build first; open http://<local IPv4>:4310
+HOST=0.0.0.0 pnpm dev     # Open http://<local IPv4>:5173
 ```
 
-服务启动时会把本机网卡的 IPv4 地址加入 Host/Origin 白名单；网卡地址变化后需要重启。
+At startup, the server adds the IPv4 addresses of the machine's network interfaces to the Host/Origin allowlist. Restart the server if those addresses change.
 
 > [!WARNING]
-> 网络模式**没有登录鉴权和用户隔离**。任何能连接到端口的人都可以读写学习数据、调用模型、使用 Agent、操作本机终端和运行代码。只在可信网络中使用，不要暴露到公网。
+> Network mode has **no login authentication or user isolation**. Anyone who can connect to the ports can read and write learning data, call models, use the Agent, operate the local terminal, and run code. Use it only on trusted networks; do not expose it to the public internet.
 
-## 编辑器内置预览
+## Embedded editor previews
 
-Devin Desktop 等编辑器会通过另一个本机端口代理预览页面。默认的访问保护会拒绝这个来源，并阻止页面被嵌入 iframe。需要内置预览时，把 `TMC_PREVIEW_ORIGIN` 设为编辑器实际给出的预览地址后重启服务：
+Editors such as Devin Desktop proxy preview pages through another local port. The default access protections reject this origin and prevent the page from being embedded in an iframe. To use an embedded preview, set `TMC_PREVIEW_ORIGIN` to the actual preview address provided by the editor, then restart the server:
 
 ```sh
-TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm dev   # 端口替换为编辑器实际使用的端口
+TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm dev   # Replace the port with the one actually used by the editor
 ```
 
-- 只接受一个准确的 HTTP 本机来源（`127.0.0.1` 或 `localhost`，可带端口），不接受其他主机、路径或通配符；`localhost` 与 `127.0.0.1` 不能互相替代。
-- 启用后，同源页面、该预览来源和 VS Code 系编辑器的 webview 可以嵌入界面。API 和终端仍需要请求令牌，也不会开放 CORS。
-- 预览端口变化后需要更新配置并重启；移除配置并重启即恢复默认策略。
+- Only one exact local HTTP origin is accepted (`127.0.0.1` or `localhost`, with an optional port). Other hosts, paths, and wildcards are not accepted; `localhost` and `127.0.0.1` are not interchangeable.
+- Once enabled, same-origin pages, that preview origin, and VS Code-based editor webviews can embed the interface. API and terminal requests still require a request token, and CORS remains disabled.
+- If the preview port changes, update the configuration and restart. Remove the setting and restart to restore the default policy.
 
-## 搜索服务
+## Search services
 
-在「设置 → 搜索服务」中选择服务商并打开总开关（默认关闭）。启用后，所有教学场景都可以通过 `web_search` 工具搜索，教学模型本身不需要支持原生搜索。
+In **Settings → Search services**, choose a provider and turn on the master switch (off by default). Once enabled, all teaching scenarios can search through the `web_search` tool; the teaching model does not need native search support.
 
-支持 14 个服务商：Brave Search、Tavily、Exa、Firecrawl、Parallel、Perplexity Search、MiniMax Search、Gemini、Grok、Kimi、Codex Hosted Search、DuckDuckGo、Firecrawl Free、Ollama Web Search。
+There are 14 supported providers: Brave Search, Tavily, Exa, Firecrawl, Parallel, Perplexity Search, MiniMax Search, Gemini, Grok, Kimi, Codex Hosted Search, DuckDuckGo, Firecrawl Free, and Ollama Web Search.
 
-- **无需 API Key**：DuckDuckGo 和 Firecrawl Free。匿名搜索可能遇到限流或验证码。
-- **Codex Hosted Search**：使用「设置 → 模型配置」中登录的 ChatGPT 账号，以私有临时目录和最小环境运行固定版本的 Codex app-server，并禁用命令执行、文件修改和 MCP，只做搜索。这是能力限制，不是操作系统级隔离。不支持 Windows。退出该账号也会影响使用它的教学模型。
-- **其他服务商**：使用各自的 API Key。Gemini、Grok、Kimi 可单独指定搜索模型；MiniMax、Kimi 可选择全球或中国区域；MiniMax Search 需要支持搜索接口的 Coding Plan；Ollama Web Search 调用 `ollama.com` 的托管服务，不使用本地 Ollama。
+- **No API Key required**: DuckDuckGo and Firecrawl Free. Anonymous searches may encounter rate limits or CAPTCHAs.
+- **Codex Hosted Search**: uses the ChatGPT account signed in under **Settings → Model configuration**. It runs a pinned version of Codex app-server in a private temporary directory with a minimal environment, with command execution, file modification, and MCP disabled, for search only. These are capability restrictions, not operating-system-level isolation. Windows is not supported. Signing out of that account also affects any teaching model that uses it.
+- **Other providers**: use their own API Keys. Gemini, Grok, and Kimi allow a separate search model to be specified; MiniMax and Kimi offer Global or China regions; MiniMax Search requires a Coding Plan that supports the search API; Ollama Web Search calls the hosted service at `ollama.com`, not a local Ollama instance.
 
-使用说明：
+Usage notes:
 
-- 配置保存在数据目录的 `search.json`（权限 600），切换服务商不会覆盖其他服务商的配置。
-- 「测试搜索」直接调用当前服务商，不经过教学模型。测试和 Agent 搜索都可能产生费用，查询内容会发送给服务商。
-- 关闭总开关会阻止后续搜索并取消进行中的请求，但不影响网页抓取、MCP 等其他联网方式。
-- 服务商失败时直接报错，不会自动切换到其他服务商。
-- 普通搜索返回带标题和链接的结果摘要（默认 5 条，最多 10 条）；Gemini、Grok、Kimi、Codex 返回带来源的回答。搜索不抓取全文。
+- The configuration is saved in `search.json` in the data directory (permissions 600). Switching providers does not overwrite other providers' settings.
+- **Test search** calls the current provider directly, without going through the teaching model. Both tests and Agent searches may incur charges, and query content is sent to the provider.
+- Turning off the master switch blocks subsequent searches and cancels in-flight requests, but does not affect other ways of accessing the network, such as web fetching or MCP.
+- Provider failures are reported directly; there is no automatic fallback to another provider.
+- Standard searches return result snippets with titles and links (5 by default, up to 10); Gemini, Grok, Kimi, and Codex return answers with sources. Search does not fetch full page content.
 
-## 网页抓取
+## Web fetching
 
-`web_fetch` 工具始终可用，不需要 API Key，也不受搜索开关控制，用于读取公开网页或搜索结果中的链接。
+The `web_fetch` tool is always available, requires no API Key, and is not controlled by the search switch. Use it to read public web pages or links from search results.
 
-- 只发送 HTTP(S) GET 请求，不携带 Cookie 或任何凭据。
-- HTML 用 Readability 提取正文后转为 Markdown 或纯文本，也支持 Markdown、纯文本和 JSON。不执行 JavaScript，不支持登录页面或 PDF。
-- 单次最多下载 750,000 字节、跟随 3 次重定向，整体时限 30 秒。
-- 拒绝本机、内网、云元数据和保留地址，并在连接时固定已校验的 DNS 结果，防止 DNS 重绑定。
-- 直接连接目标地址，不使用系统代理。依赖代理或 fake-IP 的网络环境可能无法抓取。
+- Sends only HTTP(S) GET requests, without cookies or any credentials.
+- Extracts the main content from HTML with Readability, then converts it to Markdown or plain text. Markdown, plain text, and JSON are also supported. It does not execute JavaScript or support pages requiring sign-in or PDFs.
+- Downloads at most 750,000 bytes and follows at most 3 redirects per request, with an overall time limit of 30 seconds.
+- Rejects local, private-network, cloud metadata, and reserved addresses, and pins the validated DNS result when connecting to prevent DNS rebinding.
+- Connects directly to the destination without using the system proxy. Fetching may fail on networks that depend on proxies or fake-IP.
 
 ## MCP
 
-在「设置 → MCP」中添加 MCP 服务器，可以用表单填写，也可以粘贴 JSON：
+Add MCP servers in **Settings → MCP**, either through the form or by pasting JSON:
 
 ```json
 {
@@ -133,32 +135,32 @@ TMC_PREVIEW_ORIGIN=http://127.0.0.1:54492 pnpm dev   # 端口替换为编辑器�
 }
 ```
 
-| 字段 | 适用 | 说明 |
+| Field | Applies to | Description |
 | --- | --- | --- |
-| `command`、`args` | stdio | 可执行程序名和参数，不是 shell 命令串 |
-| `cwd` | stdio | 工作目录；相对路径基于数据目录 |
-| `env` | stdio | 额外环境变量 |
-| `url`、`headers` | Streamable HTTP | 服务地址和请求头 |
-| `enabled` | 全部 | 设为 `false` 时不启动 |
-| `timeout` | 全部 | 单位为秒，默认 60 |
+| `command`, `args` | stdio | Executable name and arguments, not a shell command string |
+| `cwd` | stdio | Working directory; relative paths are resolved against the data directory |
+| `env` | stdio | Additional environment variables |
+| `url`, `headers` | Streamable HTTP | Server address and request headers |
+| `enabled` | All | The server does not start when set to `false` |
+| `timeout` | All | In seconds; defaults to 60 |
 
-- `env` 和 `headers` 只接受字面值，不支持 `${VAR}` 引用或命令展开。认证信息请放在这两个字段中，不要写进 URL 或启动参数。
-- 配置保存在数据目录的 `mcp.json`（权限 600）。设置页会隐藏 `env` 和 `headers` 的值，保存未修改的掩码会保留原值。
-- 每次 Agent 运行开始时固定当时可用的工具列表，配置变更对之后的运行生效。
-- 暂不支持 legacy SSE 传输、远端 OAuth 登录，以及 MCP resources 和 prompts。
+- `env` and `headers` accept only literal values; `${VAR}` references and command expansion are not supported. Put authentication information in these fields, not in URLs or startup arguments.
+- The configuration is saved in `mcp.json` in the data directory (permissions 600). The Settings page hides the values of `env` and `headers`; saving an unchanged mask preserves the original value.
+- The list of available tools is fixed at the start of each Agent run. Configuration changes apply to subsequent runs.
+- Legacy SSE transport, remote OAuth sign-in, and MCP resources and prompts are not currently supported.
 
 > [!WARNING]
-> 启用的 MCP 工具可被 Agent 直接调用，不经过逐次确认，可能读取学习资料或产生外部副作用。stdio 服务以本机账号权限运行。只添加你信任的服务器。
+> Enabled MCP tools can be called directly by the Agent without per-call confirmation. They may read learning materials or cause external side effects. stdio servers run with the local account's permissions. Add only servers you trust.
 
 ## Skills
 
-在「设置 → Skills」中管理技能：
+Manage skills in **Settings → Skills**:
 
-- **技能市场**：浏览 [skills.sh](https://skills.sh) 的 All Time、Trending 和 Hot 榜单，或搜索全部技能。
-- **从链接安装**：支持 skills.sh 技能页、HTTPS 仓库或发布网站，以及 `owner/repo` 形式；来源包含多个技能时需要指定名称。
-- **导入本地目录**：引用本机的技能目录或单个 Markdown 文件（绝对路径或 `~/` 开头）。
-- **已安装**：查看详情、启用或停用、检查更新、卸载。
+- **Skill marketplace**: browse the All Time, Trending, and Hot leaderboards on [skills.sh](https://skills.sh), or search all skills.
+- **Install from link**: supports skills.sh skill pages, HTTPS repositories or publishing sites, and `owner/repo` shorthand. Specify the skill name when a source contains multiple skills.
+- **Import local directory**: reference a local skill directory or a single Markdown file (using an absolute path or a path starting with `~/`).
+- **Installed**: view details, enable or disable, check for updates, and uninstall.
 
-安装使用固定版本的 [Skills CLI](https://github.com/vercel-labs/skills)，在独立的临时目录中获取文件，不传递模型凭据、SSH agent 或 Git 配置，校验后放入数据目录的 `skills/`。安装不会执行包内的脚本或安装依赖，但获取过程仍以本机权限运行。检查更新时如果发现本地修改，不会覆盖。移除本地引用只会隐藏技能，不删除原文件。
+Installation uses a pinned version of the [Skills CLI](https://github.com/vercel-labs/skills) to fetch files in a separate temporary directory, without passing through model credentials, SSH agent access, or Git configuration. Files are validated before being placed in `skills/` in the data directory. Installation does not run scripts in the package or install dependencies, but fetching still runs with local account permissions. Local modifications detected during an update check are not overwritten. Removing a local reference only hides the skill; it does not delete the original files.
 
-启用的技能会以名称和描述列在系统提示中，模型需要时用 `read` 工具读取完整内容；声明了 `disable-model-invocation: true` 的技能不会自动列出。任何启用的技能都可以通过以 `/skill:名称 你的请求` 开头的消息显式调用。技能变更对之后开始的运行生效。
+Enabled skills are listed by name and description in the system prompt, and the model uses the `read` tool to read their full content when needed. Skills declaring `disable-model-invocation: true` are not listed automatically. Any enabled skill can be invoked explicitly by starting a message with `/skill:name your request`. Skill changes apply to runs started afterward.
