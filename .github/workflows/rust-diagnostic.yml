@@ -1,0 +1,177 @@
+name: Rust timeout diagnostic
+
+on:
+  push:
+    branches: [ci/diagnose-rust-timeout]
+  workflow_dispatch:
+    inputs:
+      patch_base64:
+        description: Optional maintainer patch to test against the published source
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        suite: [full, toolchain]
+        exclude:
+          - os: macos-latest
+            suite: toolchain
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 273bbfb816a506b8585ed6c8077467e156d95a69
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux document parser and native build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3 poppler-utils
+      - name: macOS document parser
+        if: runner.os == 'macOS'
+        run: brew install poppler
+      - name: Record source and apply an optional verification patch
+        env:
+          PATCH_BASE64: ${{ inputs.patch_base64 }}
+        run: |
+          printf '\n/.amp/in/\n' >> "$(git rev-parse --git-path info/exclude)"
+          mkdir -p .amp/in/artifacts/rust-timeout
+          git rev-parse HEAD > .amp/in/artifacts/rust-timeout/source.txt
+          if [ -n "$PATCH_BASE64" ]; then
+            node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          writeFileSync('.amp/in/artifacts/rust-timeout/verification.patch', Buffer.from(process.env.PATCH_BASE64, 'base64'));
+          NODE
+            git apply --check .amp/in/artifacts/rust-timeout/verification.patch
+            git apply .amp/in/artifacts/rust-timeout/verification.patch
+          fi
+          git diff --binary > .amp/in/artifacts/rust-timeout/applied.patch
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm release:pack
+      - name: Prepare process sampling without warming Rust
+        run: |
+          cat > "$RUNNER_TEMP/rust-trace.mjs" <<'NODE'
+          import cp from 'node:child_process';
+          import { appendFileSync, mkdirSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
+          import { syncBuiltinESMExports } from 'node:module';
+          import { availableParallelism, arch, platform } from 'node:os';
+          import { join } from 'node:path';
+
+          const directory = process.env.TMC_RUST_TRACE_DIR;
+          if (directory && platform() === 'linux') {
+            mkdirSync(directory, { recursive: true });
+            const destination = join(directory, `rust-${process.pid}.jsonl`);
+            const original = cp.spawn;
+            let sequence = 0;
+            const read = (path) => {
+              try { return readFileSync(path, 'utf8').trim(); } catch { return undefined; }
+            };
+            const link = (path) => {
+              try { return readlinkSync(path); } catch { return undefined; }
+            };
+            const stat = (path) => {
+              const value = read(path)?.match(/^(\d+) \((.*)\) (.*)$/);
+              if (!value) return undefined;
+              const fields = value[3].split(' ');
+              return { pid: Number(value[1]), name: value[2], state: fields[0], ppid: Number(fields[1]),
+                pgid: Number(fields[2]), minorFaults: fields[7], majorFaults: fields[9],
+                userTicks: fields[11], systemTicks: fields[12], threadCount: fields[17], rssPages: fields[21] };
+            };
+            const record = (event) => {
+              try { appendFileSync(destination, JSON.stringify({ at: new Date().toISOString(), monoMs: Number(process.hrtime.bigint() / 1_000_000n), ...event }) + '\n'); }
+              catch (error) { process.stderr.write(`[Rust diagnostic] ${error.message}\n`); }
+            };
+            const snapshot = (pid) => {
+              const members = [];
+              for (const entry of readdirSync('/proc')) {
+                if (!/^\d+$/.test(entry)) continue;
+                const base = `/proc/${entry}`, state = stat(`${base}/stat`);
+                if (!state || state.pgid !== pid) continue;
+                let threads = [];
+                try { threads = readdirSync(`${base}/task`).map((id) => ({ ...stat(`${base}/task/${id}/stat`), wchan: read(`${base}/task/${id}/wchan`) })); } catch {}
+                members.push({ ...state, exe: link(`${base}/exe`), command: read(`${base}/cmdline`)?.replaceAll('\0', ' '),
+                  wchan: read(`${base}/wchan`), io: read(`${base}/io`), schedstat: read(`${base}/schedstat`), threads });
+              }
+              return { members, systemCpu: read('/proc/stat')?.split('\n')[0], load: read('/proc/loadavg'),
+                cpuPressure: read('/proc/pressure/cpu'), ioPressure: read('/proc/pressure/io'),
+                memoryPressure: read('/proc/pressure/memory'), cgroupCpu: read('/sys/fs/cgroup/cpu.stat') };
+            };
+            cp.spawn = function (...parameters) {
+              const args = Array.isArray(parameters[1]) ? parameters[1] : [];
+              if (!/\brustc\b/.test([parameters[0], ...args].join(' '))) return original.apply(this, parameters);
+              const id = ++sequence;
+              const options = Array.isArray(parameters[1]) ? parameters[2] : parameters[1];
+              record({ event: 'before-spawn', id, executable: parameters[0], args, cwd: options?.cwd,
+                node: process.version, architecture: arch(), availableParallelism: availableParallelism(),
+                cpuQuota: read('/sys/fs/cgroup/cpu.max') });
+              const child = original.apply(this, parameters);
+              const sample = () => { if (child.pid) record({ event: 'sample', id, pid: child.pid, ...snapshot(child.pid) }); };
+              child.once('spawn', () => { record({ event: 'spawn', id, pid: child.pid }); sample(); });
+              const interval = setInterval(sample, 125);
+              interval.unref();
+              child.stdout?.on('data', (data) => record({ event: 'stdout', id, bytes: data.length }));
+              child.stderr?.on('data', (data) => record({ event: 'stderr', id, bytes: data.length }));
+              child.once('error', (error) => { clearInterval(interval); record({ event: 'error', id, message: error.message }); });
+              child.once('exit', (code, signal) => { clearInterval(interval); sample(); record({ event: 'exit', id, code, signal }); });
+              child.once('close', (code, signal) => record({ event: 'close', id, code, signal }));
+              return child;
+            };
+            syncBuiltinESMExports();
+          }
+          NODE
+          node --check "$RUNNER_TEMP/rust-trace.mjs"
+      - name: Run unchanged tests with Rust process sampling
+        env:
+          SUITE: ${{ matrix.suite }}
+          NODE_OPTIONS: --import=${{ runner.temp }}/rust-trace.mjs
+          TMC_RUST_TRACE_DIR: ${{ github.workspace }}/.amp/in/artifacts/rust-timeout
+        run: |
+          if [ "$SUITE" = full ]; then
+            pnpm test
+          else
+            pnpm --filter @teach-me-coding/server exec tsx --test --test-timeout=15000 \
+              --test-name-pattern='installed language toolchains' src/modules/executions.test.ts
+          fi 2>&1 | tee .amp/in/artifacts/rust-timeout/tests.log
+      - name: Record toolchain versions after the first execution
+        if: always()
+        run: |
+          mkdir -p .amp/in/artifacts/rust-timeout
+          node --input-type=module <<'NODE' > .amp/in/artifacts/rust-timeout/environment.txt 2>&1
+          import { execFileSync } from 'node:child_process';
+          import { availableParallelism, cpus, release, totalmem } from 'node:os';
+          console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch,
+            kernel: release(), availableParallelism: availableParallelism(), cpu: cpus()[0]?.model, memoryBytes: totalmem() }));
+          for (const [file, args] of [['rustc', ['-Vv']], ['rustup', ['--version']], ['cc', ['--version']], ['ld', ['--version']]]) {
+            try { console.log(execFileSync(file, args, { encoding: 'utf8', timeout: 15_000 })); }
+            catch (error) { console.log(file, error.message, error.stdout?.toString(), error.stderr?.toString()); }
+          }
+          NODE
+      - run: pnpm test:native
+        if: matrix.suite == 'full'
+      - run: pnpm check:i18n
+        if: matrix.suite == 'full'
+      - run: pnpm exec playwright install --with-deps chrome
+        if: matrix.suite == 'full'
+      - run: pnpm test:browser tests/browser/execution.spec.ts --workers=1
+        if: matrix.suite == 'full'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-${{ matrix.os }}-${{ matrix.suite }}-${{ github.run_attempt }}
+          path: .amp/in/artifacts/rust-timeout/
+          include-hidden-files: true
+          if-no-files-found: error
