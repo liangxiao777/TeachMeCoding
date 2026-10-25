@@ -8,12 +8,10 @@
 
 - [Node.js](https://nodejs.org/) 24.15.0（见 `.node-version`）
 - [pnpm](https://pnpm.io/) 11.1.0
-- [README 中的系统依赖](../README.zh.md#环境要求)：原生依赖需要编译时，需准备 Python 3 和本机编译工具（macOS 的 Xcode Command Line Tools、Ubuntu/Debian 的 `build-essential`、Windows 的 Visual Studio 2022 C++ 工作负载和 Windows SDK）。
-- 原生 Windows 10（1809+）/ Windows 11 需要 Git for Windows Bash 来运行 Agent 命令和 IDE 终端，即使从 PowerShell 或 cmd 执行 pnpm 也一样。使用原生 Windows 的 Node 和工具链，不使用 WSL；安装工具后重新打开终端，使更新后的 `PATH` 生效。
+- `PATH` 中的 Git 和 Bash。
+- [README 中的系统依赖](../README.zh.md#环境要求)：原生依赖需要编译时，需准备 Python 3 和本机编译工具（macOS 的 Xcode Command Line Tools、Ubuntu/Debian 的 `build-essential`）。
 - `pnpm test` 额外需要 Python 3 和 `rustc` 来运行语言执行测试，以及 `pdftotext`（[Poppler](https://poppler.freedesktop.org/)）来运行资料库文档解析测试。请自行安装并加入 `PATH`；缺少时测试会失败，不会自动跳过。
-- 浏览器测试使用本机安装的 Google Chrome。
-
-源码安装面向 macOS、Linux（Ubuntu/Debian）和原生 Windows。macOS 26 / arm64 已通过类型检查、构建、测试、原生检查和浏览器执行测试；Docker 中的 Debian 12 / arm64 已通过冻结锁文件安装、类型检查、构建、测试和原生检查。原生 Windows、Linux 浏览器测试和 Intel Mac 尚未验证；提供的 CI 矩阵会在运行时检查三个平台。
+- 浏览器测试使用本机安装的 Google Chrome，平台限制见[浏览器测试](#浏览器测试)。
 
 ## 快速开始
 
@@ -22,15 +20,15 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` 会先构建 `packages/contracts`，再同时启动服务端和 Vite（前端 <http://127.0.0.1:5173>，API <http://127.0.0.1:4310>）。这些 pnpm 命令可以从 POSIX shell、PowerShell 和 cmd 执行。
+`pnpm dev` 会先构建 `packages/contracts`，再同时启动服务端和 Vite（前端 <http://127.0.0.1:5173>，API <http://127.0.0.1:4310>）。
 
-开发时，在项目根目录的 `.env` 中设置 `TMC_DATA_DIR`，使用独立的数据目录，避免影响日常学习数据，也无需依赖某种 shell 的环境变量语法：
+开发时，在项目根目录的 `.env` 中设置 `TMC_DATA_DIR`，使用独立的数据目录，避免影响日常学习数据：
 
 ```dotenv
 TMC_DATA_DIR="/absolute/path/to/teach-me-coding-dev"
 ```
 
-请把示例替换为本机的绝对路径；Windows 使用 `C:/Users/me/teach-me-coding-dev` 这样的路径，不要使用 Git Bash 的 `/c/Users/...`。全部启动参数见[配置](configuration.zh.md)。
+请把示例替换为绝对路径。全部启动参数见[配置](configuration.zh.md)。
 
 ## 项目结构
 
@@ -71,7 +69,7 @@ patches/             pnpm 依赖补丁
 
 所有测试都使用临时数据目录，不读写你的学习数据；Agent 回复使用确定性的测试 Provider，不调用收费模型。
 
-CI 矩阵覆盖 macOS、Linux 和 Windows 上的冻结锁文件安装、`pnpm check`、`pnpm build`、`pnpm test`、`pnpm test:native` 以及浏览器执行/PTY 检查。具体提交的验证结果以工作流运行记录为准。POSIX 权限断言只在 Unix 上运行；Windows 的隐私保护依赖账号 ACL，而不是模式位（见[安全策略](../SECURITY.zh.md)）。
+CI 矩阵仅使用 `ubuntu-latest` 和 `macos-latest`，覆盖冻结锁文件安装、`pnpm check`、`pnpm build`、`pnpm test`、`pnpm test:native` 以及浏览器执行/PTY 检查，包括 POSIX 权限断言（见[安全策略](../SECURITY.zh.md)）。
 
 ### 单元与集成测试
 
@@ -82,9 +80,9 @@ pnpm test
 
 覆盖业务规则、事务与幂等写入、项目路径边界、数据库迁移、重复启动和真实进程恢复。进程集成测试会启动真实服务并占用固定的本地端口（定义在 `tests/*.test.mjs` 中）。
 
-Windows 的文件符号链接边界测试需要开启开发者模式，或使用管理员测试终端；应用本身不需要管理员权限。
-
 ### 浏览器测试
+
+Linux 浏览器检查**仅限 x86_64**：当前配置使用 Google Chrome，其 Playwright 安装器明确拒绝 Linux arm64。Linux arm64 仅在非 root 的 Debian 12 Docker 环境中完成后端/原生依赖验证。本地浏览器验证覆盖 macOS 26 / arm64，Intel Mac 尚未验证。
 
 ```sh
 pnpm build
@@ -118,7 +116,7 @@ pnpm exec playwright test -c tests/agents.config.ts --workers=1
 
 | 补丁 | 用途 |
 | --- | --- |
-| `node-pty@1.1.0.patch` | macOS 预编译的 `spawn-helper` 缺少执行权限（[microsoft/node-pty#850](https://github.com/microsoft/node-pty/issues/850)），macOS 始终从源码编译，Linux/Windows 有可用预编译二进制时仍使用预编译版本 |
+| `node-pty@1.1.0.patch` | macOS 预编译的 `spawn-helper` 缺少执行权限（[microsoft/node-pty#850](https://github.com/microsoft/node-pty/issues/850)），macOS 始终从源码编译，Linux 有可用预编译二进制时仍使用预编译版本 |
 | `@base-ui__utils@0.2.9.patch` | 回移 [mui/base-ui#4866](https://github.com/mui/base-ui/pull/4866)，修复 React 19 生产模式下菜单 `aria-expanded` 状态错误（[#4956](https://github.com/mui/base-ui/issues/4956)） |
-| `@earendil-works__pi-coding-agent@1.0.0.patch` | 允许服务端提供鉴权上下文和 Provider 定义；为 Bash 工具增加私有输出目录、Unix `0600` 文件模式和写入失败传播 |
+| `@earendil-works__pi-coding-agent@1.0.0.patch` | 允许服务端提供鉴权上下文和 Provider 定义；为 Bash 工具增加私有输出目录、POSIX `0600` 文件模式和写入失败传播 |
 | `@earendil-works__pi-ai@1.0.0.patch` | 显式传入环境时只使用该环境，不回退读取 `process.env`，确保凭据只来自数据目录 |

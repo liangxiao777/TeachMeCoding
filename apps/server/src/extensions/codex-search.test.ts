@@ -39,13 +39,12 @@ function fixture(mode: string, onRequest?: (request: Request) => void) {
       assert.equal(command, process.execPath);
       assert.equal(args[0], createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js'));
       assert.deepEqual(args.slice(1, 4), ['app-server', '--listen', 'stdio://']);
-      assert.equal(settings.detached, process.platform !== 'win32');
+      assert.equal(settings.detached, true);
       root = dirname(String(settings.cwd));
       const env = settings.env!;
       assert.equal(env.CODEX_HOME, join(root, 'codex-home')); assert.equal(env.HOME, env.CODEX_HOME);
-      assert.deepEqual(Object.keys(env).sort(), [...['CODEX_HOME', 'HOME', 'LANG', 'PATH', 'TEMP', 'TMP', 'TMPDIR'],
-        ...(process.platform === 'win32' ? ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] : [])].sort());
-      if (process.platform !== 'win32') for (const path of [root, env.HOME!, String(settings.cwd)]) assert.equal(lstatSync(path).mode & 0o777, 0o700);
+      assert.deepEqual(Object.keys(env).sort(), ['CODEX_HOME', 'HOME', 'LANG', 'PATH', 'TEMP', 'TMP', 'TMPDIR']);
+      for (const path of [root, env.HOME!, String(settings.cwd)]) assert.equal(lstatSync(path).mode & 0o777, 0o700);
       assert.equal(existsSync(join(env.CODEX_HOME!, 'auth.json')), false);
       const config = new Map<string, unknown>();
       for (let i = 4; i < args.length; i += 2) {
@@ -285,9 +284,8 @@ test('packaged 0.160.0 binary attests initialize, unauthenticated model/list and
   await Promise.all([mkdir(home, { mode: 0o700 }), mkdir(cwd, { mode: 0o700 })]);
   const child = spawn(process.execPath, [createRequire(import.meta.url).resolve('@openai/codex/bin/codex.js'), 'app-server', '--listen', 'stdio://',
     ...Object.entries(required).flatMap(([name, value]) => ['-c', `${name}=${JSON.stringify(value)}`])],
-  { cwd, env: { HOME: home, CODEX_HOME: home, PATH: process.platform === 'win32' ? join(process.env.SystemRoot!, 'System32') : '/usr/bin:/bin',
-    SystemRoot: process.env.SystemRoot, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, TMPDIR: root, TMP: root, TEMP: root },
-  detached: process.platform !== 'win32', windowsHide: true, stdio: 'pipe' });
+  { cwd, env: { HOME: home, CODEX_HOME: home, PATH: '/usr/bin:/bin', TMPDIR: root, TMP: root, TEMP: root },
+    detached: true, stdio: 'pipe' });
   let id = 0, buffer = '';
   const pending = new Map<number, { resolve(value: any): void; reject(error: Error): void }>();
   child.stderr.resume();
@@ -307,8 +305,7 @@ test('packaged 0.160.0 binary attests initialize, unauthenticated model/list and
   const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   const terminate = () => {
     if (!child.pid) return;
-    if (process.platform === 'win32') void stopProcesses(descendants(child.pid));
-    else { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
+    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
   };
   const deadline = setTimeout(terminate, 8000);
   try {
@@ -333,7 +330,7 @@ test('packaged 0.160.0 binary attests initialize, unauthenticated model/list and
     assert.deepEqual(started.instructionSources, []); assert.equal(existsSync(join(home, 'auth.json')), false);
   } finally {
     clearTimeout(deadline); child.stdin.end();
-    if (child.pid) await stopProcesses([...new Set([...descendants(child.pid), ...(process.platform === 'win32' ? [] : [child.pid])])]);
+    if (child.pid) await stopProcesses(descendants(child.pid));
     await exited; await rm(root, { recursive: true, force: true });
   }
 });

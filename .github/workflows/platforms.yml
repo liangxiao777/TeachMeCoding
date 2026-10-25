@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -28,9 +28,6 @@ jobs:
       - name: macOS document parser
         if: runner.os == 'macOS'
         run: brew install poppler
-      - name: Windows document parser
-        if: runner.os == 'Windows'
-        run: choco install poppler --no-progress -y
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build

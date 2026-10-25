@@ -87,7 +87,7 @@ Node 服务（Hono）
 
 普通和全屏 IDE 中的终端是 xterm 连接的真实 PTY，工作目录为当前空间的项目目录。每个空间复用一个 shell；刷新页面或断线重连不会重放输入，也不会结束 shell。终端输入会等待编辑器自动保存完成，确保命令使用最新的文件内容。
 
-PTY 启动解析到的 Bash；在原生 Windows 上使用 Git for Windows Bash，不使用 PowerShell 或 WSL。
+PTY 使用 Pi 解析 Bash：优先 `/bin/bash`，再查找 `PATH` 中的 `bash`，禁用 shell 启动脚本。
 
 ### Agent Bash
 
@@ -104,7 +104,7 @@ PTY 启动解析到的 Bash；在原生 Windows 上使用 Git for Windows Bash�
 ### 代码测评
 
 - 代码题带有执行方案，包括语言、命令行参数和预期的标准输出。支持 Python、JavaScript、TypeScript、Rust 和 Bash，使用本机已安装且位于 `PATH` 中的工具链。
-- Python 优先使用 `python3`，找不到时回退到 `python`；JavaScript 和 TypeScript 使用 `node`。Rust 用 `rustc` 显式编译为 `answer.exe`，并在所有系统上运行这个文件。Bash 使用解析到的可执行程序（Windows 上为 Git for Windows），不固定为 `/bin/bash`。
+- Python 使用 `python3 -I -X utf8`；JavaScript 和 TypeScript 使用 `node`。Rust 用 `rustc` 编译为 `answer`，再运行这个文件。Bash 程序使用 `bash --noprofile --norc` 执行。
 - 每次运行使用代码快照和一次性临时目录，整次执行限时 30 秒、输出上限 256 KiB。
 - 代码题只有在所有用例都完成、输出与预期一致、且模型评估通过时才判定为通过。缺少工具链、报错、超时或取消时不会判定为通过。缺少的工具链由用户自行安装，Agent 不会自动安装。
 - 评估结果标注证据类型：`execution-verified`（有真实执行证据）、`unverified`（代码题缺少有效执行证据）或 `non-execution`（纯分析题）。

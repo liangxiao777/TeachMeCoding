@@ -151,10 +151,8 @@ test('explicit debug snapshots contain synthetic tool body with private modes; d
     const { run } = runtime.submit(space.id, session.id, randomUUID(), { text: 'read code.txt', quote: null, draftRevision: 0 });
     await runtime.idle(run.id); assert.equal(runtime.get(space.id, run.id).state, 'succeeded');
     const files = readdirSync(debug); assert.equal(files.length, 2);
-    if (process.platform !== 'win32') {
-      assert.equal(statSync(debug).mode & 0o777, 0o700);
-      for (const file of files) assert.equal(statSync(join(debug, file)).mode & 0o777, 0o600);
-    }
+    assert.equal(statSync(debug).mode & 0o777, 0o700);
+    for (const file of files) assert.equal(statSync(join(debug, file)).mode & 0o777, 0o600);
     const text = readFileSync(join(debug, `${run.id}-2.json`), 'utf8');
     assert.match(text, /SYNTHETIC-DEBUG-BODY/); assert.doesNotMatch(text, /synthetic-test-only/);
     assert.doesNotMatch(JSON.stringify(db.prepare('SELECT value FROM agent_messages').all()), /SYNTHETIC-DEBUG-BODY/);

@@ -33,16 +33,8 @@ test('terminal environment excludes credentials and Node injection settings', ()
   assert.deepEqual(terminalEnvironment({
     PATH: '/usr/bin', LANG: 'en_US.UTF-8', HOME: '/tmp/example',
     OPENROUTER_API_KEY: 'synthetic-secret', OTHER_PROVIDER_SECRET: 'synthetic-secret',
-    NODE_OPTIONS: '--require=untrusted.js', VITE_SECRET: 'synthetic-secret',
+    NODE_OPTIONS: '--require=untrusted.js', BASH_ENV: 'untrusted.sh', VITE_SECRET: 'synthetic-secret',
   }), { TERM: 'xterm-256color', PATH: '/usr/bin', HOME: '/tmp/example', LANG: 'en_US.UTF-8' });
-  assert.deepEqual(terminalEnvironment({
-    Path: 'C:\\Program Files\\nodejs;C:\\Windows\\System32', SYSTEMROOT: 'C:\\Windows',
-    UserProfile: 'C:\\Users\\learner', TEMP: 'C:\\Users\\learner\\Temp', ComSpec: 'C:\\Windows\\System32\\cmd.exe',
-    NODE_OPTIONS: '--require=untrusted.js', OPENAI_API_KEY: 'synthetic-secret', BASH_ENV: 'untrusted.sh',
-  }), {
-    TERM: 'xterm-256color', PATH: 'C:\\Program Files\\nodejs;C:\\Windows\\System32',
-    SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\learner', TEMP: 'C:\\Users\\learner\\Temp', COMSPEC: 'C:\\Windows\\System32\\cmd.exe',
-  });
 });
 
 for (const terminate of [false, true]) {
@@ -76,7 +68,7 @@ for (const terminate of [false, true]) {
     if (terminate) pty.kill();
     else pty.write('answer-42\r');
     const result = await exited;
-    if (terminate && process.platform !== 'win32') assert.ok(result.signal, 'POSIX forced PTY exit must report a signal');
+    if (terminate) assert.ok(result.signal, 'forced PTY exit must report a signal');
     if (!terminate) {
       assert.equal(result.exitCode, 7);
       const line = stripVTControlCharacters(output).split(/\r?\n/).find((item) => item.startsWith('{'))!;

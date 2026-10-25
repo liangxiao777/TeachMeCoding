@@ -45,7 +45,6 @@ test('protected PTY restores one process, resizes, exits, rejects stale input an
   const id = snapshot.id;
   const send = (socket: WebSocket, type: string, rest = {}) => socket.send(JSON.stringify({ type, id, ...rest }));
   send(first.socket, 'resize', { cols: 103, rows: 37 });
-  // Git Bash's $$ is an MSYS PID, not a native PID usable by process.kill.
   send(first.socket, 'input', { data: `node -e 'console.log("PID="+process.ppid); console.log(process.stdout.rows+" "+process.stdout.columns)'; printenv TMC_SYNTHETIC_SECRET; printf 'SECRET_STATUS=%s\\n' $?; pwd\r` });
   await until(() => /SECRET_STATUS=1\r?\n/.test(first.output()));
   assert.match(first.output(), /37 103/);

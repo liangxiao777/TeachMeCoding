@@ -175,15 +175,14 @@ test('limits apply across cases and setup failure leaves explicit failed evidenc
     assert.deepEqual(result.results.map((r) => r.result.status), ['succeeded', 'output-limit']);
     assert.equal(readFileSync(marker, 'utf8'), 'X');
     assert.equal(result.state, 'failed');
-    const temporaryKey = process.platform === 'win32' ? 'TEMP' : 'TMPDIR';
-    const original = process.env[temporaryKey];
+    const original = process.env.TMPDIR;
     try {
-      process.env[temporaryKey] = join(f.root, 'absent');
+      process.env.TMPDIR = join(f.root, 'absent');
       const missing = f.executions.create(f.space, f.unit, { specRevision: 1, code });
       const failed = await f.executions.run(f.space, missing.id);
       assert.equal(failed.state, 'failed'); assert.deepEqual(failed.error, { code: 'CODE_EXECUTION_FAILED' });
       assert.equal(failed.results.length, 0); assert.equal(readFileSync(marker, 'utf8'), 'X');
-    } finally { if (original === undefined) delete process.env[temporaryKey]; else process.env[temporaryKey] = original; }
+    } finally { if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original; }
   } finally { await f.close(); }
 });
 

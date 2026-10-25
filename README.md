@@ -16,7 +16,7 @@
   <a href="LICENSE"><img alt="License Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue" /></a>
   <img alt="Node 24.15" src="https://img.shields.io/badge/node-24.15-339933?logo=node.js&logoColor=white" />
   <img alt="pnpm 11.1" src="https://img.shields.io/badge/pnpm-11.1-F69220?logo=pnpm&logoColor=white" />
-  <img alt="Platform macOS, Linux, Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" />
+  <img alt="Platform macOS, Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey" />
   <img alt="Status alpha" src="https://img.shields.io/badge/status-alpha-orange" />
 </p>
 
@@ -76,7 +76,9 @@ TeachMeCoding creates a separate learning space for each learning goal. The teac
 
 This project is in early development, with no official release yet. Features, interfaces, and data formats may change.
 
-Source setup targets **macOS, Linux (Ubuntu/Debian), and native Windows 10 (1809+) / Windows 11**. Verification covers **macOS 26 / arm64 with Google Chrome**, plus installation, build, tests, SQLite and PTY checks on **Debian 12 / arm64 in Docker**, using Node 24.15.0. Native Windows, Linux browser tests, and Intel Macs have not yet been verified; a three-platform CI workflow is included.
+Source setup supports **macOS and Linux (Ubuntu/Debian) only**; Windows is unsupported.
+
+Local verification with Node 24.15.0 covers installation, type checks, build, tests, and SQLite/PTY checks on **macOS 26 / arm64** and in a non-root **Debian 12 / arm64 Docker** environment. macOS also has Google Chrome browser execution coverage. Linux browser checks are **x86_64-only**; Linux arm64 has backend/native verification only. Intel Macs remain unverified. See the [development guide](docs/development.md#testing) for test commands and CI coverage.
 
 ## Quick start
 
@@ -84,7 +86,7 @@ Source setup targets **macOS, Linux (Ubuntu/Debian), and native Windows 10 (1809
 
 - [Node.js](https://nodejs.org/) 24.15.0
 - [pnpm](https://pnpm.io/) 11.1.0
-- Git and Bash; on Windows, install [Git for Windows](https://gitforwindows.org/) for its Bash. Agent commands and the IDE terminal use Bash, not PowerShell or WSL.
+- Git and Bash on `PATH`.
 
 Native dependencies (`better-sqlite3` and `node-pty`) need Python 3 and compiler tools when prebuilt binaries are unavailable. The macOS `node-pty` patch always builds from source.
 
@@ -92,13 +94,12 @@ Native dependencies (`better-sqlite3` and `node-pty`) need Python 3 and compiler
 | --- | --- |
 | macOS | Python 3 and Xcode Command Line Tools (`xcode-select --install`) |
 | Linux (Ubuntu/Debian) | `sudo apt-get update && sudo apt-get install -y git bash build-essential python3` |
-| Native Windows 10 (1809+) / Windows 11 | Python 3 on `PATH`, plus Visual Studio 2022 / Build Tools with **Desktop development with C++** and a Windows SDK |
 
-For coding assessments, install any additional language toolchains you need, such as `rustc`, and make them available on `PATH`. Python assessments prefer `python3` with a `python` fallback. The Agent does not automatically install missing toolchains.
+For coding assessments, install any additional language toolchains you need, such as `rustc`, and make them available on `PATH`. Python assessments require `python3`. The Agent does not automatically install missing toolchains.
 
 ### Install and run
 
-These commands run the Node/Web application from source. They work in macOS/Linux shells and in native Windows Git Bash, PowerShell, or cmd. **Git for Windows Bash is still required** even when starting pnpm from PowerShell or cmd. Reopen your terminal after installing tools so the updated `PATH` takes effect.
+These commands run the Node/Web application from source. Reopen your terminal after installing tools so the updated `PATH` takes effect.
 
 ```sh
 npm install --global pnpm@11.1.0
@@ -113,7 +114,7 @@ Open <http://127.0.0.1:4310>. For development, use `pnpm dev` instead (frontend 
 
 ### Configure a model
 
-Open **Settings → Model configuration** and choose a provider, model, and sign-in method. Credentials are stored only in the local data directory (default: `~/.teach-me-coding/`, or `%USERPROFILE%\.teach-me-coding\` on Windows) and are never sent back to the browser.
+Open **Settings → Model configuration** and choose a provider, model, and sign-in method. Credentials are stored only in the local data directory (default: `~/.teach-me-coding/`) and are never sent back to the browser.
 
 ## Usage
 

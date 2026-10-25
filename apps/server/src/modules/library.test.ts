@@ -35,10 +35,8 @@ test('Pi Bash preserves errors and cumulative snapshots; truncated output can be
     assert.equal(readFileSync(join(library.directory, 'continued'), 'utf8'), 'complete', 'Display truncation must not kill the command.');
     const path = long.details.fullOutputPath as string;
     assert.equal(resolve(path).startsWith(join(root, 'bash-output', `run-${run}`)), true);
-    if (process.platform !== 'win32') {
-      assert.equal(statSync(path).mode & 0o777, 0o600);
-      assert.equal(statSync(join(root, 'bash-output', `run-${run}`)).mode & 0o777, 0o700);
-    }
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(statSync(join(root, 'bash-output', `run-${run}`)).mode & 0o777, 0o700);
     const page = await readTools(library.directory)[0]!.execute('read', { path, offset: 0, limit: 100 });
     assert.match(text(page), /0001: abcdefghijklmnopqrstuvwxyz/);
     assert.equal(readFileSync(path, 'utf8').split('\n').length, 3001);
@@ -85,7 +83,7 @@ test('Bash reaps ordinary background jobs and stops runaway output at the disk c
   try {
     const bash = library.tools().find((t) => t.name === 'bash')!;
     await bash.execute('background', { command: '(while [ ! -e release-background ]; do sleep 0.02; done; printf escaped > background-escaped) >/dev/null 2>&1 & printf finished' });
-    // Release only after the tool settles; process discovery is slower on Windows.
+    // Release only after the tool settles, so cleanup cannot win by timing alone.
     writeFileSync(join(library.directory, 'release-background'), 'ready');
     await wait(500); assert.equal(existsSync(join(library.directory, 'background-escaped')), false);
     const value = await bash.execute('output-limit', { command: 'head -c 100000000 /dev/zero; touch output-escaped' });

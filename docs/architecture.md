@@ -87,7 +87,7 @@ Other behavior:
 
 Terminals in both the regular and fullscreen IDE use xterm connected to a real PTY, with the current space's project directory as the working directory. Each space reuses one shell. Refreshing the page or reconnecting does not replay input or terminate the shell. Terminal input waits for the editor's autosave to finish so commands use the latest file contents.
 
-The PTY launches resolved Bash. On native Windows this is Git for Windows Bash, not PowerShell or WSL.
+The PTY uses Pi's Bash resolver: `/bin/bash` first, then `bash` on `PATH`. Shell startup scripts are disabled.
 
 ### Agent Bash
 
@@ -104,7 +104,7 @@ The browser's project file API can access only application-managed project direc
 ### Code assessments
 
 - Coding questions include an execution plan with the language, command-line arguments, and expected standard output. Supported languages are Python, JavaScript, TypeScript, Rust, and Bash, using locally installed toolchains on `PATH`.
-- Python prefers `python3` with a `python` fallback; JavaScript and TypeScript use `node`. Rust compiles with `rustc` to an explicit `answer.exe` and runs that file on every OS. Bash uses the resolved executable (Git for Windows on Windows), not a fixed `/bin/bash` path.
+- Python runs with `python3 -I -X utf8`; JavaScript and TypeScript use `node`. Rust compiles with `rustc` to `answer` and runs that file. Bash programs run with `bash --noprofile --norc`.
 - Each run uses a code snapshot and a disposable temporary directory. The entire execution is limited to 30 seconds and 256 KiB of output.
 - A coding question passes only if all test cases complete, their output matches expectations, and the model's evaluation also passes. Missing toolchains, errors, timeouts, and cancellations never count as a pass. Users install missing toolchains themselves; the Agent does not automatically install them.
 - Evaluation results identify the evidence type: `execution-verified` (real execution evidence), `unverified` (a coding question without valid execution evidence), or `non-execution` (an analysis-only question).

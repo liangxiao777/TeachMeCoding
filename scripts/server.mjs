@@ -1,3 +1,4 @@
+if (process.platform !== 'darwin' && process.platform !== 'linux') throw new Error('TeachMeCoding supports macOS and Linux only.');
 const mode = process.argv[2];
 if (mode !== 'development' && mode !== 'production') throw new Error('Choose development or production mode.');
 process.env.NODE_ENV = mode;

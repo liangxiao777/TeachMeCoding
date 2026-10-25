@@ -17,7 +17,7 @@ export const bashOperations: BashOperations = {
     const shell = bashShell();
     return new Promise((resolve, reject) => {
       const child = spawn(shell.file, [...shell.args, '-c', command], {
-        cwd, env: shell.env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd, env: shell.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let bytes = 0, reason: 'aborted' | 'timeout' | 'output-limit' | undefined;
       let cleanup: Promise<void> | undefined, spawnError: Error | undefined;

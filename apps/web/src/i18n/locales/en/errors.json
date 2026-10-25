@@ -154,7 +154,7 @@
   "MCP_DISCONNECTED": "The connection was lost. Reconnect to continue.",
   "MCP_TOOLS_REFRESH_FAILED": "Unable to update the tool list. Reconnect to try again.",
   "MCP_CONNECTION_FAILED": "Unable to connect. Check the command, address, and authentication settings.",
-  "TERMINAL_START_FAILED": "Unable to start the local terminal. Check the project directory and Bash installation (Git for Windows on Windows).",
+  "TERMINAL_START_FAILED": "Unable to start the local terminal. Check the project directory and Bash installation.",
   "TERMINAL_REQUEST_OUTDATED": "The terminal request is invalid or outdated. Reconnect to continue.",
   "LOGIN_FAILED": "Sign-in failed.",
   "RUN_STOPPED": "The run was stopped. It will not restart automatically.",

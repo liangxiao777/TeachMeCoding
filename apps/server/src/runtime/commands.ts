@@ -12,7 +12,7 @@ export async function runCommand(command: string, cwd: string, signal: AbortSign
   try { shell = bashShell(); }
   catch { return { status: 'unavailable', output: '', exitCode: null, signal: null, error: { code: 'LOCAL_EXECUTION_UNAVAILABLE' } }; }
   return new Promise((resolve, reject) => {
-    const child = spawn(shell.file, [...shell.args, '-c', command], { cwd, env: shell.env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(shell.file, [...shell.args, '-c', command], { cwd, env: shell.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = Buffer.alloc(0), stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), status: CommandResult['status'] | undefined, cleanup: Promise<void> | undefined;
     let error: CommandResult['error'];
     const stop = (reason: CommandResult['status']) => {

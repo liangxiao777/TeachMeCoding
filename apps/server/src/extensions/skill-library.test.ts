@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -117,11 +116,9 @@ test('pinned public CLI installs the complete bundle, enables subsequent snapsho
     assert.equal(skills.settings().skills[0]!.enabled, false, 'update preserves enablement');
     assert.equal(skills.file(item.filePath, 'reference/examples.md').content, 'Upstream changed resource, not SKILL.md.');
     assert.equal(readFileSync(item.filePath, 'utf8'), original);
-    if (process.platform !== 'win32') {
-      chmodSync(join(dirname(item.filePath), 'scripts/example.sh'), 0o644);
-      assert.equal((await skills.update({ filePath: item.filePath }, false)).modified, true, 'permission-only local edits matter');
-      await assert.rejects(skills.update({ filePath: item.filePath }, true), { message: 'SKILL_LOCAL_CHANGES' });
-    }
+    chmodSync(join(dirname(item.filePath), 'scripts/example.sh'), 0o644);
+    assert.equal((await skills.update({ filePath: item.filePath }, false)).modified, true, 'permission-only local edits matter');
+    await assert.rejects(skills.update({ filePath: item.filePath }, true), { message: 'SKILL_LOCAL_CHANGES' });
     writeFileSync(item.filePath, `${original}\nLocal instructions that must survive.`);
     await assert.rejects(skills.update({ filePath: item.filePath }, true), { message: 'SKILL_LOCAL_CHANGES' });
     assert.match(readFileSync(item.filePath, 'utf8'), /must survive/);
@@ -209,7 +206,7 @@ test('interrupted replacement restores the previous managed bundle on restart', 
     assert.equal(existsSync(backup), false);
     assert.equal(existsSync(interrupted), false);
     assert.equal(readFileSync(unrelated, 'utf8'), 'Preserve files not created by acquisition.');
-    symlinkSync(source, join(skills.directory, 'external-link'), process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(source, join(skills.directory, 'external-link'), 'dir');
     assert.equal(new SkillLibrary(skills.directory, join(root, 'app')).metadata(join(skills.directory, 'external-link/SKILL.md')), null);
     await recovered.close();
   } finally { await skills.close(); db.close(); rmSync(root, { recursive: true, force: true }); }
@@ -219,19 +216,7 @@ test('acquisition does not inherit service credentials or global agent paths, an
   const root = mkdtempSync(join(tmpdir(), 'tmc-skill-worker-')), db = openDatabase(':memory:');
   const skills = new SkillService(db, join(root, 'app')), bin = join(root, 'bin'), dump = join(root, 'worker-env.json');
   mkdirSync(bin);
-  if (process.platform === 'win32') {
-    // simple-git spawns a native executable, not a .cmd or shebang script.
-    // Windows PowerShell's built-in compiler needs no SDK or extra dependency.
-    const code = `public class Git { public static int Main() {
-      var json = new System.Web.Script.Serialization.JavaScriptSerializer();
-      System.IO.File.WriteAllText(${JSON.stringify(dump)}, json.Serialize(System.Environment.GetEnvironmentVariables()));
-      return 1;
-    } }`;
-    const command = `Add-Type -TypeDefinition '${code.replaceAll("'", "''")}' -ReferencedAssemblies System.Web.Extensions.dll -OutputAssembly '${join(bin, 'git.exe').replaceAll("'", "''")}' -OutputType ConsoleApplication`;
-    execFileSync(join(process.env.SystemRoot!, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', command]);
-  } else {
-    writeFileSync(join(bin, 'git'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(dump)}, JSON.stringify(process.env));\nprocess.exit(1);\n`, { mode: 0o755 });
-  }
+  writeFileSync(join(bin, 'git'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(dump)}, JSON.stringify(process.env));\nprocess.exit(1);\n`, { mode: 0o755 });
   const original = { PATH: process.env.PATH, OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY, SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK };
   process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
   process.env.OPENROUTER_API_KEY = 'synthetic-worker-private-key'; process.env.SSH_AUTH_SOCK = '/synthetic-private-agent';

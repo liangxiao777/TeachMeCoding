@@ -23,8 +23,8 @@ TeachMeCoding is a local, single-user application. The AI Agent reads files, exe
 Protections provided by the application:
 
 - Request tokens, Host/Origin allowlists, and Fetch Metadata checks are used to prevent external web pages from abusing local interfaces. They are not a login system and cannot defend against processes with local permissions.
-- Model, search, and MCP credentials are saved only through the Settings page in the data directory (`0600` on Unix) and are not sent back to the browser. The application does not read credentials from `.env`, environment variables, or other applications' sign-in files. Do not put secrets in `VITE_*` variables, URLs, or command arguments.
-- New data directories request `0700` on Unix. **Windows POSIX mode bits (`0600`/`0700`) do not provide ACL protection.** Keep data under your user profile (default: `%USERPROFILE%\.teach-me-coding\`), restrict access using Windows account ACLs, and avoid shared or other-user-readable directories. Protect backups the same way.
+- Model, search, and MCP credentials are saved only through the Settings page in the data directory (POSIX mode `0600`) and are not sent back to the browser. The application does not read credentials from `.env`, environment variables, or other applications' sign-in files. Do not put secrets in `VITE_*` variables, URLs, or command arguments.
+- New data directories request POSIX mode `0700`. Avoid shared or other-user-readable directories and protect backups the same way.
 - Agent subprocesses inherit only allowlisted environment variables; web fetching rejects local and private-network addresses.
 - `TMC_AGENT_DEBUG_SNAPSHOTS=1` writes complete model requests to `agent-debug/` in the data directory. These may contain source code, paths, and private grading rubrics. Do not commit or make these files public.
 

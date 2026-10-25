@@ -1030,7 +1030,7 @@ for (const sample of [
 ]) test(`uploaded documents reach the teaching Agent through native tools: ${sample.name}`, async () => {
   const { db, learning, a, sa } = setup(), root = mkdtempSync(join(tmpdir(), "tmc-library docs-'"));
   const library = new Library(root), outputPath = join(root, 'extracted text.txt');
-  const quote = (value: string) => `'${value.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const filename = `课程参考 'A&B'.${sample.fixture.endsWith('.docx') ? 'docx' : 'pdf'}`;
   const runtime = new TeachingRuntime(learning, syntheticSource, { library, stream: (_model, context) => {
     const last = context.messages.filter((m) => m.role === 'toolResult').at(-1);
@@ -1045,7 +1045,7 @@ for (const sample of [
       const source = quote(file.path);
       const command = sample.missingParser
         ? `PATH=${quote(join(root, 'no-parsers'))} pdftotext ${source} -`
-        : sample.fixture.endsWith('.docx') ? `"$(command -v python3 || command -v python)" -X utf8 - ${source} > ${quote(outputPath)} <<'PY'
+        : sample.fixture.endsWith('.docx') ? `python3 -X utf8 - ${source} > ${quote(outputPath)} <<'PY'
 import sys
 from zipfile import ZipFile
 from xml.etree import ElementTree

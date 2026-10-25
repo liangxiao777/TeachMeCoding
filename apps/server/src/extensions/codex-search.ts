@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { AuthCheck, AuthResult, CredentialStore, Models } from '@earendil-works/pi-ai';
 import type { WebSearchResult } from '@teach-me-coding/contracts';
-import { descendants, stopProcesses } from '../runtime/processes.js';
 
 export interface CodexAuthSource {
   checkAuth(signal?: AbortSignal): Promise<AuthCheck | undefined>;
@@ -124,9 +123,7 @@ async function resolveTokens(auth: CodexAuthSource, signal: AbortSignal, forceRe
 /** No ambient process secrets, proxies, NODE_OPTIONS, teaching or MCP credentials. */
 function privateEnvironment(home: string, root: string): NodeJS.ProcessEnv {
   return { HOME: home, CODEX_HOME: home, TMPDIR: root, TMP: root, TEMP: root,
-    PATH: process.platform === 'win32' ? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32` : '/usr/bin:/bin',
-    ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home } : {}),
-    LANG: 'en_US.UTF-8' };
+    PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' };
 }
 
 class Rpc {
@@ -236,32 +233,12 @@ class Rpc {
 
   async close() {
     this.closing = true;
-    if (process.platform === 'win32') {
-      // Snapshot before closing stdin: codex.js can exit before its native
-      // child, which may still own the private workspace or inherited pipes.
-      const pids = this.child.pid ? descendants(this.child.pid) : [];
-      this.child.stdin.end();
-      await stopProcesses(pids);
-      await this.exited;
-      this.frame = ''; this.pending.clear();
-      for (let attempt = 0; attempt < 50; attempt++) {
-        if (pids.every((pid) => {
-          try { process.kill(pid, 0); return false; }
-          catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
-        })) return;
-        await new Promise<void>((resolve) => setTimeout(resolve, 10));
-      }
-      throw new Error('Codex search process tree did not exit.');
-    }
     this.child.stdin.end();
     // codex.js owns a native child. A detached POSIX group terminates both, not
     // just the JS wrapper. This is capability isolation, NOT OS-level containment.
     const terminate = (signal: NodeJS.Signals) => {
       if (!this.child.pid) return;
-      try {
-        if (process.platform !== 'win32') process.kill(-this.child.pid, signal);
-        else this.child.kill(signal);
-      } catch { /* Already exited. */ }
+      try { process.kill(-this.child.pid, signal); } catch { /* Already exited. */ }
     };
     terminate('SIGTERM');
     const timer = setTimeout(() => terminate('SIGKILL'), 500);
@@ -443,7 +420,7 @@ export async function runCodexSearch(query: string, count: number, auth: CodexAu
     let child: ChildProcessWithoutNullStreams;
     try {
       child = (options.launch ?? ((executable, argv, settings) => spawn(executable, [...argv], { ...settings, stdio: 'pipe' })))(command, args,
-        { cwd, env: privateEnvironment(home, root), detached: process.platform !== 'win32', windowsHide: true });
+        { cwd, env: privateEnvironment(home, root), detached: true });
     } catch { throw new Error('Codex search process could not start.'); }
     rpc = new Rpc(child);
     rpc.onFailure = (error) => { lifetime.abort(); collector?.fail(error); };

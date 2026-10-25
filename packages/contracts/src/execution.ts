@@ -31,8 +31,7 @@ export const codeFile = (plan: CodePlan) => `answer.${({ python: 'py', javascrip
 export function codeCommands(plan: CodePlan): string[] {
   const file = codeFile(plan);
   // The same Bash command is displayed by the UI and executed by every host.
-  // .exe is a valid Unix filename too; never rely on rustc's platform suffix.
-  const command = ({ python: `"$(command -v python3 || command -v python)" -I -X utf8 ${file}`, javascript: `node ${file}`, typescript: `node ${file}`, rust: `rustc --edition=2021 ${file} -o answer.exe && ./answer.exe`, bash: `bash --noprofile --norc ${file}` })[plan.language];
+  const command = ({ python: `python3 -I -X utf8 ${file}`, javascript: `node ${file}`, typescript: `node ${file}`, rust: `rustc --edition=2021 ${file} -o answer && ./answer`, bash: `bash --noprofile --norc ${file}` })[plan.language];
   return plan.cases.map((c) => `${command}${c.args.length ? ' ' + c.args.map(shellArg).join(' ') : ''}`);
 }
 export interface CodeExecution {

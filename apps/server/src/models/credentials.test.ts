@@ -24,7 +24,7 @@ test('credentials round-trip through one private file and list hides secrets', a
     assert.equal(await store.modify('anthropic', async () => oauth), oauth);
     assert.deepEqual((await store.list()).map((c) => c.providerId).sort(), ['anthropic', 'openrouter']);
     assert.ok(!JSON.stringify(await store.list()).includes('synthetic-key'));
-    if (process.platform !== 'win32') assert.equal(lstatSync(path).mode & 0o777, 0o600);
+    assert.equal(lstatSync(path).mode & 0o777, 0o600);
     // A fresh store instance over the same file sees every credential.
     assert.equal((await new FileCredentialStore(path).read('anthropic'))?.type, 'oauth');
     // modify returning undefined leaves the entry unchanged.

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,11 +9,11 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { openDatabase } from '../apps/server/dist/storage/database.js';
 import { Learning } from '../apps/server/dist/modules/learning.js';
-import { spawnServer, stopServer } from './server-process.mjs';
+import { terminalEnvironment } from '../apps/server/dist/runtime/terminal-env.js';
 
 const entry = fileURLToPath(new URL('../apps/server/dist/index.js', import.meta.url));
 function launch(root, port, cwd) {
-  const child = spawnServer(entry, { cwd, env: { PORT: String(port), TMC_DATA_DIR: root } });
+  const child = spawn(process.execPath, [entry], { cwd, env: { ...terminalEnvironment(process.env), PORT: String(port), TMC_DATA_DIR: root }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', (chunk) => { logs += chunk; }); child.stderr.on('data', (chunk) => { logs += chunk; });
   const exited = once(child, 'exit');
@@ -23,7 +24,7 @@ function launch(root, port, cwd) {
       await new Promise((resolve) => setTimeout(resolve, 30));
     }
     throw new Error('Test server did not start');
-  }, async stop(signal = 'SIGTERM') { stopServer(child, signal); await exited; } };
+  }, async stop(signal = 'SIGTERM') { if (child.exitCode === null && child.signalCode === null) child.kill(signal); await exited; } };
 }
 
 test('real process restart and crash recovery preserve business data, idempotency and files; duplicate startup is refused', { timeout: 15000 }, async () => {

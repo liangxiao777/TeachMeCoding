@@ -23,10 +23,10 @@ Precedence is **startup environment > root `.env` > defaults**. Copy [`.env.exam
 | `TMC_AGENT_DEBUG_SNAPSHOTS` | `0` | Set to `1` to write complete model requests to `agent-debug/` in the data directory |
 
 - Only the six entries in the table above are read. Other keys are ignored and are not injected into the process environment.
-- Values in `.env` are read literally; `~`, `${VAR}`, and commands are not expanded. Quote paths containing spaces, for example, `TMC_DATA_DIR="/Users/me/TMC Data"` or `TMC_DATA_DIR="C:/Users/me/TMC Data"` on Windows. Use native Windows drive paths, not Git Bash's `/c/Users/...` or WSL paths.
+- Values in `.env` are read literally; `~`, `${VAR}`, and commands are not expanded. Quote paths containing spaces, for example, `TMC_DATA_DIR="/Users/me/TMC Data"`.
 - Explicitly set empty values also take effect; the server refuses to start if a port, the data directory, or the preview origin is empty.
 - The startup command determines the mode: `pnpm dev` uses development mode, and `pnpm start` uses production mode.
-- Inline environment examples below use Bash syntax (macOS/Linux or Git Bash). From PowerShell or cmd, put the same settings in `.env` instead; the pnpm startup/build commands themselves work in all these shells.
+- Inline environment examples below use Bash syntax.
 - `.env` is located relative to the code, so you can run `node /path/to/apps/server/dist/index.js` from any directory.
 
 > [!CAUTION]
@@ -37,13 +37,13 @@ Precedence is **startup environment > root `.env` > defaults**. Copy [`.env.exam
 In **Settings → Model configuration**, choose a provider, model, reasoning effort, and sign-in method (API Key or OAuth).
 
 - New selections apply to runs started afterward; ongoing runs continue using their original model.
-- Credentials are saved in `credentials.json` in the data directory (`0600` on Unix) and are not sent back to the browser.
+- Credentials are saved in `credentials.json` in the data directory (POSIX mode `0600`) and are not sent back to the browser.
 - Authentication methods that depend on external cloud identity files are not supported: Amazon Bedrock is not currently available; Google Vertex AI supports only saved API Keys and does not read Google ADC or service account files.
 - Without a configured model, you can still browse existing data and use the terminal. The Settings page indicates which configuration is missing.
 
 ## Data directory
 
-The default is `~/.teach-me-coding/` on macOS/Linux, or `%USERPROFILE%\.teach-me-coding\` on Windows. Keep learning data outside the source checkout.
+The default is `~/.teach-me-coding/`. Keep learning data outside the source checkout.
 
 | Path | Contents |
 | --- | --- |
@@ -51,12 +51,12 @@ The default is `~/.teach-me-coding/` on macOS/Linux, or `%USERPROFILE%\.teach-me
 | `projects/<space-id>/` | Project files for each learning space; the contents on disk are authoritative |
 | `library/` | Original files uploaded to the reference library |
 | `skills/` | Skills installed through the application |
-| `credentials.json`, `search.json`, `mcp.json` | Model credentials, search configuration, and MCP configuration (`0600` on Unix) |
+| `credentials.json`, `search.json`, `mcp.json` | Model credentials, search configuration, and MCP configuration (POSIX mode `0600`) |
 | `bash-output/` | Temporary Agent Bash output, cleaned up when the run ends or the server restarts |
 | `agent-debug/` | Created only when debug snapshots are enabled |
 | `app.lock` | Instance lock |
 
-- New data directories request mode `0700` on Unix. On Windows, `0600`/`0700` mode bits are not ACL protection: keep data under your user profile, restrict access using Windows account ACLs, and avoid shared or other-user-readable directories. Apply the same protection to backups.
+- New data directories request POSIX mode `0700`. Avoid shared or other-user-readable directories and protect backups the same way.
 - Only one instance can use a data directory at a time, including development and production instances. Do not delete `app.lock` to start a second instance; to run instances in parallel, set a different `TMC_DATA_DIR` for the other instance.
 - An empty directory is initialized automatically on first startup, and the database is migrated by version after upgrades. If migration fails, the database version is newer than the current application, or the database cannot be opened, the server exits with an error message. It does not delete and recreate the data.
 - When the server restarts, unfinished Agent runs, commands, and code executions are marked as interrupted and are not replayed automatically.
@@ -102,12 +102,12 @@ In **Settings → Search services**, choose a provider and turn on the master sw
 There are 14 supported providers: Brave Search, Tavily, Exa, Firecrawl, Parallel, Perplexity Search, MiniMax Search, Gemini, Grok, Kimi, Codex Hosted Search, DuckDuckGo, Firecrawl Free, and Ollama Web Search.
 
 - **No API Key required**: DuckDuckGo and Firecrawl Free. Anonymous searches may encounter rate limits or CAPTCHAs.
-- **Codex Hosted Search**: uses the ChatGPT account signed in under **Settings → Model configuration**. It runs a pinned version of Codex app-server in a dedicated temporary directory with a minimal environment, with command execution, file modification, and MCP disabled, for search only. Windows uses native process-tree cleanup. These are capability restrictions, not operating-system-level isolation. Signing out of that account also affects any teaching model that uses it.
+- **Codex Hosted Search**: uses the ChatGPT account signed in under **Settings → Model configuration**. It runs a pinned version of Codex app-server in a dedicated temporary directory with a minimal environment, with command execution, file modification, and MCP disabled, for search only. These are capability restrictions, not operating-system-level isolation. Signing out of that account also affects any teaching model that uses it.
 - **Other providers**: use their own API Keys. Gemini, Grok, and Kimi allow a separate search model to be specified; MiniMax and Kimi offer Global or China regions; MiniMax Search requires a Coding Plan that supports the search API; Ollama Web Search calls the hosted service at `ollama.com`, not a local Ollama instance.
 
 Usage notes:
 
-- The configuration is saved in `search.json` in the data directory (`0600` on Unix). Switching providers does not overwrite other providers' settings.
+- The configuration is saved in `search.json` in the data directory (POSIX mode `0600`). Switching providers does not overwrite other providers' settings.
 - **Test search** calls the current provider directly, without going through the teaching model. Both tests and Agent searches may incur charges, and query content is sent to the provider.
 - Turning off the master switch blocks subsequent searches and cancels in-flight requests, but does not affect other ways of accessing the network, such as web fetching or MCP.
 - Provider failures are reported directly; there is no automatic fallback to another provider.
@@ -149,7 +149,7 @@ Add MCP servers in **Settings → MCP**, either through the form or by pasting J
 | `timeout` | All | In seconds; defaults to 60 |
 
 - `env` and `headers` accept only literal values; `${VAR}` references and command expansion are not supported. Put authentication information in these fields, not in URLs or startup arguments.
-- The configuration is saved in `mcp.json` in the data directory (`0600` on Unix). The Settings page hides the values of `env` and `headers`; saving an unchanged mask preserves the original value.
+- The configuration is saved in `mcp.json` in the data directory (POSIX mode `0600`). The Settings page hides the values of `env` and `headers`; saving an unchanged mask preserves the original value.
 - The list of available tools is fixed at the start of each Agent run. Configuration changes apply to subsequent runs.
 - Legacy SSE transport, remote OAuth sign-in, and MCP resources and prompts are not currently supported.
 

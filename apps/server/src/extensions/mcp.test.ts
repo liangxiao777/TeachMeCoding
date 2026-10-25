@@ -116,7 +116,7 @@ test('configuration survives reopening, masks secrets, and disabled servers neve
     const result = await environment.execute('env', {});
     assert.equal(result.content[0]!.type, 'text');
     if (result.content[0]!.type === 'text') assert.deepEqual(JSON.parse(result.content[0]!.text), { explicit: 'explicit-env-token', ambient: null, cwd: root });
-    if (process.platform !== 'win32') assert.equal(lstatSync(path).mode & 0o777, 0o600);
+    assert.equal(lstatSync(path).mode & 0o777, 0o600);
     await service.save(service.settings().configuration);
     assert.equal(JSON.parse(readFileSync(path, 'utf8')).mcpServers.disabled.env.KEY, 'synthetic-private-key', 'masked round-trip must not overwrite a credential');
     await service.close();

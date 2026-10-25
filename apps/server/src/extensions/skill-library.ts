@@ -8,7 +8,6 @@ import { loadSkills } from '@earendil-works/pi-coding-agent';
 import type { SkillInstallation, SkillLeaderboard, SkillLeaderboardView, SkillSearch } from '@teach-me-coding/contracts';
 import { BusinessError } from '../modules/learning.js';
 import { stopProcessTree } from '../runtime/processes.js';
-import { terminalEnvironment } from '../runtime/terminal-env.js';
 
 const metadataFile = '.tmc-install.json';
 const installationSchema = z.object({
@@ -168,11 +167,8 @@ export class SkillLibrary {
     mkdirSync(home); mkdirSync(temporary);
     const gitConfig = join(project, 'git-config'); writeFileSync(gitConfig, '');
     // Public acquisition never inherits provider keys, Git helpers, SSH agent sockets or real agent homes.
-    const system = terminalEnvironment(process.env);
     const env: NodeJS.ProcessEnv = {
-      PATH: system.PATH, LANG: system.LANG, SystemRoot: system.SystemRoot, COMSPEC: system.COMSPEC, PATHEXT: system.PATHEXT,
-      HOME: home, USERPROFILE: home, TMPDIR: temporary, TMP: temporary, TEMP: temporary,
-      APPDATA: join(home, 'AppData/Roaming'), LOCALAPPDATA: join(home, 'AppData/Local'),
+      PATH: process.env.PATH, LANG: process.env.LANG, HOME: home, TMPDIR: temporary, TMP: temporary, TEMP: temporary,
       XDG_CONFIG_HOME: join(home, 'config'), XDG_STATE_HOME: join(home, 'state'), XDG_CACHE_HOME: join(home, 'cache'),
       DISABLE_TELEMETRY: '1', CI: '1', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0',
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: gitConfig,
