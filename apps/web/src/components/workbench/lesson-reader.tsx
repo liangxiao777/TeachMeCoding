@@ -30,12 +30,51 @@ import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia } from '@/comp
 import { findUnit } from '@/app/selectors'
 import type { LessonBlock } from '@/app/types'
 import { useApp, useSpace } from '@/app/context'
-import { lessonAllowedTags, lessonHeadingId, lessonHeadings, lessonRemarkPlugins, scopedLessonHeadings } from '@/lib/lesson-markdown'
+import { lessonAllowedTags, lessonHeadingId, lessonHeadings, lessonMath, lessonRemarkPlugins, scopedLessonHeadings } from '@/lib/lesson-markdown'
 import { diffLesson, lessonDiffAllowedTags, lessonDiffRemark } from '@/lib/lesson-diff'
 import { pendingDecision } from '@/app/lesson-proposals'
 import { cn } from '@/lib/utils'
 
 const scrollMemory = new Map<string, number>()
+const lessonPlugins = { math: lessonMath }
+const lessonMermaid = { config: {
+  theme: 'neutral',
+  fontFamily: 'var(--font-sans)',
+  themeVariables: { fontSize: '14px', lineColor: 'var(--muted-foreground)', transitionColor: 'var(--muted-foreground)' },
+  flowchart: { curve: 'basis', nodeSpacing: 36, rankSpacing: 48, padding: 16 },
+  sequence: { actorMargin: 48, width: 120, height: 44 },
+  // SVGs inherit the app palette, including theme changes, without remounting the lesson.
+  themeCSS: `
+    .node rect, .node circle, .node ellipse, .node polygon, .node path,
+    rect.actor, .activation0, .activation1, .activation2, .labelBox {
+      fill: var(--muted);
+      stroke: color-mix(in srgb, var(--foreground) 20%, var(--card));
+      stroke-width: 1px;
+    }
+    .node rect, rect.actor, .labelBox { rx: 8px; ry: 8px; }
+    text, text.actor, text.actor > tspan, .messageText, .labelText, .labelText > tspan,
+    .loopText, .loopText tspan, .label, .nodeLabel, .nodeLabel p,
+    .edgeLabel, .edgeLabel p, .noteText, .noteText > tspan {
+      fill: var(--foreground);
+      color: var(--foreground);
+    }
+    .flowchart-link, .messageLine0, .messageLine1, .actor-line, .loopLine {
+      stroke: var(--muted-foreground);
+      stroke-width: 1.25px;
+    }
+    .arrowMarkerPath, [id$="-arrowhead"] path, [id$="-crosshead"] path {
+      fill: var(--muted-foreground);
+      stroke: var(--muted-foreground);
+    }
+    .marker.zeroOrOne circle, .marker.zeroOrMore circle { fill: var(--card); }
+    .edgeLabel, .edgeLabel p, .labelBkg { background-color: var(--card); }
+    .edgeLabel rect { fill: var(--card); }
+    .cluster rect, .note {
+      fill: var(--card);
+      stroke: var(--border);
+    }
+  `,
+} }
 const lessonHighlighter = createHighlighterCore({
   themes: [bundledThemes['github-dark']], langs: [], engine: createJavaScriptRegexEngine(),
 })
@@ -122,7 +161,7 @@ function LessonText({ text, enhanced = false, inDrawer = false, onAsk, readOnly 
   text: string; enhanced?: boolean; inDrawer?: boolean; onAsk?: () => void; readOnly?: boolean; scope?: string; diffPlugins?: PluggableList
 }) {
   const { t } = useTranslation('workbench')
-  return <RichText key={`${scope ?? 'normal'}:${inDrawer}:${readOnly}`} text={text} renderMermaid={enhanced}
+  return <RichText key={`${scope ?? 'normal'}:${inDrawer}:${readOnly}`} text={text} renderMermaid plugins={lessonPlugins} mermaid={lessonMermaid}
     remarkPlugins={enhanced ? [...lessonRemarkPlugins, ...(scope ? [[scopedLessonHeadings, { scope, inDrawer }]] as PluggableList : []), ...(diffPlugins ?? [])] : undefined}
     allowedTags={enhanced ? { ...lessonAllowedTags, ...lessonDiffAllowedTags } : undefined}
     normalizeHtmlIndentation={enhanced ? false : undefined}
@@ -228,7 +267,7 @@ function Block({ block }: { block: LessonBlock }) {
         </ul>
       )
     case 'code':
-      return <CodeBlock block={block} />
+      return block.language === 'mermaid' ? <LessonText text={lessonMarkdown({ title: '', content: '', blocks: [block] })} /> : <CodeBlock block={block} />
     case 'callout':
       return (
         <Alert className="border-primary/25 bg-primary/5">

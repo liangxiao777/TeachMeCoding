@@ -601,7 +601,9 @@ test('stored Markdown sections and assessment prompts render headings, tables an
     await route.fulfill({ json: { ...detail, lesson: { title: '错误处理', content: '', intro: '学习配置，不把正文当标题。', blocks: [
       { type: 'h2', id: 'compiler-options', text: rawHeading },
       { type: 'callout', title: '检查结果', text: '保留换行。\n\n```unknown-language\nline one\n  line two\n```' },
-      { type: 'p', text: '### 补充说明\n\n这段正文也支持 Markdown。' },
+      { type: 'p', text: '### 补充说明\n\n这段正文也支持 Markdown 和 $x^2$。' },
+      { type: 'code', file: 'flow.mmd', language: 'mermaid', code: 'flowchart LR\n  Source[读取旧版课件] --> Render[渲染图表]', caption: '原有图表说明保留。' },
+      { type: 'markdown', text: '```mermaid\nflowchart LR\n  Input[旧版正文] --> Output[展示结果]\n```' },
       { type: 'h2', id: 'review', text: '复习' },
     ] }, assessment: { ...detail.assessment, q1: '解释 `tsc`。\n\n- 编译\n- 执行', q2: assessment, starter: '' } } });
   });
@@ -618,6 +620,15 @@ test('stored Markdown sections and assessment prompts render headings, tables an
   await expect(article.locator('pre').nth(1)).toHaveText('line one\n  line two');
   await expect.poll(() => article.locator('pre').nth(1).evaluate((el) => new Set([el, ...el.querySelectorAll('*')].map((node) => getComputedStyle(node).color)).size)).toBe(1);
   await expect(article.locator('ol > li')).toHaveText(['检查类型', '编译运行']);
+  await expect(article.locator('.katex annotation')).toHaveText('x^2');
+  const diagrams = article.locator('[data-streamdown="mermaid-block"]');
+  await diagrams.first().scrollIntoViewIfNeeded();
+  await expect(diagrams.first().locator('svg')).toContainText('读取旧版课件');
+  await diagrams.first().locator('..').screenshot({ path: `.amp/in/artifacts/lesson-math-diagram-legacy-${info.project.name}.png`, animations: 'disabled' });
+  await diagrams.nth(1).scrollIntoViewIfNeeded();
+  await expect(diagrams.nth(1).locator('svg')).toContainText('展示结果');
+  await expect(article).toContainText('原有图表说明保留。');
+  await expect(article.getByRole('button', { name: '带入 IDE', exact: true })).toHaveCount(2);
   const toc = page.getByRole('complementary', { name: '单元材料' });
   await expect(toc.getByRole('link')).toHaveText(['编译配置', '复习']);
   await toc.getByRole('link', { name: '复习', exact: true }).click();
@@ -740,6 +751,80 @@ test('Markdown lessons derive directories and offer code, callouts and optional 
   await expect(composer(page)).toContainText(question);
   await expect(composer(page)).not.toContainText('参考结论：');
   expect(sends).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('lesson formulas and Mermaid diagrams render in the reader, folded answers and IDE drawer without changing code', async ({ page }, info) => {
+  const data = seed(info), unit = data.unitIds[1]!;
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const file = `formula-${randomUUID()}.ts`;
+  const code = 'const formula = "$x^2$";\nconst price = "$5";';
+  const content = [
+    '## 公式与流程',
+    '行内公式 $E=mc^2$ 与正文一起阅读。转义金额 \\$5 保持原文，`$not_math$` 保持代码。',
+    '$$\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}\n$$',
+    '```mermaid\nflowchart LR\n  Read[读取输入] --> Validate{检查边界}\n  Validate -->|有效| Explain[解释结果]\n  Validate -->|无效| Retry[重新输入]\n```',
+    '::::practice\n推导 $x_1+x_2$ 的结果，再展开讲解。\n\n:::solution\n先计算 $\\frac{1}{2}$，再观察调用过程。\n\n```mermaid\nsequenceDiagram\n  学习者->>程序: 提交输入\n  程序-->>学习者: 返回结果\n```\n:::\n::::',
+    `\`\`\`typescript file=${file}\n${code}\n\`\`\``,
+  ].join('\n\n');
+  await page.route(`**/api/spaces/${data.spaceId}/units/${unit}`, async (route) => {
+    const response = await route.fetch(), detail = await response.json() as UnitDetail;
+    await route.fulfill({ json: { ...detail, lesson: { title: '公式与流程图', content } } });
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`/?space=${data.spaceId}&tab=unit&unit=${unit}`);
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const article = page.locator('.lesson-prose');
+  const diagram = article.locator('[data-streamdown="mermaid"] svg').first();
+  await expect(diagram).toBeVisible();
+  await expect(diagram).toContainText('检查边界');
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-math-diagram-light-${info.project.name}.png`, animations: 'disabled' });
+  await article.locator('[data-streamdown="mermaid-block"]').first().screenshot({ path: `.amp/in/artifacts/lesson-mermaid-light-${info.project.name}.png`, animations: 'disabled' });
+  await expect(article.locator('.katex')).toHaveCount(4);
+  await expect(article.locator('.katex-display')).toHaveCount(1);
+  await expect(article.locator('.katex annotation').first()).toHaveText('E=mc^2');
+  await expect(article).toContainText('转义金额 $5 保持原文');
+  await expect(article.locator('code').filter({ hasText: '$not_math$' })).toHaveCount(1);
+  const solution = article.locator('details').filter({ hasText: '先计算' });
+  await expect(solution.locator('.katex')).toBeHidden();
+  await solution.locator('summary').click();
+  await expect(solution.locator('.katex')).toBeVisible();
+  await expect(solution.locator('svg')).toBeVisible();
+  await expect(solution.locator('svg')).toContainText('返回结果');
+  await expect(article.locator('pre')).toHaveText(code);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await article.getByRole('button', { name: '复制', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
+  await article.locator('..').evaluate((element) => { element.scrollTop = 0; });
+  const edge = diagram.locator('path.flowchart-link').first();
+  const lightStroke = await edge.evaluate((element) => getComputedStyle(element).stroke);
+  await page.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
+  await expect.poll(() => edge.evaluate((element) => getComputedStyle(element).stroke)).not.toBe(lightStroke);
+  await page.getByRole('button', { name: '切换到亮色主题', exact: true }).click();
+  await expect.poll(() => edge.evaluate((element) => getComputedStyle(element).stroke)).toBe(lightStroke);
+  await page.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
+  await expect.poll(() => edge.evaluate((element) => getComputedStyle(element).stroke)).not.toBe(lightStroke);
+  await expect(solution).toHaveAttribute('open', '');
+  expect(await solution.getByText('学习者', { exact: true }).first().evaluate((element) => getComputedStyle(element).fill))
+    .toBe(await page.locator('body').evaluate((element) => getComputedStyle(element).color));
+  await solution.locator('summary').click();
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-math-diagram-dark-${info.project.name}.png`, animations: 'disabled' });
+  await article.locator('[data-streamdown="mermaid-block"]').first().screenshot({ path: `.amp/in/artifacts/lesson-mermaid-dark-${info.project.name}.png`, animations: 'disabled' });
+  await article.getByRole('button', { name: '带入 IDE', exact: true }).click();
+  await expect(visible(page, `编辑 ${file}`)).toHaveText(code, { useInnerText: true });
+  await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
+  await page.getByRole('button', { name: '查看课件', exact: true }).click();
+  const drawer = page.getByRole('dialog');
+  await expect(drawer.locator('.katex')).toHaveCount(4);
+  await expect(drawer.locator('[data-streamdown="mermaid"] svg').first()).toBeVisible();
+  await drawer.locator('summary').filter({ hasText: '参考讲解' }).click();
+  await expect(drawer.locator('details svg')).toBeVisible();
+  await drawer.locator('details').screenshot({ path: `.amp/in/artifacts/lesson-math-diagram-answer-${info.project.name}.png`, animations: 'disabled' });
+  await drawer.locator('.lesson-prose').locator('..').evaluate((element) => { element.scrollTop = 0; });
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.screenshot({ path: `.amp/in/artifacts/lesson-math-diagram-drawer-${info.project.name}.png`, animations: 'disabled' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });
 

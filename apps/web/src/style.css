@@ -298,6 +298,30 @@
   color: var(--accent-foreground);
 }
 
+.lesson-prose [data-streamdown='mermaid-block'] {
+  gap: 0;
+  padding: clamp(16px, 2vw, 24px);
+  border-radius: calc(var(--radius) * 1.4);
+  background: var(--card);
+}
+
+/* Diagrams are reading material, not labelled code blocks. */
+.lesson-prose [data-streamdown='mermaid-block'] > :first-child {
+  display: none;
+}
+
+.lesson-prose [data-streamdown='mermaid-block'] > :last-child {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.lesson-prose details [data-streamdown='mermaid-block'] {
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+}
+
 .startup-page {
   --startup-light-strong: light-dark(rgb(0 0 0 / 21.6%), rgb(255 255 255 / 19.2%));
   --startup-light-soft: light-dark(rgb(0 0 0 / 8.4%), rgb(255 255 255 / 7.2%));

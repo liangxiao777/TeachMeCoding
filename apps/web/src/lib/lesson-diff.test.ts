@@ -4,10 +4,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Streamdown } from 'streamdown'
 import { cjk } from '@streamdown/cjk'
-import { math } from '@streamdown/math'
 import type { Nodes } from 'mdast'
 import { diffLesson, lessonDiffAllowedTags, lessonDiffRemark, lessonDiffTree, lessonTokens } from './lesson-diff'
-import { lessonAllowedTags, lessonHeadings, lessonRemarkPlugins } from './lesson-markdown'
+import { lessonAllowedTags, lessonHeadings, lessonMath, lessonRemarkPlugins } from './lesson-markdown'
 import i18n from '../i18n'
 
 await i18n.changeLanguage('zh-CN')
@@ -18,7 +17,7 @@ const teachingSource = [
   '> [!TIP]\n> 提示里的 [引用][ref]', '> [!WARNING]\n> 不要遗漏警告',
   '::::practice\n练习题 [引用][ref]\n\n:::hint\n提示内容\n:::\n\n:::solution\n参考讲解\n:::\n::::',
   '| 列一 | 列二 |\n| --- | --- |\n| 值 | [引用][ref] |',
-  '$$\nx^2 + y^2\n$$', '```mermaid\ngraph LR\nA-->B\n```',
+  '行内公式 $a_1+b_2$ 与正文一起保留。', '$$\nx^2 + y^2\n$$', '```mermaid\ngraph LR\nA-->B\n```',
   '[ref]: https://example.com/old "旧定义"', '[^ref]: 旧脚注 [引用][ref]',
 ].join('\n\n') + '\n'
 
@@ -44,6 +43,7 @@ test('lesson block diff is lossless with asymmetric repeated blocks, definitions
   assert.equal(nodes.some((node) => node.data?.hName === 'lesson-solution'), true)
   assert.equal(nodes.some((node) => node.type === 'table'), true)
   assert.equal(nodes.some((node) => String(node.type) === 'math'), true)
+  assert.equal(nodes.some((node) => String(node.type) === 'inlineMath'), true)
   assert.equal(nodes.some((node) => node.type === 'code' && node.lang === 'mermaid' && node.value.includes('A-->B')), true)
   assert.equal(nodes.filter((node) => node.type === 'definition').length >= 2, true)
   assert.equal(nodes.filter((node) => node.type === 'footnoteDefinition').length >= 2, true, 'Link and footnote namespaces can use the same identifier')
@@ -53,12 +53,28 @@ test('lesson block diff is lossless with asymmetric repeated blocks, definitions
   assert.deepEqual(diff, snapshot, 'Rendering never mutates the immutable review snapshot')
 })
 
+test('lesson review renders changed inline formulas without interpreting escaped dollars or code as math', () => {
+  const before = '## 计算 $x^2$\n\n结果是 $x^2$。金额 \\$5，代码 `$not_math$`。\n'
+  const after = before.replaceAll('x^2', 'x^3')
+  const html = renderToStaticMarkup(createElement(Streamdown, { mode: 'static', parseIncompleteMarkdown: false, controls: false,
+    plugins: { cjk, math: lessonMath }, children: after,
+    allowedTags: { ...lessonAllowedTags, ...lessonDiffAllowedTags },
+    remarkPlugins: [...lessonRemarkPlugins, [lessonDiffRemark, { diff: diffLesson(before, after), proposalId: 'math', inDrawer: false }]],
+  }))
+  assert.equal((html.match(/class="katex"/g) ?? []).length, 4)
+  assert.equal((html.match(/<annotation encoding="application\/x-tex">x\^2<\/annotation>/g) ?? []).length, 2)
+  assert.equal((html.match(/<annotation encoding="application\/x-tex">x\^3<\/annotation>/g) ?? []).length, 2)
+  assert.match(html, /金额 \$5/)
+  assert.match(html, />\$not_math\$<\/code>/)
+  assert.deepEqual(lessonHeadings(after).map((heading) => heading.text), ['计算 x^3'])
+})
+
 test('combined lesson AST renders old/new cross-block reference scopes and matching TOC anchors', () => {
   const before = '## 相同标题\n\n[引用][ref]\n\n## 相同标题\n\n[ref]: https://example.com/old\n'
   const after = '插入开头\n\n' + before.replace('example.com/old', 'example.com/new')
   const diff = diffLesson(before, after)
   const html = renderToStaticMarkup(createElement(Streamdown, { mode: 'static', parseIncompleteMarkdown: false, controls: false,
-    normalizeHtmlIndentation: false, plugins: { cjk, math }, children: after, linkSafety: { enabled: false },
+    normalizeHtmlIndentation: false, plugins: { cjk, math: lessonMath }, children: after, linkSafety: { enabled: false },
     allowedTags: { ...lessonAllowedTags, ...lessonDiffAllowedTags },
     remarkPlugins: [...lessonRemarkPlugins, [lessonDiffRemark, { diff, proposalId: 'test-proposal', inDrawer: false }]],
   }))
@@ -75,7 +91,7 @@ test('single-panel lesson review exposes link targets, separator whitespace and 
   const before = '\n## 保留上下文\n\n[参数资料](https://docs.example.org/old "旧说明")\n\n**保留正文**\r\n\r\n末段'
   const after = '\n\n## 保留上下文\n\n\n[参数资料](https://docs.example.org/new "新说明")\n\n__保留正文__\n\n末段\n'
   const html = renderToStaticMarkup(createElement(Streamdown, { mode: 'static', parseIncompleteMarkdown: false, controls: false,
-    normalizeHtmlIndentation: false, plugins: { cjk, math }, children: after, linkSafety: { enabled: false },
+    normalizeHtmlIndentation: false, plugins: { cjk, math: lessonMath }, children: after, linkSafety: { enabled: false },
     allowedTags: { ...lessonAllowedTags, ...lessonDiffAllowedTags },
     remarkPlugins: [...lessonRemarkPlugins, [lessonDiffRemark, { diff: diffLesson(before, after), proposalId: 'inline', inDrawer: false }]],
   }))

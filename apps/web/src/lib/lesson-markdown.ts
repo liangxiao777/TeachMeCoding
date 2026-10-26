@@ -5,10 +5,11 @@ import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import { defaultRemarkPlugins } from 'streamdown'
 import { cjk } from '@streamdown/cjk'
-import { math } from '@streamdown/math'
+import { createMathPlugin } from '@streamdown/math'
 import { unified, type Plugin, type PluggableList } from 'unified'
 
 const plainMarkdown = unified().use(remarkParse).use(remarkGfm)
+export const lessonMath = createMathPlugin({ singleDollarTextMath: true })
 
 export const lessonHeadingId = (offset: number, inDrawer = false, scope?: string) => `lesson-${inDrawer ? 'drawer' : 'main'}-${scope ? `${scope}-` : ''}${offset}`
 
@@ -74,7 +75,7 @@ const teachingBlocks: Plugin<[], Root> = () => (tree, file) => {
 // The directory and renderer use the same grammar and fallback rules. Only
 // top-level h2 headings belong to the directory, not code or folded answers.
 export const lessonRemarkPlugins: PluggableList = [...Object.values(defaultRemarkPlugins), remarkDirective, teachingBlocks]
-const lessonParser = unified().use(remarkParse).use(cjk.remarkPluginsBefore).use(lessonRemarkPlugins).use(cjk.remarkPluginsAfter).use([math.remarkPlugin])
+const lessonParser = unified().use(remarkParse).use(cjk.remarkPluginsBefore).use(lessonRemarkPlugins).use(cjk.remarkPluginsAfter).use([lessonMath.remarkPlugin])
 export function parseLessonMarkdown(content: string): Root {
   return lessonParser.runSync(lessonParser.parse(content), { value: content }) as Root
 }

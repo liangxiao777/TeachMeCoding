@@ -49,11 +49,11 @@ export function RichText({
   renderCode?: (code: string, lang: string, meta: string) => ReactNode
   renderMermaid?: boolean
   components?: MessageResponseProps['components']
-} & Pick<MessageResponseProps, 'remarkPlugins' | 'allowedTags' | 'normalizeHtmlIndentation'>) {
+} & Pick<MessageResponseProps, 'plugins' | 'mermaid' | 'remarkPlugins' | 'allowedTags' | 'normalizeHtmlIndentation'>) {
   return (
     <MessageResponse mode="static" parseIncompleteMarkdown={false} controls={false}
       {...markdownProps}
-      className="h-auto min-w-0 max-w-full space-y-3 break-words leading-relaxed"
+      className="h-auto min-w-0 max-w-full space-y-3 break-words leading-relaxed [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-1"
       components={{
         p: ({ children }) => <p>{children}</p>,
         strong: ({ children }) => <strong className="font-semibold">{children}</strong>,

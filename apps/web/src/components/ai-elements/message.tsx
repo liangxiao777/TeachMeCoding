@@ -333,8 +333,12 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 const streamdownPlugins = { cjk, code, math, mermaid };
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => {
+  ({ className, plugins, ...props }: MessageResponseProps) => {
     const { i18n } = useTranslation();
+    const responsePlugins = useMemo(
+      () => plugins ? { ...streamdownPlugins, ...plugins } : streamdownPlugins,
+      [plugins]
+    );
     // Streamdown's memo comparator ignores translated components/remark plugins.
     // Reset only the Markdown renderer, not the workspace's editor or terminal.
     return (
@@ -344,7 +348,7 @@ export const MessageResponse = memo(
           "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
           className
         )}
-        plugins={streamdownPlugins}
+        plugins={responsePlugins}
         {...props}
       />
     );
