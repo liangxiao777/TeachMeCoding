@@ -32,6 +32,15 @@ jobs:
       - run: pnpm check
       - run: pnpm build
       - run: pnpm release:pack
+      - name: Prepare Rust compiler and linker
+        timeout-minutes: 1
+        run: |
+          # Load the hosted image's toolchain before assessment deadlines start.
+          directory="$(mktemp -d)"
+          trap 'rm -rf "$directory"' EXIT
+          printf '%s\n' 'fn main() { println!("Rust toolchain ready"); }' > "$directory/check.rs"
+          rustc --edition=2021 "$directory/check.rs" -o "$directory/check"
+          "$directory/check"
       - run: pnpm test
       - run: pnpm test:native
       - run: pnpm check:i18n

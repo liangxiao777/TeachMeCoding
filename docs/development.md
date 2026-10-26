@@ -72,6 +72,8 @@ All tests use temporary data directories and do not read or write your learning 
 
 The CI matrix targets only `ubuntu-latest` and `macos-latest`, covering a frozen-lockfile install, `pnpm check`, `pnpm build`, `pnpm test`, `pnpm test:native`, and browser execution/PTY checks, including POSIX permission assertions (see [Security](../SECURITY.md)).
 
+Before timed execution tests, CI compiles and runs a temporary Rust program to load the hosted image's compiler and linker. This setup step has a separate one-minute limit; assessment execution limits and test assertions are unchanged.
+
 The production tests also unpack the release archive, install its dependencies from the local pnpm cache without source-tree links, and verify startup, UI assets, SQLite, teaching prompts, and a real PTY. Version tags must match the root package version; their GitHub Release is published only after both platform jobs succeed.
 
 ### Unit and integration tests

@@ -72,6 +72,8 @@ patches/             pnpm 依赖补丁
 
 CI 矩阵仅使用 `ubuntu-latest` 和 `macos-latest`，覆盖冻结锁文件安装、`pnpm check`、`pnpm build`、`pnpm test`、`pnpm test:native` 以及浏览器执行/PTY 检查，包括 POSIX 权限断言（见[安全策略](../SECURITY.zh.md)）。
 
+限时执行测试前，CI 会编译并运行一个临时 Rust 程序，加载托管镜像中的编译器和链接器。此准备步骤单独限时一分钟，不改变测评执行限制和测试断言。
+
 生产测试还会解压发布包，从本机 pnpm 缓存安装依赖，不链接源码目录，并验证启动、界面资源、SQLite、教学提示词和真实 PTY。版本标签必须与根包版本一致；仅当两个平台的检查都通过后，才发布 GitHub Release。
 
 ### 单元与集成测试
