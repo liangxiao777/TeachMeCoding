@@ -170,8 +170,8 @@ test('MCP connection failures follow the current language, including reload', as
   await expect(server.getByRole('alert')).toHaveText('无法连接，请检查命令、地址和认证配置。');
   await shot(page, info, 'mcp-error-zh');
   await chooseLanguage(page, 'English');
+  // Settings own a URL, so a reload stays on the settings page.
   await page.reload();
-  await settings(page);
   await page.getByRole('tab', { name: 'MCP', exact: true }).click();
   await expect(server.getByRole('alert')).toHaveText('Unable to connect. Check the command, address, and authentication settings.');
   await server.getByRole('button', { name: `Configure missing-${info.project.name}`, exact: true }).click();

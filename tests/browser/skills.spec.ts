@@ -101,8 +101,8 @@ test('Skills discovery installs a real bundle, preserves drafts and manages upda
   await page.screenshot({ path: `.amp/in/artifacts/skills-link-mobile-${info.project.name}.png`, animations: 'disabled' });
   await page.keyboard.press('Escape');
   await expect(settings.getByRole('button', { name: '从链接安装', exact: true })).toBeFocused();
+  // Settings own a URL, so a reload stays on the settings page.
   await page.reload();
-  await page.getByRole('button', { name: '应用设置', exact: true }).click();
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(row.getByRole('switch', { name: '启用 reviewing-arrays', exact: true })).not.toBeChecked();
   await actions.click();

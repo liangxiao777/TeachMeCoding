@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useEscape } from '@/app/escape'
 import { ThemeToggle } from '@/app/theme'
 import { useLanguagePreference } from '@/i18n/language'
 import { languagePreference } from '@/i18n/locale'
@@ -43,6 +44,7 @@ export function SettingsPage({ onBack, onEntered }: { onBack: () => void; onEnte
   const isPresent = useIsPresent()
   const reducedMotion = useReducedMotion()
   const title = useRef<HTMLHeadingElement>(null)
+  useEscape(onBack, { enabled: isPresent, capture: true, ignoreFields: true })
   useEffect(() => {
     title.current?.focus()
     const query = matchMedia('(min-width: 768px)')

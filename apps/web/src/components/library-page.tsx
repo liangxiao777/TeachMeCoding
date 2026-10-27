@@ -5,8 +5,8 @@ import type { LibraryDocument, LibraryState } from '@teach-me-coding/contracts'
 import { api, downloadLibraryFile, uploadLibraryFile } from '@/lib/api'
 import { formatDate, formatNumber } from '@/i18n/format'
 import { formatNotice, notice, type UiNotice } from '@/i18n/notice'
+import { useEscape } from '@/app/escape'
 import { ThemeToggle } from '@/app/theme'
-import { Brand } from '@/components/shared'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -53,6 +53,7 @@ export function LibraryPage({ onBack }: { onBack: () => void }) {
     } catch (error) { if (current === revision.current) setError(message(error)) }
   }
   useEffect(() => { title.current?.focus(); void load(); return () => { revision.current++ } }, [])
+  useEscape(onBack, { capture: true, ignoreFields: true })
   const write = async (path: string, input: unknown) => {
     revision.current++; setBusy(true)
     try { setLibrary(await api<LibraryState>(path, input)) }
@@ -75,7 +76,8 @@ export function LibraryPage({ onBack }: { onBack: () => void }) {
   const visible = library?.files.filter((file) => file.name.toLowerCase().includes(filter.trim().toLowerCase())) ?? []
   return <section aria-label={t('title')} className="fixed inset-0 z-40 flex h-dvh min-w-0 flex-col bg-background text-foreground">
     <header className="shrink-0 border-b"><div className="mx-auto flex h-16 max-w-6xl items-center gap-2 px-4 md:px-6">
-      <Brand /><Button variant="outline" className="ml-auto" onClick={onBack}><ArrowLeft />{t('backToLearning')}</Button><ThemeToggle />
+      <Button variant="ghost" onClick={onBack}><ArrowLeft data-icon="inline-start" />{t('back')}</Button>
+      <div className="ml-auto"><ThemeToggle /></div>
     </div></header>
     <main className="min-h-0 flex-1 overflow-y-auto px-4 py-8 md:px-6 md:py-10"><div className="mx-auto flex max-w-4xl flex-col gap-6">
     <div className="flex flex-wrap items-center justify-between gap-4">

@@ -16,7 +16,6 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { LessonReader } from '@/components/workbench/lesson-reader'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
-import { Brand } from '@/components/shared'
 import { SettingsButton } from '@/components/settings/settings-page'
 import { LibraryButton } from '@/components/library-page'
 import { Badge } from '@/components/ui/badge'
@@ -44,9 +43,30 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { findUnit } from '@/app/selectors'
 import { pendingDecision } from '@/app/lesson-proposals'
 import { useApp, useSpace } from '@/app/context'
+import { useEscape } from '@/app/escape'
 import { useLessonDrawer } from '@/app/lesson-drawer'
 import { ThemeToggle } from '@/app/theme'
 import { cn } from '@/lib/utils'
+
+/** The one way up a level, always at the far left of a space header. */
+export function BackButton() {
+  const { t } = useTranslation(['learning', 'assessment'])
+  const space = useSpace()
+  const { goSpaces, setView, leaveAssessment, backToStudy } = useApp()
+  const [label, back] =
+    space.view === 'unit' ? [t('topBar.backToPath'), () => setView('route')]
+      : space.view === 'assessment' ? [t('assessment:controls.backWithAnswers'), leaveAssessment]
+        : space.view === 'result' ? [t('assessment:result.backToUnit'), backToStudy]
+          : [t('topBar.backToSpaces'), goSpaces]
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={label} onClick={back} />}>
+        <ArrowLeft />
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
 
 function SpaceSwitcher() {
   const { t } = useTranslation('learning')
@@ -59,6 +79,13 @@ function SpaceSwitcher() {
         <ChevronsUpDown data-icon="inline-end" className="text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-72">
+        <DropdownMenuGroup>
+          <DropdownMenuItem onClick={goSpaces}>
+            <LayoutGrid />
+            {t('controls.allSpaces')}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
         <DropdownMenuGroup>
           <DropdownMenuLabel>{t('topBar.switchSpace')}</DropdownMenuLabel>
           {state.spaces.map((s) => {
@@ -78,10 +105,6 @@ function SpaceSwitcher() {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={goSpaces}>
-            <LayoutGrid />
-            {t('topBar.viewSpaces')}
-          </DropdownMenuItem>
           <DropdownMenuItem onClick={goHome}>
             <Plus />
             {t('topBar.createSpace')}
@@ -92,17 +115,76 @@ function SpaceSwitcher() {
   )
 }
 
+// Ancestor levels read as buttons, not as muted labels.
+const crumbLink = '-mx-1.5 rounded-md px-1.5 py-1 text-foreground/70 hover:bg-muted hover:text-foreground'
+
+function SpaceBreadcrumb() {
+  const { t } = useTranslation('learning')
+  const space = useSpace()
+  const { setView, enterUnit } = useApp()
+  const unit = findUnit(space, space.currentUnitId)
+  const onRoute = space.view === 'route'
+  return (
+    <Breadcrumb aria-label={t('topBar.navigation')} className="min-w-0">
+      <BreadcrumbList className="flex-nowrap">
+        <BreadcrumbSeparator />
+        <BreadcrumbItem>
+          {onRoute ? (
+            <BreadcrumbPage>{t('controls.learningPath')}</BreadcrumbPage>
+          ) : (
+            <BreadcrumbLink className={crumbLink} render={<button type="button" onClick={() => setView('route')} />}>
+              {t('controls.learningPath')}
+            </BreadcrumbLink>
+          )}
+        </BreadcrumbItem>
+        {unit && (
+          <>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem className="min-w-0">
+              {space.view === 'unit' ? (
+                <BreadcrumbPage className="truncate">{unit.title}</BreadcrumbPage>
+              ) : (
+                <BreadcrumbLink
+                  className={cn(crumbLink, 'truncate')}
+                  render={<button type="button" onClick={() => (onRoute ? enterUnit(unit.id) : setView('unit'))} />}
+                >
+                  {unit.title}
+                </BreadcrumbLink>
+              )}
+            </BreadcrumbItem>
+          </>
+        )}
+        {(space.view === 'assessment' || space.view === 'result') && (
+          <>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="flex items-center gap-2 whitespace-nowrap">
+                {space.view === 'assessment' ? t('topBar.assessment') : t('topBar.results')}
+                {space.view === 'assessment' && (
+                  <Badge variant="secondary" className="bg-accent text-accent-foreground">
+                    {t('topBar.inProgress')}
+                  </Badge>
+                )}
+              </BreadcrumbPage>
+            </BreadcrumbItem>
+          </>
+        )}
+      </BreadcrumbList>
+    </Breadcrumb>
+  )
+}
+
 export function TopBar() {
   const { t } = useTranslation('learning')
   const space = useSpace()
-  const { goHome, setView, enterUnit, toggleAgent, toggleIde, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
+  const { toggleAgent, toggleIde, setIdeFullscreen, startAssessment, toggleExplorer, capabilities, assessment, persistence } = useApp()
   const { open: lessonOpen, setOpen: setLessonOpen } = useLessonDrawer()
   const unit = findUnit(space, space.currentUnitId)
   const proposal = persistence.lessonProposals.findLast((proposal) => proposal.state === 'pending' && proposal.unitId === unit?.id)
   const awaitingDecision = !!pendingDecision(persistence)
-  const onRoute = space.view === 'route'
   const hasDraft = space.draft && space.draft.unitId === unit?.id
   const canAssess = capabilities.assessment || !!(unit && assessment(unit))
+  const fullscreen = space.ideFullscreen && space.view === 'unit'
 
   useEffect(() => {
     const review = (event: Event) => {
@@ -113,141 +195,49 @@ export function TopBar() {
   }, [space.id, space.ideFullscreen, setLessonOpen])
 
   useEffect(() => {
-    if (!space.ideFullscreen) {
-      setLessonOpen(false)
-      return
-    }
-    function escape(e: KeyboardEvent) {
-      if (
-        e.key !== 'Escape' ||
-        e.defaultPrevented ||
-        lessonOpen ||
-        document.querySelector('[role="menu"], [role="dialog"]')
-      )
-        return
-      e.preventDefault()
-      toggleIde(false)
-    }
-    window.addEventListener('keydown', escape)
-    return () => window.removeEventListener('keydown', escape)
-  }, [space.ideFullscreen, lessonOpen, toggleIde, setLessonOpen])
+    if (!space.ideFullscreen) setLessonOpen(false)
+  }, [space.ideFullscreen, setLessonOpen])
+  // Esc leaves fullscreen back to the split IDE it came from.
+  useEscape(() => setIdeFullscreen(false), { enabled: space.ideFullscreen && !lessonOpen })
 
-  if (space.ideFullscreen && space.view === 'unit')
-    return (
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-sidebar px-3 text-sm">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t('topBar.toggleExplorer')}
-          aria-pressed={space.explorerOpen}
-          onClick={toggleExplorer}
-        >
-          <PanelLeft />
-        </Button>
-        <Code2 className="size-4 text-primary" aria-hidden />
-        <span className="font-medium">{space.name}</span>
-        <span className="text-muted-foreground">/</span>
-        <span className="truncate text-xs text-muted-foreground">{unit?.title}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <LibraryButton />
-          <ThemeToggle />
+  const explorerToggle = (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={t('topBar.toggleExplorer')}
+      title={t('topBar.explorerHint')}
+      aria-pressed={space.explorerOpen}
+      onClick={toggleExplorer}
+    >
+      <PanelLeft />
+    </Button>
+  )
+  const agentToggle = (
+    <Toggle pressed={space.agentOpen} disabled={awaitingDecision} onPressedChange={() => toggleAgent()} aria-label="Agent" className="px-2.5" />
+  )
+
+  return (
+    <header
+      className={cn(
+        'flex shrink-0 items-center gap-3 border-b',
+        fullscreen ? 'h-12 bg-sidebar px-3 text-sm' : 'h-14 bg-background/80 px-4 backdrop-blur',
+      )}
+    >
+      <BackButton />
+      <Separator orientation="vertical" className="h-5" />
+      <SpaceSwitcher />
+      <SpaceBreadcrumb />
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <ThemeToggle />
+        {space.view === 'unit' && explorerToggle}
+        {fullscreen ? (
           <Button variant="ghost" size="sm" onClick={() => setLessonOpen(true)}>
             <BookOpen data-icon="inline-start" />
             {proposal ? t('topBar.viewChanges') : t('topBar.viewLesson')}
           </Button>
-          <Toggle pressed={space.agentOpen} disabled={awaitingDecision} onPressedChange={() => toggleAgent()} aria-label="Agent">
-            <MessageSquare />
-            Agent
-          </Toggle>
-          <Separator orientation="vertical" className="mx-1 h-5" />
-          <Button variant="outline" size="sm" onClick={() => toggleIde(false)}>
-            <ArrowLeft data-icon="inline-start" />
-            {t('topBar.backToStudy')}
-          </Button>
-        </div>
-        <Sheet modal={!proposal} open={lessonOpen} onOpenChange={setLessonOpen}>
-          <SheetContent
-            side="left"
-            showOverlay={!proposal}
-            className="dark w-[720px]! max-w-[80vw]! gap-0 bg-background text-foreground"
-            aria-describedby={proposal ? undefined : 'ide-lesson-description'}
-          >
-            <SheetHeader className="border-b">
-              <SheetTitle>{proposal ? t('topBar.lessonPreview') : t('topBar.currentLesson')}</SheetTitle>
-              {!proposal && <SheetDescription id="ide-lesson-description">{t('topBar.drawerHint')}</SheetDescription>}
-            </SheetHeader>
-            <LessonReader inDrawer onAsk={() => setLessonOpen(false)} />
-          </SheetContent>
-        </Sheet>
-      </header>
-    )
-
-  return (
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur">
-      <Brand onClick={goHome} />
-      <Separator orientation="vertical" className="h-5" />
-      <SpaceSwitcher />
-
-      <Breadcrumb aria-label={t('topBar.navigation')}>
-        <BreadcrumbList>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            {onRoute ? (
-              <BreadcrumbPage>{t('controls.learningPath')}</BreadcrumbPage>
-            ) : (
-              <BreadcrumbLink render={<button type="button" onClick={() => setView('route')} />}>
-                {t('controls.learningPath')}
-              </BreadcrumbLink>
-            )}
-          </BreadcrumbItem>
-          {unit && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                {space.view === 'unit' ? (
-                  <BreadcrumbPage>{unit.title}</BreadcrumbPage>
-                ) : (
-                  <BreadcrumbLink
-                    render={<button type="button" onClick={() => (onRoute ? enterUnit(unit.id) : setView('unit'))} />}
-                  >
-                    {unit.title}
-                  </BreadcrumbLink>
-                )}
-              </BreadcrumbItem>
-            </>
-          )}
-          {(space.view === 'assessment' || space.view === 'result') && (
-            <>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage className="flex items-center gap-2">
-                  {space.view === 'assessment' ? t('topBar.assessment') : t('topBar.results')}
-                  {space.view === 'assessment' && (
-                    <Badge variant="secondary" className="bg-accent text-accent-foreground">
-                      {t('topBar.inProgress')}
-                    </Badge>
-                  )}
-                </BreadcrumbPage>
-              </BreadcrumbItem>
-            </>
-          )}
-        </BreadcrumbList>
-      </Breadcrumb>
-
-      <div className="ml-auto flex items-center gap-1.5">
-        <ThemeToggle />
-        {space.view === 'unit' && (
+        ) : space.view === 'unit' && (
           <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t('topBar.toggleExplorer')}
-              title={t('topBar.explorerHint')}
-              aria-pressed={space.explorerOpen}
-              onClick={toggleExplorer}
-            >
-              <PanelLeft />
-            </Button>
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -272,17 +262,7 @@ export function TopBar() {
         )}
         <Separator orientation="vertical" className="mx-1.5 h-5" />
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                pressed={space.agentOpen}
-                disabled={awaitingDecision}
-                onPressedChange={() => toggleAgent()}
-                aria-label="Agent"
-                className="px-2.5"
-              />
-            }
-          >
+          <TooltipTrigger render={agentToggle}>
             <MessageSquare />
             Agent
           </TooltipTrigger>
@@ -291,6 +271,22 @@ export function TopBar() {
         <LibraryButton iconOnly />
         <SettingsButton iconOnly />
       </div>
+      {fullscreen && (
+        <Sheet modal={!proposal} open={lessonOpen} onOpenChange={setLessonOpen}>
+          <SheetContent
+            side="left"
+            showOverlay={!proposal}
+            className="dark w-[720px]! max-w-[80vw]! gap-0 bg-background text-foreground"
+            aria-describedby={proposal ? undefined : 'ide-lesson-description'}
+          >
+            <SheetHeader className="border-b">
+              <SheetTitle>{proposal ? t('topBar.lessonPreview') : t('topBar.currentLesson')}</SheetTitle>
+              {!proposal && <SheetDescription id="ide-lesson-description">{t('topBar.drawerHint')}</SheetDescription>}
+            </SheetHeader>
+            <LessonReader inDrawer onAsk={() => setLessonOpen(false)} />
+          </SheetContent>
+        </Sheet>
+      )}
     </header>
   )
 }

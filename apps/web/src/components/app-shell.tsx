@@ -91,46 +91,45 @@ export function AppShell() {
   const { t } = useTranslation()
   const { current, persistence } = useApp()
   const [libraryOpen, setLibraryOpen] = useState(() => location.pathname === '/library')
+  const libraryOpenRef = useRef(libraryOpen)
   const libraryTrigger = useRef<HTMLElement | null>(null)
   const libraryScroll = useRef({ x: 0, y: 0 })
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(() => location.pathname === '/settings')
   const [settingsCovered, setSettingsCovered] = useState(false)
-  const settingsOpenRef = useRef(false)
+  const settingsOpenRef = useRef(settingsOpen)
   const settingsTrigger = useRef<HTMLElement | null>(null)
   const learningScroll = useRef({ x: 0, y: 0 })
-  const openLibrary = () => {
-    libraryTrigger.current = document.activeElement as HTMLElement | null
-    libraryScroll.current = { x: window.scrollX, y: window.scrollY }
-    history.pushState({ tmcLibrary: true }, '', `/library${location.search}`)
-    setLibraryOpen(true)
-  }
-  const closeLibrary = () => {
-    if (history.state?.tmcLibrary) history.back()
+  // Library and settings are pages with their own paths, so browser Back closes them.
+  const enter = (path: string, state: object) => history.pushState(state, '', `${path}${location.search}`)
+  const leave = (key: 'tmcLibrary' | 'tmcSettings') => {
+    if (history.state?.[key]) history.back()
     else {
       history.replaceState(null, '', `/${location.search}`)
       window.dispatchEvent(new PopStateEvent('popstate'))
     }
   }
-  useEffect(() => {
-    const navigate = () => {
-      const open = location.pathname === '/library'
-      setLibraryOpen(open)
-      if (!open) requestAnimationFrame(() => {
-        libraryTrigger.current?.focus({ preventScroll: true })
-        window.scrollTo({ left: libraryScroll.current.x, top: libraryScroll.current.y, behavior: 'instant' })
-      })
-    }
-    window.addEventListener('popstate', navigate)
-    return () => window.removeEventListener('popstate', navigate)
-  }, [])
-  const openSettings = () => {
+  const showLibrary = () => {
+    libraryTrigger.current = document.activeElement as HTMLElement | null
+    libraryScroll.current = { x: window.scrollX, y: window.scrollY }
+    libraryOpenRef.current = true
+    setLibraryOpen(true)
+  }
+  const hideLibrary = () => {
+    libraryOpenRef.current = false
+    setLibraryOpen(false)
+    requestAnimationFrame(() => {
+      libraryTrigger.current?.focus({ preventScroll: true })
+      window.scrollTo({ left: libraryScroll.current.x, top: libraryScroll.current.y, behavior: 'instant' })
+    })
+  }
+  const showSettings = () => {
     settingsTrigger.current = document.activeElement as HTMLElement | null
     learningScroll.current = { x: window.scrollX, y: window.scrollY }
     settingsOpenRef.current = true
     setSettingsCovered(false)
     setSettingsOpen(true)
   }
-  const closeSettings = () => {
+  const hideSettings = () => {
     settingsOpenRef.current = false
     setSettingsOpen(false)
     setSettingsCovered(false)
@@ -140,6 +139,20 @@ export function AppShell() {
       window.scrollTo({ left: learningScroll.current.x, top: learningScroll.current.y, behavior: 'instant' })
     })
   }
+  const openLibrary = () => { enter('/library', { tmcLibrary: true }); showLibrary() }
+  const closeLibrary = () => leave('tmcLibrary')
+  const openSettings = () => { enter('/settings', { tmcSettings: true }); showSettings() }
+  const closeSettings = () => leave('tmcSettings')
+  useEffect(() => {
+    const navigate = () => {
+      const library = location.pathname === '/library', settings = location.pathname === '/settings'
+      // Only an overlay that actually closes restores focus and scroll; in-space history moves do not.
+      if (library !== libraryOpenRef.current) (library ? showLibrary : hideLibrary)()
+      if (settings !== settingsOpenRef.current) (settings ? showSettings : hideSettings)()
+    }
+    window.addEventListener('popstate', navigate)
+    return () => window.removeEventListener('popstate', navigate)
+  }, [])
   return (
     <MotionConfig reducedMotion="user" transition={{ duration: uiMotion.content, ease: uiMotion.ease }}>
       <TooltipProvider delay={300}>

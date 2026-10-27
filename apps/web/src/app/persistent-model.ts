@@ -148,13 +148,35 @@ async function loadSpace(saved: Workspace): Promise<StoredSpace> {
   }
 }
 
+type GlobalView = 'home' | 'spaces'
+/** One URL per learning level: home, space list, or a space view with its unit and record. */
+function locationOf(space: Space | null, view: GlobalView) {
+  const params = space ? new URLSearchParams({ space: space.id, tab: space.view === 'onboarding' ? 'requirement' : space.view })
+    : new URLSearchParams(view === 'spaces' ? { view: 'spaces' } : {})
+  if (space?.currentUnitId) params.set('unit', space.currentUnitId)
+  if (space?.viewingRecordId) params.set('record', space.viewingRecordId)
+  return params.size ? `/?${params}` : '/'
+}
+/** The space view a URL asks for, falling back to the route when the unit is no longer reachable. */
+function locate(entry: StoredSpace, params: URLSearchParams) {
+  const tab = params.get('tab')
+  const view = tab === 'requirement' ? 'onboarding' : entry.ui.view === 'planning' || tab === 'planning' ? entry.ui.view
+    : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
+  const recordId = params.get('record')
+  const unitId = (view === 'result' ? entry.ui.records.find((record) => record.id === recordId)?.unitId : null)
+    ?? params.get('unit') ?? entry.ui.currentUnitId
+  const blocked = !canAccessView(entry.ui, view, unitId)
+  return { blocked, view: blocked ? 'route' as const : view, unitId: blocked ? entry.ui.currentUnitId : unitId,
+    draft: !blocked && view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, recordId: blocked ? null : recordId }
+}
+
 /** Persistent operations for the component model. No rendering. */
 export function usePersistentModel(): AppModel {
   const { t } = useTranslation(['common', 'assessment', 'workbench'])
   const cache = useRef<Record<string, StoredSpace>>({})
   const [spaces, setSpaces] = useState<Space[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
-  const [globalView, setGlobalView] = useState<'home' | 'spaces'>('home')
+  const [globalView, setGlobalView] = useState<GlobalView>('home')
   const [ready, setReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<NoticeValue>(null)
@@ -230,18 +252,11 @@ export function usePersistentModel(): AppModel {
       if (id) {
         const entry = cache.current[id]
         if (!entry) throw new NoticeError(notice('common', 'errors.spaceNotFound'))
-        const tab = params.get('tab')
-        const view = tab === 'requirement' ? 'onboarding' : entry.ui.view === 'planning' || tab === 'planning' ? entry.ui.view
-          : ['route', 'unit', 'assessment', 'result'].includes(tab ?? '') ? tab as SpaceView : entry.ui.view
-        const recordId = params.get('record')
-        const unitId = (view === 'result' ? entry.ui.records.find((record) => record.id === recordId)?.unitId : null)
-          ?? params.get('unit') ?? entry.ui.currentUnitId
-        const blocked = !canAccessView(entry.ui, view, unitId)
-        if (blocked) setError(notice('common', 'errors.unitUnavailable'))
-        entry.ui = { ...entry.ui, view: blocked ? 'route' : view, currentUnitId: blocked ? entry.ui.currentUnitId : unitId,
-          draft: !blocked && view === 'assessment' && unitId ? entry.drafts[unitId] ?? null : null, viewingRecordId: blocked ? null : recordId }
+        const target = locate(entry, params)
+        if (target.blocked) setError(notice('common', 'errors.unitUnavailable'))
+        entry.ui = { ...entry.ui, view: target.view, currentUnitId: target.unitId, draft: target.draft, viewingRecordId: target.recordId }
         setCurrentId(id)
-      }
+      } else if (params.get('view') === 'spaces') setGlobalView('spaces')
       publish(); setReady(true)
       for (const entry of entries) for (const work of [...entry.saved.runs, ...entry.saved.tasks]) {
         if (['pending', 'running'].includes(work.state) || !entry.saved.route.content && work.id === latestPlan(entry.saved)?.id) watchRun(entry.saved.id, work)
@@ -254,19 +269,46 @@ export function usePersistentModel(): AppModel {
     for (const terminal of terminals.current.values()) terminal.dispose()
     terminals.current.clear()
   }, [])
+  // User navigation pushes a history entry (see `pushLocation`). Anything else that moves the
+  // view, such as planning finishing or a route reorder, only corrects the current entry.
+  useEffect(() => {
+    if (!ready || location.pathname !== '/') return
+    const url = locationOf(current, globalView)
+    if (url !== location.pathname + location.search) history.replaceState(null, '', url)
+  }, [ready, globalView, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
   useEffect(() => {
     if (!ready) return
-    const updateLocation = () => {
-      if (location.pathname === '/library') return
-      const params = current ? new URLSearchParams({ space: current.id, tab: current.view === 'onboarding' ? 'requirement' : current.view }) : new URLSearchParams()
-      if (current?.currentUnitId) params.set('unit', current.currentUnitId)
-      if (current?.viewingRecordId) params.set('record', current.viewingRecordId)
-      history.replaceState(null, '', params.size ? `/?${params}` : '/')
+    const restore = () => {
+      // Overlay pages (library, settings) own their own paths; the learning surface stays as it was.
+      if (location.pathname !== '/') return
+      const params = new URLSearchParams(location.search)
+      const id = params.get('space')
+      if (!id) {
+        setCurrentId(null)
+        setGlobalView(params.get('view') === 'spaces' ? 'spaces' : 'home')
+        return
+      }
+      const entry = cache.current[id]
+      if (!entry) {
+        setError(notice('common', 'errors.spaceNotFound'))
+        setCurrentId(null); setGlobalView('spaces')
+        return
+      }
+      const target = locate(entry, params)
+      if (target.blocked) setError(notice('common', 'errors.unitUnavailable'))
+      changeUi(id, (s) => ({ ...s, view: target.view, currentUnitId: target.unitId, viewingRecordId: target.recordId, ideFullscreen: false,
+        // Leaving an assessment keeps its draft, matching in-app navigation.
+        draft: target.view === 'assessment' ? target.draft : s.draft }))
+      setCurrentId(id)
     }
-    updateLocation()
-    window.addEventListener('popstate', updateLocation)
-    return () => window.removeEventListener('popstate', updateLocation)
-  }, [ready, current?.id, current?.view, current?.currentUnitId, current?.viewingRecordId])
+    window.addEventListener('popstate', restore)
+    return () => window.removeEventListener('popstate', restore)
+  }, [ready])
+  const pushLocation = (id: string | null, view: GlobalView) => {
+    if (!ready || location.pathname !== '/') return
+    const url = locationOf(id ? cache.current[id]?.ui ?? null : null, view)
+    if (url !== location.pathname + location.search) history.pushState(null, '', url)
+  }
 
   const dirty = Object.values(cache.current).some((s) => s.ui.name !== s.saved.name || requirementDirty(s)
     || Object.values(s.drafts).some((draft) => !same(answers(draft), answers(s.units[draft.unitId]!.draft)))
@@ -279,6 +321,7 @@ export function usePersistentModel(): AppModel {
       return false
     }
     changeUi(current.id, (s) => ({ ...s, view, currentUnitId: unitId, draft: view === 'assessment' && unitId ? cache.current[s.id]!.drafts[unitId] ?? null : s.draft, ideFullscreen: false }))
+    pushLocation(current.id, globalView)
     return true
   }
   const viewedUnitId = current ? sessionUnitId(current) : null
@@ -819,14 +862,14 @@ export function usePersistentModel(): AppModel {
       const spec = selected?.units[unit.id]?.assessment
       return spec ? { revision: spec.revision, stale: current ? needsAssessment(current.id, unit.id) : false, abilities: unit.goals, q2Kind: spec.q2Kind, execution: spec.execution, q1: { title: t('assessment:result.explanation'), prompt: spec.q1 }, q2: { title: t(spec.q2Kind === 'reasoning' ? 'assessment:result.analysis' : 'assessment:result.code'), prompt: spec.q2, starter: spec.starter, file: t('codeAnswer') } } : null
     },
-    goHome: () => { setCurrentId(null); setGlobalView('home') },
-    goSpaces: () => { setCurrentId(null); setGlobalView('spaces') },
-    openSpace: (id) => { if (cache.current[id]) setCurrentId(id) },
+    goHome: () => { setCurrentId(null); setGlobalView('home'); pushLocation(null, 'home') },
+    goSpaces: () => { setCurrentId(null); setGlobalView('spaces'); pushLocation(null, 'spaces') },
+    openSpace: (id) => { if (cache.current[id]) { setCurrentId(id); pushLocation(id, globalView) } },
     createSpace: (goal) => { if (!ready || !goal.trim()) return; let saved: Workspace | undefined
       void run('create-space', async () => {
       saved ??= await api<Workspace>('/spaces', { name: goal.trim().slice(0, 80), goal: goal.trim() })
       const entry = await loadSpace(saved)
-      cache.current = { [saved.id]: entry, ...cache.current }; publish(); setCurrentId(saved.id)
+      cache.current = { [saved.id]: entry, ...cache.current }; publish(); setCurrentId(saved.id); pushLocation(saved.id, globalView)
       // Creation already saved the first message and started intake. Subscribe even
       // if it finished before the response arrived so its business result refreshes.
       for (const work of saved.runs) watchRun(saved.id, work)
@@ -968,7 +1011,10 @@ export function usePersistentModel(): AppModel {
     submitAssessment: () => { if (current?.draft) assessmentTask(current.id, current.draft.unitId, 'evaluation') },
     leaveAssessment: () => navigate('unit'),
     viewRecord: (id) => { if (!current) return; const record = current.records.find((r) => r.id === id)!
-      if (navigate('result', record.unitId)) changeUi(current.id, (s) => ({ ...s, viewingRecordId: id })) },
+      // Select the record first so the pushed history entry already points at it.
+      const previous = current.viewingRecordId
+      changeUi(current.id, (s) => ({ ...s, viewingRecordId: id }))
+      if (!navigate('result', record.unitId)) changeUi(current.id, (s) => ({ ...s, viewingRecordId: previous })) },
     goNextUnit: () => { if (current && recordUnit) { const next = nextUnit(current, recordUnit); if (next) enterUnit(next.id) } },
     backToStudy: () => navigate('unit', recordUnit),
     persistence: {

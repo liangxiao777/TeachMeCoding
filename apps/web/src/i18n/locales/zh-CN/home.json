@@ -8,6 +8,7 @@
   "examples": { "rust": { "label": "Rust 命令行工具", "goal": "我想学习 Rust，最后能写一个命令行工具" }, "pytorch": { "label": "PyTorch 图像分类", "goal": "我想用 PyTorch 训练一个图像分类模型" }, "go": { "label": "Go 后端服务", "goal": "我想学会用 Go 写后端服务" } },
   "spaces": "学习空间",
   "backHome": "返回首页",
+  "allSpaces": "全部学习空间",
   "create": "创建学习空间",
   "createNew": "创建新的学习空间",
   "tellAgent": "告诉 Agent 你想学什么",

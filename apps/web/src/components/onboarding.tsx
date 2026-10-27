@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, Check, ClipboardList, Pencil, Plus, Square, Trash2 } from 'lucide-react'
+import { Check, ClipboardList, Pencil, Plus, Square, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatNotice, notice, type NoticeValue } from '@/i18n/notice'
@@ -29,6 +29,8 @@ import { useApp, useSpace, type RequirementDraft } from '@/app/context'
 import { conversationMessages } from '@/app/selectors'
 import { ThemeToggle } from '@/app/theme'
 import { LibraryButton } from '@/components/library-page'
+import { SettingsButton } from '@/components/settings/settings-page'
+import { BackButton } from '@/components/top-bar'
 
 function RequirementCard() {
   const { t } = useTranslation('learning')
@@ -269,18 +271,55 @@ function Chat() {
   )
 }
 
+/** Requirement and planning share the space header: back to all spaces on the left, as everywhere in a space. */
+function IntakeHeader() {
+  const { t } = useTranslation('learning')
+  const space = useSpace()
+  const { renameSpace, persistence } = useApp()
+  return (
+    <header className="shrink-0 border-b bg-background/80 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
+        <BackButton />
+        <Separator orientation="vertical" className="h-5" />
+        <label htmlFor="space-name" className="sr-only">
+          {t('onboarding.spaceName')}
+        </label>
+        <Input
+          id="space-name"
+          value={space.name}
+          onChange={(e) => renameSpace(e.target.value)}
+          onBlur={persistence.saveName}
+          className="min-w-0 flex-1 border-transparent bg-transparent font-semibold shadow-none hover:border-input sm:w-64 sm:flex-none dark:bg-transparent"
+        />
+        <div className="ml-auto flex items-center gap-2">
+          {space.view === 'onboarding' && (
+            <Badge variant="outline" className="hidden gap-1.5 lg:inline-flex">
+              <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+              {t('onboarding.step')}
+            </Badge>
+          )}
+          <LibraryButton iconOnly />
+          <SettingsButton iconOnly />
+          <ThemeToggle />
+        </div>
+      </div>
+    </header>
+  )
+}
+
 export function Onboarding() {
   const { t } = useTranslation('learning')
   const space = useSpace()
-  const { goSpaces, renameSpace, setView, retryReply, stopReply, capabilities, persistence } = useApp()
+  const { setView, retryReply, stopReply, capabilities, persistence } = useApp()
   const planning = persistence.planning
   const planningStopped = planning.run && ['failed', 'interrupted'].includes(planning.run.state)
   const planningParts = space.sessions.flatMap((s) => s.messages).find((m) => m.id === planning.run?.id)?.parts ?? []
 
   if (space.view === 'planning') {
     return (
-      <div className="flex min-h-dvh items-center justify-center px-6 py-8">
-        <div className="fixed top-3 right-3 z-10 flex items-center gap-2"><LibraryButton /><ThemeToggle /></div>
+      <div className="flex min-h-dvh flex-col">
+        <IntakeHeader />
+        <div className="flex flex-1 items-center justify-center px-6 py-8">
         <Card className="w-full max-w-xl shadow-lg">
           <CardContent>
             {planningStopped || !capabilities.agent || persistence.error ? (
@@ -302,42 +341,18 @@ export function Onboarding() {
               ) : planning.run && ['pending', 'running'].includes(planning.run.state) ? (
                 <Button variant="outline" disabled={persistence.busy} onClick={stopReply}>{t('onboarding.stopPlanning')}</Button>
               ) : null}
-              <Button variant="ghost" onClick={goSpaces}>{t('controls.allSpaces')}</Button>
               {(!planning.run || planningStopped) && <Button variant="ghost" onClick={() => setView('onboarding')}>{t('onboarding.editRequirements')}</Button>}
             </div>
           </CardContent>
         </Card>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="shrink-0 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
-          <Button variant="ghost" size="sm" onClick={goSpaces}>
-            <ArrowLeft data-icon="inline-start" />
-            {t('controls.allSpaces')}
-          </Button>
-          <Separator orientation="vertical" className="h-5" />
-          <label htmlFor="space-name" className="sr-only">
-            {t('onboarding.spaceName')}
-          </label>
-          <Input
-            id="space-name"
-            value={space.name}
-            onChange={(e) => renameSpace(e.target.value)}
-            onBlur={persistence.saveName}
-            className="min-w-0 flex-1 border-transparent bg-transparent font-semibold shadow-none hover:border-input sm:w-64 sm:flex-none dark:bg-transparent"
-          />
-          <Badge variant="outline" className="ml-auto hidden gap-1.5 lg:inline-flex">
-            <span className="size-1.5 rounded-full bg-primary" aria-hidden />
-            {t('onboarding.step')}
-          </Badge>
-          <LibraryButton iconOnly />
-          <ThemeToggle />
-        </div>
-      </header>
+      <IntakeHeader />
       <div className="mx-auto grid min-h-0 w-full max-w-7xl flex-1 grid-cols-1 gap-6 overflow-y-auto px-4 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-10 lg:overflow-visible lg:px-6">
         <Chat />
         <aside className="flex min-w-0 flex-col pb-8 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent] lg:-mx-8 lg:overflow-y-auto lg:px-8 lg:py-8">

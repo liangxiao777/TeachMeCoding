@@ -1,6 +1,6 @@
 'use client'
 
-import { FileCode2, Maximize2, MessageSquareQuote, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
+import { FileCode2, Maximize2, MessageSquareQuote, Minimize2, PlugZap, Plus, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatNotice } from '@/i18n/notice'
@@ -169,17 +169,16 @@ export function IdePanel() {
             <span className="hidden @min-[900px]:inline">{selected.trim() ? t('ide.askSelection') : t('ide.askFile')}</span>
           </Button>
         )}
-        {!space.ideFullscreen && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t('ide.fullscreen')}
-            title={t('ide.fullscreen')}
-            onClick={() => setIdeFullscreen(true)}
-          >
-            <Maximize2 />
-          </Button>
-        )}
+        {/* Fullscreen is left where it was entered. */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={space.ideFullscreen ? t('ide.exitFullscreen') : t('ide.fullscreen')}
+          title={space.ideFullscreen ? t('ide.exitFullscreen') : t('ide.fullscreen')}
+          onClick={() => setIdeFullscreen(!space.ideFullscreen)}
+        >
+          {space.ideFullscreen ? <Minimize2 /> : <Maximize2 />}
+        </Button>
         {!space.ideFullscreen && (
           <Tooltip>
             <TooltipTrigger

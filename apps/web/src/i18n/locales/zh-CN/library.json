@@ -1,6 +1,6 @@
 {
   "title": "资料库",
-  "backToLearning": "返回学习",
+  "back": "返回",
   "description": "上传自己的资料，供所有学习空间的 Agent 按需读取。",
   "upload": "上传文件",
   "chooseFiles": "选择资料文件",

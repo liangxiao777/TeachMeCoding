@@ -150,7 +150,8 @@ export function SpaceList() {
     <div className={cn('min-h-dvh', onHome && 'startup-page relative isolate')}>
       <header className={cn('sticky top-0 z-10 border-b bg-background/80 backdrop-blur', onHome && 'startup-header')}>
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-6 max-sm:px-4">
-          <Brand onClick={goHome} />
+          {/* Returning learners come back to their spaces; first-time learners only have the start page. */}
+          <Brand onClick={spaces.length ? goSpaces : goHome} label={spaces.length ? t('allSpaces') : undefined} />
           <div className="startup-actions flex items-center gap-2">
             <LibraryButton />
             <SettingsButton />

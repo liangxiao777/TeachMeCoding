@@ -130,19 +130,19 @@ test('real route and IDE retain timeline, full-height tree, split editor and vis
   await page.keyboard.press('Escape');
   await expect(drawer).toHaveCount(0);
   await expect(ide).toBeVisible();
-  await expect(page.getByRole('button', { name: '返回学习', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '退出全屏', exact: true })).toBeVisible();
   await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');
+  // Esc leaves fullscreen for the split IDE it was entered from.
   await page.keyboard.press('Escape');
-  await expect(ide).toBeHidden();
-  await expect(page.getByRole('button', { name: 'IDE 与终端', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await expect(page.getByRole('button', { name: '全屏 IDE', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'IDE 与终端', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(async () => (await box(ide)).height).toBeCloseTo(normalHeight, 0);
   await page.getByRole('button', { name: '存储验收 Rust', exact: true }).click();
-  await page.getByRole('menuitem', { name: '查看全部学习空间', exact: true }).click();
+  await page.getByRole('menuitem', { name: '全部学习空间', exact: true }).click();
   await spaceCard(page, '另一个 Python 空间').getByRole('button', { name: '继续学习', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '回复 Agent', exact: true })).toHaveValue('');
-  await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '返回全部学习空间', exact: true }).click();
   await spaceCard(page, '存储验收 Rust').getByRole('button', { name: '继续学习', exact: true }).click();
   await expect(code).toHaveText('// unsaved local edit', { useInnerText: true });
   await expect(draft).toHaveValue('保留本单元草稿');

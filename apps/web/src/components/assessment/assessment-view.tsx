@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, ClipboardCheck, Play, Save, Send } from 'lucide-react'
+import { ClipboardCheck, Play, Save, Send } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Generating, RichText } from '@/components/shared'
 import { RunContent } from '@/components/agent/run-content'
@@ -34,16 +34,12 @@ function QuestionHeader({ n, title, prompt }: { n: number; title: string; prompt
 export function AssessmentView() {
   const { t } = useTranslation('assessment')
   const space = useSpace()
-  const { updateDraft, runDraft, submitAssessment, leaveAssessment, assessment: getAssessment, capabilities, persistence } = useApp()
+  const { updateDraft, runDraft, submitAssessment, assessment: getAssessment, capabilities, persistence } = useApp()
   const draft = space.draft
   const unit = findUnit(space, draft?.unitId ?? space.currentUnitId)
   if (!draft || !unit) return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
-        <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={leaveAssessment}>
-          <ArrowLeft data-icon="inline-start" />
-          {t('controls.backWithAnswers')}
-        </Button>
         <Card>
           <CardHeader>
             <CardTitle>{t('form.unavailable')}</CardTitle>
@@ -65,10 +61,6 @@ export function AssessmentView() {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 px-8 py-10">
         <div className="flex flex-col gap-5">
-          <Button variant="ghost" size="sm" className="-ml-2 self-start" onClick={leaveAssessment}>
-            <ArrowLeft data-icon="inline-start" />
-            {t('controls.backWithAnswers')}
-          </Button>
           <div className="flex flex-col gap-2">
             <Badge variant="outline" className="gap-1.5">
               <ClipboardCheck aria-hidden />

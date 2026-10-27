@@ -69,7 +69,7 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await visible(page, '回答 2').fill('Python 基础，尚未学习 Rust');
   await expect(page.getByRole('button', { name: '确认学习需求', exact: true })).toBeDisabled();
   // The requirement editor is unmounted, but its unsaved values belong to the provider.
-  await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '返回全部学习空间', exact: true }).click();
   // Match the original goal too: a duplicate created by retry must not hide behind the rename.
   await expect(spaceCard(page, goal)).toHaveCount(1);
   await spaceCard(page, name).getByRole('button', { name: '继续学习', exact: true }).click();
@@ -107,7 +107,7 @@ test('spaces and sent messages persist while unsent input is temporary and retri
   await expect(visible(page, '向 Agent 提问')).toHaveValue('');
   await expect(page.getByText('独立保存的需求问题', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name, exact: true }).click();
-  await page.getByRole('menuitem', { name: '查看全部学习空间', exact: true }).click();
+  await page.getByRole('menuitem', { name: '全部学习空间', exact: true }).click();
   await expect(spaceCard(page, name)).toHaveCount(1);
   await spaceCard(page, '另一个 Python 空间').getByRole('button', { name: '继续学习', exact: true }).click();
   await expect(visible(page, '回复 Agent')).toHaveValue('');
@@ -430,9 +430,9 @@ test('IDE saves on input, retries failures without losing edits and replaces ext
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await expect(editor).toHaveText('// local editing survives', { useInnerText: true });
   await shot(page, info, 'autosave-fullscreen');
+  // Esc leaves fullscreen for the split IDE.
   await page.keyboard.press('Escape');
-  await expect(ide).toBeHidden();
-  await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
+  await expect(page.getByRole('button', { name: '全屏 IDE', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '关闭 autosave.rs' }).click();
   await tree.getByRole('treeitem', { name: 'autosave.rs', exact: true }).click();
   await expect(editor).toHaveText('// local editing survives', { useInnerText: true });

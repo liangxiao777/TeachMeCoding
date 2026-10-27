@@ -534,7 +534,7 @@ test('standalone planning survives reload and leaving; only later route adjustme
   await expect(routeTool.locator('pre')).not.toContainText('"stageId"');
   await expect(toolGroup).toHaveCount(1);
   await page.screenshot({ path: `.amp/in/artifacts/planning-progress-${info.project.name}.png`, animations: 'disabled' });
-  await page.getByRole('button', { name: '全部学习空间', exact: true }).click();
+  await page.getByRole('button', { name: '返回全部学习空间', exact: true }).click();
   await expect(title).toHaveCount(0);
   // Completion updates its own space without navigating away from the space list.
   await expect.poll(async () => (await workspace(page, goal)).route.content, { timeout: 15000 }).not.toBeNull();

@@ -71,7 +71,7 @@ test('standalone library uploads arbitrary bytes, retries safely, shares globall
   await page.goBack(); await expect(home).toHaveValue('从资料库返回后保留我的学习需求');
   await expect(page.getByRole('button', { name: '资料库', exact: true })).toBeFocused();
   await page.goForward(); await expect(library).toBeVisible();
-  await library.getByRole('button', { name: '返回学习', exact: true }).click();
+  await library.getByRole('button', { name: '返回', exact: true }).click();
   await expect(home).toHaveValue('从资料库返回后保留我的学习需求');
   await page.getByRole('button', { name: '资料库', exact: true }).click();
   await page.reload(); await expect(page).toHaveURL(/\/library$/);
@@ -125,7 +125,7 @@ test('library round trips retain autosaved editor, composer, fullscreen and the 
     await page.getByRole('button', { name: '资料库', exact: true }).click();
     await expect(editor).toBeHidden();
     await expect(page).toHaveURL(/\/library\?space=.*tab=unit/);
-    await page.getByRole('region', { name: '资料库', exact: true }).getByRole('button', { name: '返回学习', exact: true }).click();
+    await page.getByRole('region', { name: '资料库', exact: true }).getByRole('button', { name: '返回', exact: true }).click();
     await expect(editor).toHaveText('// unsaved library navigation', { useInnerText: true });
     await expect(composer).toHaveValue('尚未发送的资料问题');
     await expect.poll(() => readFileSync(join(data.root, 'projects', data.spaceId, 'library-navigation.rs'), 'utf8')).toBe('// unsaved library navigation');
@@ -154,10 +154,10 @@ test('direct library navigation handles outages and fits mobile and dark layouts
     if (dark) await library.getByRole('button', { name: '切换到暗色主题', exact: true }).click();
     expect(await library.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await expect(library.getByRole('button', { name: '返回学习', exact: true })).toBeVisible();
+    await expect(library.getByRole('button', { name: '返回', exact: true })).toBeVisible();
     await capture(page, info, state);
   }
-  await library.getByRole('button', { name: '返回学习', exact: true }).click();
+  await library.getByRole('button', { name: '返回', exact: true }).click();
   await expect(page).toHaveURL('/');
   await expect(page.getByRole('textbox', { name: '你想学什么', exact: true })).toBeVisible();
 });

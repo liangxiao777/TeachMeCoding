@@ -523,8 +523,8 @@ test('real MCP and Skills settings persist, connect, toggle and fit desktop/mobi
   await settings.getByRole('switch', { name: '启用 reviewing-loops', exact: true }).click();
   await expect(settings.getByRole('switch', { name: '启用 reviewing-loops', exact: true })).not.toBeChecked();
   await settings.getByRole('button', { name: '重新扫描', exact: true }).click();
+  // Settings own a URL, so a reload stays on the settings page.
   await page.reload();
-  await page.getByRole('button', { name: '应用设置', exact: true }).click();
   await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
   await expect(settings.getByRole('heading', { name: 'explaining-types', exact: true })).toBeVisible();
   await expect(settings.getByRole('switch', { name: '启用 reviewing-loops', exact: true })).not.toBeChecked();
@@ -679,7 +679,7 @@ test('global theme controls work throughout learning without opening settings', 
   await page.getByRole('button', { name: 'IDE 与终端', exact: true }).click();
   await page.getByRole('button', { name: '全屏 IDE', exact: true }).click();
   await toggle('fullscreen');
-  await page.getByRole('button', { name: '返回学习', exact: true }).click();
+  await page.getByRole('button', { name: '退出全屏', exact: true }).click();
   await page.goto(`/?space=${data.spaceId}&tab=result&unit=${data.unitIds[0]}&record=${data.recordId}`);
   await expect(page.getByText('验收记录：需要更多证据', { exact: true })).toBeVisible();
   await toggle('result');

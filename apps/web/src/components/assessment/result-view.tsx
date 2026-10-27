@@ -168,9 +168,12 @@ export function ResultView() {
             </>
           ) : null}
           {historicalPass && <Button size="lg" variant="outline" onClick={startAssessment}>{t('result.assessNewVersion')}</Button>}
-          <Button size="lg" variant="ghost" onClick={() => (isLatest && passed && !next ? setView('route') : backToStudy())}>
-            {isLatest && passed && !next ? t('controls.viewPath') : t('result.backToUnit')}
-          </Button>
+          {/* Going back to the unit is the header's job; the path is the next step only once it is finished. */}
+          {isLatest && passed && !next && (
+            <Button size="lg" variant="ghost" onClick={() => setView('route')}>
+              {t('controls.viewPath')}
+            </Button>
+          )}
         </div>
 
         {passed && !expired && space.completed && !next && isLatest && (

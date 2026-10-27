@@ -30,7 +30,7 @@ export function BrandMark({ className }: { className?: string }) {
   )
 }
 
-export function Brand({ onClick }: { onClick?: () => void }) {
+export function Brand({ onClick, label }: { onClick?: () => void; label?: string }) {
   const { t } = useTranslation('home')
   const inner = (
     <>
@@ -44,7 +44,7 @@ export function Brand({ onClick }: { onClick?: () => void }) {
       type="button"
       onClick={onClick}
       className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted"
-      aria-label={t('backHome')}
+      aria-label={label ?? t('backHome')}
     >
       {inner}
     </button>

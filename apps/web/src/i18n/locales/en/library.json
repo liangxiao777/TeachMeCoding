@@ -1,6 +1,6 @@
 {
   "title": "Library",
-  "backToLearning": "Back to learning",
+  "back": "Back",
   "description": "Upload your own materials for the Agent to read as needed in any Learning space.",
   "upload": "Upload files",
   "chooseFiles": "Choose material files",

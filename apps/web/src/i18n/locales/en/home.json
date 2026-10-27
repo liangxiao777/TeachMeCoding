@@ -8,6 +8,7 @@
   "examples": { "rust": { "label": "Rust command-line tool", "goal": "I want to learn Rust and build a command-line tool" }, "pytorch": { "label": "PyTorch image classification", "goal": "I want to train an image classifier with PyTorch" }, "go": { "label": "Go backend service", "goal": "I want to learn to build backend services with Go" } },
   "spaces": "Learning spaces",
   "backHome": "Back to home",
+  "allSpaces": "All Learning spaces",
   "create": "Create learning space",
   "createNew": "Create a new learning space",
   "tellAgent": "Tell the Agent what you want to learn",
