@@ -74,7 +74,7 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 ## 项目状态
 
-**0.1.0** 是早期版本，功能、接口和数据格式都可能变化。
+**0.2.0** 是早期版本，功能、接口和数据格式都可能变化。
 
 **仅支持 macOS 和 Linux（Ubuntu/Debian）**；不支持 Windows。
 
@@ -99,12 +99,12 @@ TeachMeCoding 为每个学习目标创建独立的学习空间。教学 Agent �
 
 ### 安装与启动
 
-从 [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.1.0) 下载 `teach-me-coding-0.1.0.tar.gz` 和 `SHA256SUMS`。两个支持的平台使用同一个压缩包：包含已构建的服务端和前端，但不包含 Node.js 和依赖。请先安装上述环境依赖，重新打开终端，使更新后的 `PATH` 生效。
+从 [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.2.0) 下载 `teach-me-coding-0.2.0.tar.gz` 和 `SHA256SUMS`。两个支持的平台使用同一个压缩包：包含已构建的服务端和前端，但不包含 Node.js 和依赖。请先安装上述环境依赖，重新打开终端，使更新后的 `PATH` 生效。
 
 ```sh
 npm install --global pnpm@11.1.0
-tar -xzf teach-me-coding-0.1.0.tar.gz
-cd teach-me-coding-0.1.0
+tar -xzf teach-me-coding-0.2.0.tar.gz
+cd teach-me-coding-0.2.0
 pnpm install --frozen-lockfile
 pnpm start
 ```

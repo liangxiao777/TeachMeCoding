@@ -74,7 +74,7 @@ TeachMeCoding creates a separate learning space for each learning goal. The teac
 
 ## Project status
 
-Version **0.1.0** is an early release. Features, interfaces, and data formats may change.
+Version **0.2.0** is an early release. Features, interfaces, and data formats may change.
 
 Supports **macOS and Linux (Ubuntu/Debian) only**; Windows is unsupported.
 
@@ -99,12 +99,12 @@ For coding assessments, install any additional language toolchains you need, suc
 
 ### Install and run
 
-Download `teach-me-coding-0.1.0.tar.gz` and `SHA256SUMS` from [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.1.0). The same archive works on both supported platforms: it contains prebuilt server and frontend assets, but not Node.js or dependencies. Install the prerequisites above and reopen your terminal so the updated `PATH` takes effect.
+Download `teach-me-coding-0.2.0.tar.gz` and `SHA256SUMS` from [GitHub Releases](https://github.com/liangxiao777/TeachMeCoding/releases/tag/v0.2.0). The same archive works on both supported platforms: it contains prebuilt server and frontend assets, but not Node.js or dependencies. Install the prerequisites above and reopen your terminal so the updated `PATH` takes effect.
 
 ```sh
 npm install --global pnpm@11.1.0
-tar -xzf teach-me-coding-0.1.0.tar.gz
-cd teach-me-coding-0.1.0
+tar -xzf teach-me-coding-0.2.0.tar.gz
+cd teach-me-coding-0.2.0
 pnpm install --frozen-lockfile
 pnpm start
 ```
